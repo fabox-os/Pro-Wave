@@ -259,6 +259,10 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
    by dynamic programming), multitrack analysis, Flex Time (6 modes, WSOLA, quantize audio,
    follow the project tempo), Flex Pitch (YIN, correct to key, MIDI from audio) and Groove Track
    (MIDI followers). Not done: Flex markers by mouse, per-note Flex Pitch editing, audio followers.
+   ✅ Hardening of that work (2026-10-24): the Flex sounds live in the user's config folder, are
+   cleared after 14 days and keyed by the recording's size and date; a project file cannot ask
+   for more than 4096 Flex markers or pitch moves; at most 4 Flex sounds are made at once; a file
+   used in many regions is analysed once; the Flex result is capped at 10 minutes.
    ⚠️ Started 2026-10-24: onset detection and tempo estimation of audio files in the engine
    (`analysis.rs`: log energy of the first difference in 2.5 ms blocks, peaks over a moving
    threshold; tempo from the onset strength's autocorrelation, 60-200 BPM, with a check for

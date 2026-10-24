@@ -7,7 +7,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
-✅ **Smart Tempo, first part:** right-click an audio region > *Detect Tempo* says its tempo, *Adapt Project Tempo to Region* makes it the project's tempo. The file is read in the background and the onsets (where hits and notes start) are found along the way, ready for Flex Time.
+✅ **Detect Tempo:** right-click an audio region > *Smart Tempo > Detect Tempo* says its tempo, *Adapt Project Tempo to Region* makes it the project's tempo. The file is read in the background and the onsets (where hits and notes start) are found along the way, ready for Flex Time.
 
 ✅ **Smart Tempo Editor:** right-click an audio region > *Smart Tempo > Smart Tempo Editor…* shows the beats found over the waveform; ×2 and ÷2 fix a tempo read at half or double, the arrows move the downbeat. *Adapt Project Tempo* makes the project follow the beats, including tempo changes inside the recording, and keeps every audio region at the same time. *Adapt Project Tempo to All Audio Regions* hears all the audio together (multitrack), and *Region Follows Project Tempo* moves the region's beats onto the project's.
 ✅ **Flex Time:** right-click an audio region > *Flex Time*: pick a mode (Slicing, Rhythmic, Monophonic, Polyphonic, Speed, Tempophone), *Quantize Audio to 1/16 or 1/8* puts every hit on the grid, *Remove Flex Edits* goes back. The recording is never changed; the edit is saved with the project.
