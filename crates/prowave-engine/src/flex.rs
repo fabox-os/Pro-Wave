@@ -74,8 +74,11 @@ pub struct WarpPoint {
     pub dst: f64,
 }
 
-/// The longest result made, in seconds, so a wild edit cannot fill the memory.
-pub const MAX_SECONDS: f64 = 1200.0;
+/// The longest result made, in seconds (as long as the longest recording read), so a wild edit
+/// cannot fill the memory.
+pub const MAX_SECONDS: f64 = 600.0;
+/// Most markers and pitch moves one edit uses; more are left out.
+pub const MAX_POINTS: usize = 4096;
 
 /// The time map: the points in order of `src`, both times rising, starting at (0, 0). After
 /// the last point the recording goes on at its own speed.
@@ -83,6 +86,7 @@ fn clean_points(points: &[WarpPoint], src_len: f64) -> Vec<WarpPoint> {
     let mut v: Vec<WarpPoint> = points
         .iter()
         .copied()
+        .take(MAX_POINTS * 4)
         .filter(|p| p.src.is_finite() && p.dst.is_finite() && p.src > 0.0 && p.src < src_len)
         .map(|p| WarpPoint {
             src: p.src,
@@ -92,6 +96,9 @@ fn clean_points(points: &[WarpPoint], src_len: f64) -> Vec<WarpPoint> {
     v.sort_by(|a, b| a.src.total_cmp(&b.src));
     let mut out = vec![WarpPoint { src: 0.0, dst: 0.0 }];
     for p in v {
+        if out.len() > MAX_POINTS {
+            break;
+        }
         let last = out[out.len() - 1];
         // Both must move forward by at least a millisecond, or the point is left out.
         if p.src > last.src + 0.001 && p.dst > last.dst + 0.001 {
@@ -338,7 +345,7 @@ pub fn shift_pitch(
     let frames = input.len() / 2;
     let mut out = input.to_vec();
     let fade = (0.005 * sr) as usize;
-    for s in shifts {
+    for s in shifts.iter().take(MAX_POINTS) {
         if !(s.semitones.is_finite() && s.semitones.abs() > 0.001 && s.end > s.start) {
             continue;
         }
@@ -835,6 +842,30 @@ mod tests {
         for m in FlexMode::ALL {
             assert_eq!(FlexMode::from_name(m.name()), Some(m));
         }
+    }
+
+    #[test]
+    fn huge_edits_are_cut_to_a_size_that_finishes() {
+        let input = sine(220.0, 3.0);
+        let began = std::time::Instant::now();
+        let points: Vec<WarpPoint> = (1..200_000)
+            .map(|k| WarpPoint {
+                src: k as f64 * 1.0e-5,
+                dst: k as f64 * 1.1e-5,
+            })
+            .collect();
+        for mode in [FlexMode::Slicing, FlexMode::Rhythmic] {
+            let _ = warp(&input, SR, &points, mode);
+        }
+        let shifts: Vec<PitchShift> = (0..200_000)
+            .map(|k| PitchShift {
+                start: k as f64 * 1.0e-5,
+                end: k as f64 * 1.0e-5 + 0.05,
+                semitones: 1.0,
+            })
+            .collect();
+        let _ = shift_pitch(&input, SR, &shifts, FlexMode::Monophonic);
+        assert!(began.elapsed().as_secs() < 60, "{:?}", began.elapsed());
     }
 
     #[test]

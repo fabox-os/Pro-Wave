@@ -51,6 +51,15 @@ impl FlexEdit {
         for b in self.original.path.to_string_lossy().bytes() {
             mix(u64::from(b));
         }
+        // The recording itself: a file that was replaced under the same name is another sound.
+        mix(self.original.frames);
+        mix(u64::from(self.original.sample_rate));
+        mix(self.original.channels as u64);
+        mix(std::fs::metadata(&self.original.path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs()));
         for b in self.mode.name().bytes() {
             mix(u64::from(b));
         }
@@ -557,12 +566,48 @@ fn midi_track_from(
     made
 }
 
-/// The folder the sounds of Flex edits are written to.
+/// The folder the sounds of Flex edits are written to: the user's own config folder (a shared
+/// temporary folder could be prepared by another user), the temporary one only when there is
+/// none.
 fn cache_dir() -> PathBuf {
-    std::env::temp_dir().join("prowave-flex")
+    crate::recent_files::config_dir()
+        .map(|d| d.join("flex-cache"))
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("prowave-flex-{}", std::process::id()))
+        })
+}
+
+/// How long a made sound is kept after it was last made, in days.
+const CACHE_DAYS: u64 = 14;
+/// Renders running at once: each reads a whole recording.
+const MAX_RENDERS: usize = 4;
+
+/// Removes sounds nobody asked for in a while (once per run), so the folder does not grow
+/// without end.
+fn clean_cache(dir: &std::path::Path, days: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let limit = std::time::Duration::from_secs(days * 86_400);
+    for e in entries.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > limit);
+        let ours = e
+            .path()
+            .extension()
+            .is_some_and(|x| x == "wav" || x == "part");
+        if old && ours {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 fn start_renders(p: &mut Project, s: &mut UiState) {
+    static CLEANED: std::sync::Once = std::sync::Once::new();
     for track in &mut p.tracks {
         for region in &mut track.regions {
             let Some(a) = region.audio.as_mut() else {
@@ -584,6 +629,11 @@ fn start_renders(p: &mut Project, s: &mut UiState) {
                 }
                 continue;
             }
+            if s.flex.renders.len() >= MAX_RENDERS {
+                // The rest wait their turn (this runs every frame).
+                return;
+            }
+            CLEANED.call_once(|| clean_cache(&cache_dir(), CACHE_DAYS));
             let edit = f.clone();
             let (tx, result) = channel();
             let spawned = std::thread::Builder::new()
@@ -763,6 +813,41 @@ mod tests {
             assert!(began.elapsed().as_secs() < 60, "Flex never finished");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn old_sounds_are_cleaned_and_other_files_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.wav", "b.wav.part", "notes.txt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        clean_cache(dir.path(), 14);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3, "all new");
+        // With a limit of zero days everything of ours is old.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        clean_cache(dir.path(), 0);
+        let left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, ["notes.txt"]);
+        assert!(clean_cache_missing());
+    }
+
+    fn clean_cache_missing() -> bool {
+        clean_cache(std::path::Path::new("/no/such/folder"), 1);
+        true
+    }
+
+    #[test]
+    fn a_replaced_recording_is_another_sound() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("r.wav");
+        write_clicks(&wav, &[0.5], 2.0);
+        let a = FlexEdit::new(AudioFile::open(&wav).unwrap(), FlexMode::Rhythmic);
+        write_clicks(&wav, &[0.5], 3.0);
+        let b = FlexEdit::new(AudioFile::open(&wav).unwrap(), FlexMode::Rhythmic);
+        assert_ne!(a.fingerprint(), b.fingerprint());
     }
 
     #[test]

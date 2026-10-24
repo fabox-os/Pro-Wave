@@ -25,6 +25,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Flatpak can reach the network:** Check for Updates failed with "failed to lookup address information" in the Flatpak, whose sandbox had no network access.
 ✅ **Close Project:** *File > Close Project* now closes the project (after asking about unsaved changes) and leaves a new, empty one.
+✅ **Safer and lighter Flex and Smart Tempo:** the sounds Flex makes are kept in your own config folder (not a shared temporary one), cleared after two weeks, and made again if the recording was replaced; a project file can no longer ask for an unbounded number of Flex markers; at most four Flex sounds are made at once; the same loop used in many regions is analysed once.
 ✅ **Check for Updates on slow connections:** the check now tries three times, 30 seconds each, before it reports a timeout.
 
 ✅ **Several time signatures per song:** *Track > Show Signature Track*. Double-click to add a change at a bar, double-click a block to set it, drag it to another bar, right-click to delete it. The ruler, the grids, the Piano Roll, the Event list, the display and recording follow every change, and so does the engine (the metronome accents each bar). The display shows the signature at the playhead and edits it.

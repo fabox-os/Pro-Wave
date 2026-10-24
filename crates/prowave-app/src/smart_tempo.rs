@@ -188,8 +188,14 @@ pub fn start_all(p: &Project, s: &mut UiState) {
 fn analyze_together(files: &[(AudioFile, f64)]) -> Result<Analysis, String> {
     let mut sum: Vec<f32> = Vec::new();
     let limit = (MAX_SONG_SECONDS * STRENGTH_RATE) as usize;
+    // Regions of the same file (a loop repeated) are read once.
+    let mut read: std::collections::HashMap<&std::path::Path, Analysis> = Default::default();
     for (file, at) in files {
-        let found = file.analyze().map_err(|e| e.to_string())?;
+        if !read.contains_key(file.path.as_path()) {
+            let found = file.analyze().map_err(|e| e.to_string())?;
+            read.insert(file.path.as_path(), found);
+        }
+        let found = &read[file.path.as_path()];
         let offset = (at.max(0.0) * STRENGTH_RATE).round() as usize;
         if offset >= limit {
             continue;

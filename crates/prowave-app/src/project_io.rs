@@ -74,7 +74,7 @@ fn intern(s: &str) -> &'static str {
 }
 
 /// Most Flex markers and pitch moves a region keeps from a file.
-const MAX_FLEX_POINTS: usize = 100_000;
+const MAX_FLEX_POINTS: usize = prowave_engine::MAX_FLEX_POINTS;
 
 /// A region's Flex edit from the file: only finite times inside the limits, in order; the
 /// sound is made again from it after the project opens.

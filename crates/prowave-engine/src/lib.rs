@@ -35,7 +35,7 @@ pub use crate::disk::{
 };
 pub use crate::flex::{
     detect_notes, hz_to_midi, pitch_track, shift_pitch, warp, write_wav, DetectedNote, FlexMode,
-    PitchShift, WarpPoint,
+    PitchShift, WarpPoint, MAX_POINTS as MAX_FLEX_POINTS,
 };
 pub use crate::mtc::{
     full_frame, quarter_frame_data, rate_code, rate_of_code, MtcDecoder, MtcEvent, MtcGenerator,

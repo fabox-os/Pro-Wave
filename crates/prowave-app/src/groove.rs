@@ -183,13 +183,24 @@ pub fn poll(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
         .name("prowave-groove".into())
         .spawn(move || {
             let mut hits = Vec::new();
+            // Regions of the same file (a loop repeated) are read once.
+            let mut read: std::collections::HashMap<std::path::PathBuf, Vec<f64>> =
+                Default::default();
             for (file, at) in &files {
-                match file.analyze() {
-                    Ok(found) => hits.extend(found.onsets.iter().map(|o| map.beat_at(at + o))),
-                    Err(e) => {
-                        let _ = tx.send(Err(e.to_string()));
-                        return;
+                if !read.contains_key(&file.path) {
+                    match file.analyze() {
+                        Ok(found) => {
+                            read.insert(file.path.clone(), found.onsets);
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e.to_string()));
+                            return;
+                        }
                     }
+                }
+                hits.extend(read[&file.path].iter().map(|o| map.beat_at(at + o)));
+                if hits.len() > 2_000_000 {
+                    break;
                 }
             }
             let _ = tx.send(Ok(hits));
