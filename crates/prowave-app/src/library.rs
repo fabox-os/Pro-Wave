@@ -261,7 +261,7 @@ struct Saved {
     track: usize,
     name: String,
     instrument: Option<&'static str>,
-    inserts: Vec<&'static str>,
+    inserts: Vec<crate::model::Insert>,
     category: Option<&'static str>,
 }
 
@@ -304,7 +304,7 @@ fn load_patch(p: &mut Project, v: &mut LibraryView, cat: usize, patch: usize) {
     }
     t.name = (*name).to_string();
     t.category = Some(c.name);
-    t.inserts = c.fx.to_vec();
+    t.inserts = crate::model::inserts_from_names(c.fx);
     // Only software instruments get an instrument: audio tracks keep their input and an aux
     // track its bus.
     if matches!(t.kind, TrackKind::Instrument | TrackKind::Drummer) {
@@ -664,7 +664,10 @@ mod tests {
         let t = &p.tracks[0];
         assert_eq!(t.name, CATEGORIES[synth].patches[0]);
         assert_eq!(t.instrument, Some("Alchemy"));
-        assert_eq!(t.inserts, CATEGORIES[synth].fx.to_vec());
+        assert_eq!(
+            t.inserts,
+            crate::model::inserts_from_names(CATEGORIES[synth].fx)
+        );
         assert_eq!(t.category, Some("Synthesizer"));
         // A second audition keeps the original state for Revert.
         load_patch(&mut p, &mut v, category("Bass"), 1);

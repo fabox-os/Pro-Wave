@@ -14,11 +14,13 @@ mod analysis;
 mod core;
 mod disk;
 mod flex;
+mod fx;
 mod gain_smoothing;
 #[cfg(not(target_arch = "wasm32"))]
 mod mapped;
 mod mtc;
 mod output;
+mod routing;
 mod synth;
 mod tempo_map;
 mod triple;
@@ -37,11 +39,18 @@ pub use crate::flex::{
     detect_notes, hz_to_midi, pitch_track, shift_pitch, warp, write_wav, DetectedNote, FlexMode,
     PitchShift, WarpPoint, MAX_POINTS as MAX_FLEX_POINTS,
 };
+pub use crate::fx::{
+    eq_response_db, response_db, Chain, Fx, FxKind, ParamInfo, Pdc, MAX_FX_PARAMS, MAX_INSERTS,
+};
 pub use crate::mtc::{
     full_frame, quarter_frame_data, rate_code, rate_of_code, MtcDecoder, MtcEvent, MtcGenerator,
     MtcMessage,
 };
 pub use crate::output::{peak_of, Engine, EngineError};
+pub use crate::routing::{
+    curve_shape, lane_value, send_gain, AutoLane, AutoPoint, AutoTarget, Route, SendSpec,
+    MAX_AUTO_POINTS, MAX_BUSES, MAX_SENDS,
+};
 pub use crate::synth::{Kit, SynthPatch, Wave};
 pub use crate::tempo_map::{
     MusicalPosition, SignatureEvent, Smpte, SmpteRate, TempoCurve, TempoEvent, TempoMap, MAX_BPM,

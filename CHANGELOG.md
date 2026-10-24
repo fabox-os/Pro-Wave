@@ -3,7 +3,7 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
-## Unreleased
+## 0.1.10
 
 ### All systems (Windows, macOS, Linux)
 
@@ -14,8 +14,19 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Flex Pitch:** *Flex Pitch > Correct Pitch to Key* moves every note it hears to the nearest note of the project's key, and *Create MIDI Track from Flex Pitch* writes the notes it hears on a new software instrument track.
 ✅ **Groove Track:** right-click a track > *Set as Groove Track*, then *Follow Groove Track* on MIDI tracks: they take its timing (swing and push), from its notes or, for audio, from the hits in its recordings.
 
+✅ **Real effects:** each Audio FX slot of a channel strip now holds an effect that changes the sound: Channel EQ, Compressor, Space D (reverb), Tape Delay, Chorus, Phaser, Overdrive and Filter. Click a slot to add, replace, move, bypass or remove one; double-click it for its window (sliders, the EQ curve, the compressor's gain reduction). The strip's EQ thumbnail and Gain Reduction meter show what the effects do.
+✅ **Buses and sends:** a strip has up to four sends (pre or post fader, with a level knob) to Bus 1-8, and Aux strips play the bus of their number (Aux 1 plays Bus 1). *Sends on Faders* makes the faders set the sends to one bus. *Edit > Copy/Paste Channel Strip*, and *Options > Create New Auxiliary Channel Strip* and *Create New VCA*.
+✅ **Automation:** the strip's Automation slot picks Off, Read, Touch, Latch or Write for the fader and the pan. Move a control while the project plays to write it; Read plays it back (the fader moves by itself). *Show Automation* opens the editor: click to add a point, drag to move, double-click to delete. Saved in the project.
+
+✅ **Noise Gate, Limiter and Multi-Band EQ:** three more effects for the Audio FX slots. The Limiter never passes its ceiling (it looks 2 ms ahead); the Multi-Band EQ has six bands (low shelf, four bells, high shelf) and draws its curve in its window and in the strip's EQ thumbnail; the Gain Reduction meter shows the Gate and the Limiter too.
+✅ **Delay compensation:** an effect that looks ahead (the Limiter) no longer puts its track out of time: every other strip, and what is sent to buses, is delayed by the same amount.
+✅ **Better sums:** the strips and the buses are added in 64 bits, so many tracks add up without losing quiet detail to rounding.
+✅ **Automation of effect settings and curves:** move any slider of an effect while the project plays to write it (Touch, Latch, Write), and in Read mode it moves by itself; pick the setting in the Automation editor's *Parameter* menu. A handle in the middle of each stretch of a lane bends it (double-click to straighten).
+✅ **Mix Groups:** the strip's Group slot makes or picks a group (*Options > Create Group…* too). Tracks in a group move their faders and pans together by the same amount, and Mute and Solo follow, as the group's settings say. Saved in the project.
+
 ### Still to do or test
 
+❌ Mixer: automation of sends, the Output slot, Bezier curves with two handles, plug-in (CLAP / VST3 / AU) hosting, a multi-band compressor
 ❌ Flex Time: dragging Flex markers with the mouse, Flex Pitch per note (drift, vibrato, formant), Groove Track for audio tracks to follow
 ❌ Smart Tempo: Adapt Region Tempo while recording, a tempo that is not steady in the Editor's beat grid
 

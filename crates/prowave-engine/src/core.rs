@@ -1,8 +1,14 @@
 //! Device-independent engine core. `EngineCore::process` is the audio-thread entry point:
 //! no allocation, no locks, no syscalls. Unit-testable without an audio device.
 use crate::disk::{Block, ClipShared};
+use crate::fx::{Chain, Pdc, MAX_FX_PARAMS};
 use crate::gain_smoothing::GainRamp;
 use crate::mtc::{MtcGenerator, MtcMessage};
+#[cfg(test)]
+use crate::routing::AutoPoint;
+#[cfg(test)]
+use crate::routing::SendSpec;
+use crate::routing::{send_gain, AutoLane, AutoTarget, Route, MAX_BUSES};
 use crate::synth::{kit_voice, osc, Kit, Svf, SynthPatch};
 use crate::tempo_map::{SmpteRate, TempoMap};
 use crate::triple::{triple_buffer, Reader, Writer};
@@ -13,6 +19,8 @@ use std::sync::Arc;
 /// Tracks the engine mixes (Logic: 1000 tracks per project).
 pub const MAX_TRACKS: usize = 1024;
 const MAX_VOICES: usize = 48;
+/// Samples between two readings of the automation (0.7 ms at 48 kHz).
+const AUTO_BLOCK: u32 = 32;
 
 /// A note scheduled on the timeline (beats are 0-based quarter notes).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -389,6 +397,34 @@ pub enum Command {
         track: u16,
         patch: SynthPatch,
     },
+    /// The effects of a channel strip (Logic: Audio FX slots), made off the audio thread. The
+    /// strip's old effects come back through the garbage queue; their tails stop.
+    SetInserts {
+        track: u16,
+        chain: Box<Chain>,
+    },
+    /// New parameters and bypass for effect `slot` of a strip's chain (no allocation, so
+    /// knobs can move while it plays). Ignored when the slot does not exist.
+    SetFx {
+        track: u16,
+        slot: u8,
+        params: [f32; MAX_FX_PARAMS],
+        bypass: bool,
+    },
+    /// Delay compensation of a strip (see [`Pdc`]): every strip is delayed so that effects with
+    /// a look-ahead do not put it out of time with the others. The old delay comes back
+    /// through the garbage queue.
+    SetPdc {
+        track: u16,
+        pdc: Box<Pdc>,
+    },
+    /// Where a strip's signal goes: its sends, and for an Aux strip the bus it listens to.
+    SetRoute {
+        track: u16,
+        route: Route,
+    },
+    /// Replaces all automation lanes (build each with [`AutoLane::sanitized`]).
+    SetAutomation(Vec<AutoLane>),
     /// Turns MIDI Time Code output on or off (Logic: Synchronization > MTC). While on, the
     /// engine sends the SMPTE time of the playhead as [`MtcMessage`]s: quarter frames while
     /// playing, a full frame when the position jumps. `offset_frames` is the SMPTE time of the
@@ -404,7 +440,13 @@ impl Command {
     pub(crate) fn retires_state(&self) -> bool {
         matches!(
             self,
-            Self::SetSong(_) | Self::SetNotes(_) | Self::SetControls(_) | Self::SetTempoMap(_)
+            Self::SetSong(_)
+                | Self::SetNotes(_)
+                | Self::SetControls(_)
+                | Self::SetTempoMap(_)
+                | Self::SetInserts { .. }
+                | Self::SetPdc { .. }
+                | Self::SetAutomation(_)
         )
     }
 
@@ -426,6 +468,9 @@ pub enum Garbage {
     Notes(Vec<NoteEvent>),
     Controls(Vec<ControlEvent>),
     TempoMap(Box<TempoMap>),
+    Chain(Box<Chain>),
+    Pdc(Box<Pdc>),
+    Automation(Vec<AutoLane>),
 }
 
 /// What the engine shows the UI after each audio block: the playhead, the transport and the
@@ -438,6 +483,9 @@ pub struct EngineState {
     pub peaks: (f32, f32),
     /// Post-fader stereo peak per track, linear, for the mixer meters.
     pub track_peaks: [(f32, f32); MAX_TRACKS],
+    /// Gain reduction in dB (0 or more) of the compressors of each strip, for the mixer's
+    /// Gain Reduction meter.
+    pub gain_reduction: [f32; MAX_TRACKS],
     /// Frames in the most recent device callback.
     pub block_frames: u32,
     /// Device-reported delay from callback to DAC, in microseconds (0 if unknown).
@@ -451,6 +499,7 @@ impl Default for EngineState {
             playing: false,
             peaks: (0.0, 0.0),
             track_peaks: [(0.0, 0.0); MAX_TRACKS],
+            gain_reduction: [0.0; MAX_TRACKS],
             block_frames: 0,
             output_latency_us: 0,
         }
@@ -458,6 +507,11 @@ impl Default for EngineState {
 }
 
 impl EngineState {
+    /// Gain reduction in dB of the compressors of `track` (0 when there is none).
+    pub fn gain_reduction(&self, track: usize) -> f32 {
+        self.gain_reduction.get(track).copied().unwrap_or(0.0)
+    }
+
     /// Post-fader (left, right) peak of `track`, linear; silence for a track out of range.
     pub fn track_peaks(&self, track: usize) -> (f32, f32) {
         self.track_peaks.get(track).copied().unwrap_or((0.0, 0.0))
@@ -609,6 +663,35 @@ pub struct EngineCore {
     track_audible: Vec<bool>,
     track_patch: Vec<SynthPatch>,
     track_external: Vec<bool>,
+    /// Effects per strip (an empty box for none), sends and bus inputs.
+    chains: Vec<Option<Box<Chain>>>,
+    /// Delay compensation per strip.
+    pdc: Vec<Option<Box<Pdc>>>,
+    routes: Vec<Route>,
+    /// Strips with effects or sends (processed in order), and Aux strips (processed after
+    /// them, once the buses are full).
+    complex: Vec<u16>,
+    aux: Vec<u16>,
+    /// 0 plain strip, 1 complex, 2 aux.
+    strip_kind: Vec<u8>,
+    /// The signal of each strip for the current sample, before effects and fader.
+    /// The strips' signals and the buses are summed in 64 bits, so many strips (and the
+    /// buses they feed) add up without losing the quiet ones to rounding.
+    in_l: Vec<f64>,
+    in_r: Vec<f64>,
+    touched: Vec<bool>,
+    dirty: Vec<u16>,
+    bus_l: [f64; MAX_BUSES],
+    bus_r: [f64; MAX_BUSES],
+    automation: Vec<AutoLane>,
+    /// The value the automation gives each strip right now (None: its fader or knob rules).
+    auto_vol: Vec<Option<f32>>,
+    auto_pan: Vec<Option<f32>>,
+    auto_on: Vec<bool>,
+    auto_tracks: Vec<u16>,
+    /// Some lane is played.
+    auto_any: bool,
+    auto_left: u32,
     midi_out: Producer<MidiOutEvent>,
     midi_out_reader: Option<Consumer<MidiOutEvent>>,
     mtc: MtcGenerator,
@@ -699,6 +782,25 @@ impl EngineCore {
             track_audible: vec![true; MAX_TRACKS],
             track_patch: vec![SynthPatch::default(); MAX_TRACKS],
             track_external: vec![false; MAX_TRACKS],
+            chains: (0..MAX_TRACKS).map(|_| None).collect(),
+            pdc: (0..MAX_TRACKS).map(|_| None).collect(),
+            routes: vec![Route::default(); MAX_TRACKS],
+            complex: Vec::with_capacity(MAX_TRACKS),
+            aux: Vec::with_capacity(MAX_TRACKS),
+            strip_kind: vec![0; MAX_TRACKS],
+            in_l: vec![0.0; MAX_TRACKS],
+            in_r: vec![0.0; MAX_TRACKS],
+            touched: vec![false; MAX_TRACKS],
+            dirty: Vec::with_capacity(MAX_TRACKS),
+            bus_l: [0.0; MAX_BUSES],
+            bus_r: [0.0; MAX_BUSES],
+            auto_any: false,
+            automation: Vec::new(),
+            auto_vol: vec![None; MAX_TRACKS],
+            auto_pan: vec![None; MAX_TRACKS],
+            auto_on: vec![false; MAX_TRACKS],
+            auto_tracks: Vec::with_capacity(MAX_TRACKS),
+            auto_left: 0,
             midi_out,
             midi_out_reader: Some(midi_out_reader),
             mtc: MtcGenerator::default(),
@@ -920,16 +1022,20 @@ impl EngineCore {
                 Some(t) => {
                     // Solo affects every channel, but another channel's gain/pan
                     // target is unchanged. Preserve full immediate resets when silent.
-                    self.track_audible[i] = !t.mute && (!any_solo || t.solo);
+                    // An Aux strip stays audible under solo: it carries the sends of the
+                    // soloed strips (the others have no signal to send).
+                    let aux = self.routes[i].bus_in > 0;
+                    self.track_audible[i] = !t.mute && (!any_solo || t.solo || aux);
                     if samples > 0 && changed_track.is_some_and(|track| track != i) {
                         continue;
                     }
                     let t = t.sanitized();
-                    let g = 10f32.powf(t.gain_db / 20.0);
-                    // Equal-power pan law, normalised so the centre is unity gain.
-                    let a = (t.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
-                    self.track_ramp_l[i].set(g * a.cos() * std::f32::consts::SQRT_2, samples);
-                    self.track_ramp_r[i].set(g * a.sin() * std::f32::consts::SQRT_2, samples);
+                    self.set_strip_gain(
+                        i,
+                        self.auto_vol[i].unwrap_or(t.gain_db),
+                        self.auto_pan[i].unwrap_or(t.pan),
+                        samples,
+                    );
                 }
                 None => {
                     self.track_ramp_l[i].set(1.0, 0);
@@ -942,6 +1048,172 @@ impl EngineCore {
                 self.track_gain_r[i] = self.track_ramp_r[i].next();
             }
         }
+    }
+
+    /// Aims strip `i`'s left and right gains at a fader (dB) and pan, over `samples`.
+    fn set_strip_gain(&mut self, i: usize, gain_db: f32, pan: f32, samples: u32) {
+        let g = 10f32.powf(gain_db / 20.0);
+        // Equal-power pan law, normalised so the centre is unity gain.
+        let a = (pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+        self.track_ramp_l[i].set(g * a.cos() * std::f32::consts::SQRT_2, samples);
+        self.track_ramp_r[i].set(g * a.sin() * std::f32::consts::SQRT_2, samples);
+    }
+
+    /// Sorts the strips into plain, complex (effects or sends) and Aux after any of them changed.
+    fn sort_strips(&mut self) {
+        self.complex.clear();
+        self.aux.clear();
+        for i in 0..MAX_TRACKS {
+            let has_chain = self.chains[i].as_ref().is_some_and(|c| !c.fx.is_empty());
+            let has_pdc = self.pdc[i].as_ref().is_some_and(|p| !p.is_empty());
+            self.strip_kind[i] = if self.routes[i].bus_in > 0 {
+                self.aux.push(i as u16);
+                2
+            } else if has_chain || has_pdc || self.routes[i].has_sends() {
+                self.complex.push(i as u16);
+                1
+            } else {
+                0
+            };
+        }
+    }
+
+    /// Reads the automation lanes at the playhead and aims the strips they move.
+    fn update_automation(&mut self) {
+        let beat = self.beat;
+        let samples = AUTO_BLOCK;
+        for k in 0..self.automation.len() {
+            let lane = &self.automation[k];
+            if !lane.follow {
+                continue;
+            }
+            let t = lane.track as usize;
+            if t >= MAX_TRACKS {
+                continue;
+            }
+            let Some(v) = lane.value_at(beat) else {
+                continue;
+            };
+            match lane.target {
+                AutoTarget::Volume => {
+                    self.auto_vol[t] = Some((v + lane.offset_db).clamp(-96.0, 6.0))
+                }
+                AutoTarget::Pan => self.auto_pan[t] = Some(v.clamp(-1.0, 1.0)),
+                AutoTarget::Fx { slot, param } => {
+                    if let Some(chain) = self.chains[t].as_mut() {
+                        chain.set_param_norm(slot as usize, param as usize, v);
+                    }
+                }
+            }
+        }
+        for k in 0..self.auto_tracks.len() {
+            let t = self.auto_tracks[k] as usize;
+            let own = self.song.tracks.get(t).copied().unwrap_or_default();
+            self.set_strip_gain(
+                t,
+                self.auto_vol[t].unwrap_or(own.gain_db),
+                self.auto_pan[t].unwrap_or(own.pan),
+                samples,
+            );
+        }
+    }
+
+    /// Runs one strip: effects, delay compensation, pre-fader sends, fader and pan,
+    /// post-fader sends, and into the mix.
+    #[inline]
+    fn run_strip(&mut self, t: usize, out: &mut (f64, f64)) {
+        let route = self.routes[t];
+        let audible = self.track_audible[t];
+        let (mut xl, mut xr) = (self.in_l[t], self.in_r[t]);
+        self.in_l[t] = 0.0;
+        self.in_r[t] = 0.0;
+        if route.bus_in > 0 {
+            let b = route.bus_in as usize - 1;
+            xl += self.bus_l[b];
+            xr += self.bus_r[b];
+        }
+        if !audible {
+            xl = 0.0;
+            xr = 0.0;
+        }
+        // The effects work in 32 bits.
+        let (mut xl, mut xr) = (xl as f32, xr as f32);
+        if let Some(chain) = self.chains[t].as_mut() {
+            (xl, xr) = chain.process(xl, xr);
+        }
+        if let Some(pdc) = self.pdc[t].as_mut() {
+            (xl, xr) = pdc.delay_before(xl, xr);
+        }
+        let (xl, xr) = (xl as f64, xr as f64);
+        if audible && route.bus_in == 0 {
+            for s in route.sends.iter().filter(|s| s.bus > 0 && s.pre) {
+                let g = send_gain(s.level) as f64;
+                self.bus_l[s.bus as usize - 1] += xl * g;
+                self.bus_r[s.bus as usize - 1] += xr * g;
+            }
+        }
+        let (yl, yr) = (
+            xl * self.track_gain_l[t] as f64,
+            xr * self.track_gain_r[t] as f64,
+        );
+        if audible {
+            if route.bus_in == 0 {
+                for s in route.sends.iter().filter(|s| s.bus > 0 && !s.pre) {
+                    let g = send_gain(s.level) as f64;
+                    self.bus_l[s.bus as usize - 1] += yl * g;
+                    self.bus_r[s.bus as usize - 1] += yr * g;
+                }
+            }
+            self.track_pk_l[t] = self.track_pk_l[t].max(yl.abs() as f32);
+            self.track_pk_r[t] = self.track_pk_r[t].max(yr.abs() as f32);
+        }
+        // The compensation after the fader keeps running while the strip is silent, so its
+        // timing is right the moment it is heard.
+        let (yl, yr) = match self.pdc[t].as_mut() {
+            Some(pdc) => {
+                let (a, b) = pdc.delay_after(yl as f32, yr as f32);
+                (a as f64, b as f64)
+            }
+            None => (yl, yr),
+        };
+        if audible {
+            out.0 += yl;
+            out.1 += yr;
+        }
+    }
+
+    /// The strips' signals of this sample, through their effects, faders and sends, summed.
+    fn mix_strips(&mut self) -> (f64, f64) {
+        let mut out = (0f64, 0f64);
+        for k in 0..self.dirty.len() {
+            let t = self.dirty[k] as usize;
+            self.touched[t] = false;
+            if self.strip_kind[t] != 0 {
+                continue;
+            }
+            let (yl, yr) = (
+                self.in_l[t] * self.track_gain_l[t] as f64,
+                self.in_r[t] * self.track_gain_r[t] as f64,
+            );
+            self.in_l[t] = 0.0;
+            self.in_r[t] = 0.0;
+            out.0 += yl;
+            out.1 += yr;
+            self.track_pk_l[t] = self.track_pk_l[t].max(yl.abs() as f32);
+            self.track_pk_r[t] = self.track_pk_r[t].max(yr.abs() as f32);
+        }
+        self.dirty.clear();
+        for k in 0..self.complex.len() {
+            self.run_strip(self.complex[k] as usize, &mut out);
+        }
+        for k in 0..self.aux.len() {
+            self.run_strip(self.aux[k] as usize, &mut out);
+        }
+        if !self.aux.is_empty() || !self.complex.is_empty() {
+            self.bus_l = [0.0; MAX_BUSES];
+            self.bus_r = [0.0; MAX_BUSES];
+        }
+        out
     }
 
     fn drain_commands(&mut self) {
@@ -1042,6 +1314,80 @@ impl EngineCore {
                     if let Some(slot) = self.track_patch.get_mut(track as usize) {
                         *slot = patch.sanitized();
                     }
+                }
+                Command::SetInserts { track, chain } => {
+                    let t = track as usize;
+                    if t < MAX_TRACKS {
+                        let old = self.chains[t].replace(chain);
+                        if let Some(old) = old {
+                            let _ = self.trash.push(Garbage::Chain(old));
+                        }
+                        self.shown.gain_reduction[t] = 0.0;
+                        self.sort_strips();
+                    } else {
+                        let _ = self.trash.push(Garbage::Chain(chain));
+                    }
+                }
+                Command::SetPdc { track, pdc } => {
+                    let t = track as usize;
+                    if t < MAX_TRACKS {
+                        if let Some(old) = self.pdc[t].replace(pdc) {
+                            let _ = self.trash.push(Garbage::Pdc(old));
+                        }
+                        self.sort_strips();
+                    } else {
+                        let _ = self.trash.push(Garbage::Pdc(pdc));
+                    }
+                }
+                Command::SetFx {
+                    track,
+                    slot,
+                    params,
+                    bypass,
+                } => {
+                    if let Some(fx) = self
+                        .chains
+                        .get_mut(track as usize)
+                        .and_then(|c| c.as_mut())
+                        .and_then(|c| c.fx.get_mut(slot as usize))
+                    {
+                        fx.set(params, bypass);
+                    }
+                }
+                Command::SetRoute { track, route } => {
+                    let t = track as usize;
+                    if t < MAX_TRACKS {
+                        self.routes[t] = route.sanitized();
+                        self.sort_strips();
+                        self.rebuild_mix(true, Some(t));
+                    }
+                }
+                Command::SetAutomation(lanes) => {
+                    let old = std::mem::replace(&mut self.automation, lanes);
+                    let _ = self.trash.push(Garbage::Automation(old));
+                    self.auto_vol.fill(None);
+                    self.auto_pan.fill(None);
+                    self.auto_on.fill(false);
+                    self.auto_tracks.clear();
+                    // Effect parameters go back to what the user set; the lanes that are
+                    // played move them again from the next block.
+                    for chain in self.chains.iter_mut().flatten() {
+                        chain.restore();
+                    }
+                    self.auto_any = self.automation.iter().any(|l| l.follow);
+                    for lane in self
+                        .automation
+                        .iter()
+                        .filter(|l| l.follow && !matches!(l.target, AutoTarget::Fx { .. }))
+                    {
+                        let t = lane.track as usize;
+                        if t < MAX_TRACKS && !self.auto_on[t] {
+                            self.auto_on[t] = true;
+                            self.auto_tracks.push(lane.track);
+                        }
+                    }
+                    self.auto_left = 0;
+                    self.rebuild_mix(true, None);
                 }
                 Command::SetTestTone { hz, gain } => {
                     self.test_hz = if hz.is_finite() {
@@ -1203,12 +1549,26 @@ impl EngineCore {
             // Advance once per track/sample, not once per voice or overlapping audio clip.
             if self.mix_ramp_remaining > 0 {
                 for i in 0..MAX_TRACKS {
-                    self.track_gain_l[i] = self.track_ramp_l[i].next();
-                    self.track_gain_r[i] = self.track_ramp_r[i].next();
+                    if !self.auto_on[i] {
+                        self.track_gain_l[i] = self.track_ramp_l[i].next();
+                        self.track_gain_r[i] = self.track_ramp_r[i].next();
+                    }
                 }
                 self.mix_ramp_remaining -= 1;
             }
-            let (mut l, mut r) = (0f32, 0f32);
+            if self.auto_any {
+                if self.auto_left == 0 {
+                    self.update_automation();
+                    self.auto_left = AUTO_BLOCK;
+                }
+                self.auto_left -= 1;
+                for k in 0..self.auto_tracks.len() {
+                    let t = self.auto_tracks[k] as usize;
+                    self.track_gain_l[t] = self.track_ramp_l[t].next();
+                    self.track_gain_r[t] = self.track_ramp_r[t].next();
+                }
+            }
+            let (mut l, mut r) = (0f64, 0f64);
             if self.playing {
                 while let Some(n) = self.song.notes.get(self.next_note).copied() {
                     if n.start_beat > self.beat {
@@ -1231,14 +1591,12 @@ impl EngineCore {
                         let t = (c.track as usize).min(MAX_TRACKS - 1);
                         if self.track_audible[t] {
                             let edit_gain = c.envelope(sample_beat, c.end_beat);
-                            let (xl, xr) = (
-                                cl * edit_gain * self.track_gain_l[t],
-                                cr * edit_gain * self.track_gain_r[t],
-                            );
-                            l += xl;
-                            r += xr;
-                            self.track_pk_l[t] = self.track_pk_l[t].max(xl.abs());
-                            self.track_pk_r[t] = self.track_pk_r[t].max(xr.abs());
+                            self.in_l[t] += (cl * edit_gain) as f64;
+                            self.in_r[t] += (cr * edit_gain) as f64;
+                            if !self.touched[t] {
+                                self.touched[t] = true;
+                                self.dirty.push(t as u16);
+                            }
                         }
                     }
                 }
@@ -1336,34 +1694,38 @@ impl EngineCore {
                 let t = v.track as usize;
                 if self.track_audible[t] {
                     let x = finite_or_zero(x * v.amp * v.env);
-                    let (xl, xr) = (x * self.track_gain_l[t], x * self.track_gain_r[t]);
-                    l += xl;
-                    r += xr;
-                    self.track_pk_l[t] = self.track_pk_l[t].max(xl.abs());
-                    self.track_pk_r[t] = self.track_pk_r[t].max(xr.abs());
+                    self.in_l[t] += x as f64;
+                    self.in_r[t] += x as f64;
+                    if !self.touched[t] {
+                        self.touched[t] = true;
+                        self.dirty.push(t as u16);
+                    }
                 }
             }
+            let (ml, mr) = self.mix_strips();
+            l += ml;
+            r += mr;
             if self.test_hz > 0.0 {
                 self.test_phase += self.test_hz / self.sr;
                 if self.test_phase >= 1.0 {
                     self.test_phase -= 1.0;
                 }
                 let t = (self.test_phase * std::f32::consts::TAU).sin() * self.test_gain;
-                l += t;
-                r += t;
+                l += t as f64;
+                r += t as f64;
             }
             if self.click_remaining > 0 {
                 self.click_remaining -= 1;
                 self.click_phase += self.click_freq / self.sr;
                 let env = self.click_remaining as f32 / (0.03 * self.sr);
                 let c = (self.click_phase * std::f32::consts::TAU).sin() * env * 0.3;
-                l += c;
-                r += c;
+                l += c as f64;
+                r += c as f64;
             }
-            let master = self.master.next();
+            let master = self.master.next() as f64;
             // `clamp` lets NaN through, so a non-finite sum becomes silence first.
-            l = finite_or_zero(l * master).clamp(-1.0, 1.0);
-            r = finite_or_zero(r * master).clamp(-1.0, 1.0);
+            let l = finite_or_zero((l * master) as f32).clamp(-1.0, 1.0);
+            let r = finite_or_zero((r * master) as f32).clamp(-1.0, 1.0);
             pk_l = pk_l.max(l.abs());
             pk_r = pk_r.max(r.abs());
             frame[0] = l;
@@ -1427,6 +1789,10 @@ impl EngineCore {
         for (t, (l, r)) in shown.track_peaks.iter_mut().enumerate() {
             *l = decayed_peak(self.track_pk_l[t], *l);
             *r = decayed_peak(self.track_pk_r[t], *r);
+        }
+        for &t in self.complex.iter().chain(self.aux.iter()) {
+            let t = t as usize;
+            shown.gain_reduction[t] = self.chains[t].as_ref().map_or(0.0, |c| c.reduction_db());
         }
         *self.state.input() = *shown;
         self.state.publish();
@@ -2308,5 +2674,405 @@ mod tests {
         assert!(tx.push(Command::SetTrackMix { track: 1, mix }).is_ok());
         e.process(&mut buf);
         assert!(s.read().track_peaks(0).0 > 0.0 && s.read().track_peaks(1).0 > 0.0);
+    }
+
+    fn two_tracks_song(notes: Vec<NoteEvent>) -> Box<Song> {
+        Box::new(Song::new(
+            notes,
+            vec![TrackMix::default(), TrackMix::default()],
+        ))
+    }
+
+    fn strip_note(track: u16, end: f64) -> NoteEvent {
+        NoteEvent {
+            track,
+            ..note(0.0, end)
+        }
+    }
+
+    fn render(e: &mut EngineCore, secs: f32) -> Vec<f32> {
+        let mut buf = vec![0.0f32; (secs * 48_000.0) as usize * 2];
+        for chunk in buf.chunks_mut(512 * 2) {
+            e.process(chunk);
+        }
+        buf
+    }
+
+    fn energy(buf: &[f32], from: f32, to: f32) -> f32 {
+        let (a, b) = ((from * 48_000.0) as usize * 2, (to * 48_000.0) as usize * 2);
+        buf[a..b.min(buf.len())].iter().map(|x| x * x).sum()
+    }
+
+    fn effect(kind: crate::fx::FxKind, set: &[(usize, f32)]) -> Box<Chain> {
+        let mut p = kind.defaults();
+        for (i, v) in set {
+            p[*i] = *v;
+        }
+        Box::new(Chain::new(vec![crate::fx::Fx::new(
+            kind, p, false, 48_000.0,
+        )]))
+    }
+
+    #[test]
+    fn an_effect_on_a_strip_changes_what_is_heard() {
+        use crate::fx::FxKind;
+        let play = |chain: Option<Box<Chain>>| {
+            let (mut e, mut tx, _s) = rig();
+            assert!(tx
+                .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 0.25)])))
+                .is_ok());
+            if let Some(chain) = chain {
+                assert!(tx.push(Command::SetInserts { track: 0, chain }).is_ok());
+            }
+            assert!(tx.push(Command::Play).is_ok());
+            render(&mut e, 0.8)
+        };
+        let dry = play(None);
+        // A 150 ms delay, all wet: the note comes back after it ended (0.125 s at 120 BPM).
+        let wet = play(Some(effect(
+            FxKind::Delay,
+            &[(0, 150.0), (1, 0.0), (4, 1.0)],
+        )));
+        assert!(
+            energy(&dry, 0.45, 0.8) < 1e-6,
+            "{}",
+            energy(&dry, 0.45, 0.8)
+        );
+        assert!(energy(&wet, 0.2, 0.5) > 0.05, "{}", energy(&wet, 0.2, 0.5));
+        assert!(wet.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn a_send_feeds_the_aux_strip_that_listens_to_the_bus() {
+        use crate::fx::FxKind;
+        let play = |send_pre: bool, aux_muted: bool, level: f32| {
+            let (mut e, mut tx, mut s) = rig();
+            let mut mixes = vec![TrackMix::default(), TrackMix::default()];
+            // The note's own fader is all the way down: only a pre-fader send is heard.
+            mixes[0].gain_db = -96.0;
+            mixes[1].mute = aux_muted;
+            let song = Song::new(vec![strip_note(0, 2.0)], mixes);
+            assert!(tx.push(Command::SetSong(Box::new(song))).is_ok());
+            let mut route = Route::default();
+            route.sends[0] = SendSpec {
+                bus: 1,
+                level,
+                pre: send_pre,
+            };
+            assert!(tx.push(Command::SetRoute { track: 0, route }).is_ok());
+            let aux = Route {
+                bus_in: 1,
+                ..Route::default()
+            };
+            assert!(tx
+                .push(Command::SetRoute {
+                    track: 1,
+                    route: aux
+                })
+                .is_ok());
+            assert!(tx
+                .push(Command::SetInserts {
+                    track: 1,
+                    chain: effect(FxKind::ChannelEq, &[]),
+                })
+                .is_ok());
+            assert!(tx.push(Command::Play).is_ok());
+            let buf = render(&mut e, 0.3);
+            let (a0l, a0r) = s.read().track_peaks(0);
+            let (a1l, a1r) = s.read().track_peaks(1);
+            (energy(&buf, 0.0, 0.3), a0l.max(a0r), a1l.max(a1r))
+        };
+        let (pre, strip, aux) = play(true, false, 0.7);
+        assert!(
+            pre > 0.01 && strip < 1e-3 && aux > 0.05,
+            "{pre} {strip} {aux}"
+        );
+        // After the fader the send carries nothing (the fader is down).
+        let (post, _, aux_post) = play(false, false, 0.7);
+        assert!(post < 1e-5 && aux_post < 1e-4, "{post} {aux_post}");
+        // A muted Aux strip is silent; a send at zero sends nothing.
+        assert!(play(true, true, 0.7).0 < 1e-5);
+        assert!(play(true, false, 0.0).0 < 1e-5);
+        // The send level counts: half the knob is about 6 dB under the top.
+        let top = play(true, false, 1.0).0;
+        let half = play(true, false, 0.5).0;
+        assert!(half < top * 0.2 && half > top * 0.01, "{half} {top}");
+    }
+
+    #[test]
+    fn automation_plays_the_fader_and_stops_when_it_is_not_followed() {
+        let level = |lane: Option<(bool, f32, f32)>| {
+            let (mut e, mut tx, _s) = rig();
+            assert!(tx
+                .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 4.0)])))
+                .is_ok());
+            if let Some((follow, db, offset)) = lane {
+                let lane = AutoLane {
+                    track: 0,
+                    target: AutoTarget::Volume,
+                    follow,
+                    offset_db: offset,
+                    points: vec![AutoPoint::new(0.0, db), AutoPoint::new(100.0, db)],
+                };
+                assert!(tx.push(Command::SetAutomation(vec![lane])).is_ok());
+            }
+            assert!(tx.push(Command::Play).is_ok());
+            let buf = render(&mut e, 0.4);
+            energy(&buf, 0.2, 0.4)
+        };
+        let plain = level(None);
+        let quiet = level(Some((true, -20.0, 0.0)));
+        let ignored = level(Some((false, -20.0, 0.0)));
+        // -20 dB is a tenth of the level, a hundredth of the energy.
+        assert!((quiet / plain - 0.01).abs() < 0.004, "{}", quiet / plain);
+        assert!((ignored / plain - 1.0).abs() < 1e-3);
+        // The VCA's level is added to the lane's value.
+        let with_vca = level(Some((true, -14.0, -6.0)));
+        assert!(
+            (with_vca / quiet - 1.0).abs() < 0.03,
+            "{}",
+            with_vca / quiet
+        );
+    }
+
+    #[test]
+    fn pan_automation_moves_the_sound_and_a_compressor_reports_its_reduction() {
+        use crate::fx::FxKind;
+        let (mut e, mut tx, mut s) = rig();
+        assert!(tx
+            .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 4.0)])))
+            .is_ok());
+        let lane = AutoLane {
+            track: 0,
+            target: AutoTarget::Pan,
+            follow: true,
+            offset_db: 0.0,
+            points: vec![AutoPoint::new(0.0, 1.0)],
+        };
+        assert!(tx.push(Command::SetAutomation(vec![lane])).is_ok());
+        assert!(tx
+            .push(Command::SetInserts {
+                track: 0,
+                chain: effect(FxKind::Compressor, &[(0, -40.0), (1, 10.0), (2, 1.0)]),
+            })
+            .is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let buf = render(&mut e, 0.3);
+        let left: f32 = buf.iter().step_by(2).skip(2400).map(|x| x * x).sum();
+        let right: f32 = buf
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .skip(2400)
+            .map(|x| x * x)
+            .sum();
+        assert!(left < right * 1e-4 && right > 0.01, "{left} {right}");
+        assert!(
+            s.read().gain_reduction(0) > 3.0,
+            "{}",
+            s.read().gain_reduction(0)
+        );
+        assert_eq!(s.read().gain_reduction(1), 0.0);
+        // Taking the effects away clears the meter.
+        assert!(tx
+            .push(Command::SetInserts {
+                track: 0,
+                chain: Box::default(),
+            })
+            .is_ok());
+        render(&mut e, 0.05);
+        assert_eq!(s.read().gain_reduction(0), 0.0);
+    }
+
+    #[test]
+    fn effects_sends_and_automation_do_not_allocate_and_survive_bad_commands() {
+        use crate::fx::FxKind;
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx
+            .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 8.0)])))
+            .is_ok());
+        let aux = Route {
+            bus_in: 2,
+            ..Route::default()
+        };
+        let mut route = Route::default();
+        route.sends[0] = SendSpec {
+            bus: 2,
+            level: 0.8,
+            pre: false,
+        };
+        let lane = AutoLane {
+            track: 0,
+            target: AutoTarget::Volume,
+            follow: true,
+            offset_db: 0.0,
+            points: vec![AutoPoint::new(0.0, 0.0), AutoPoint::new(4.0, -12.0)],
+        };
+        let cmds = vec![
+            Command::SetInserts {
+                track: 0,
+                chain: effect(FxKind::Reverb, &[]),
+            },
+            Command::SetInserts {
+                track: 1,
+                chain: effect(FxKind::Phaser, &[]),
+            },
+            Command::SetRoute { track: 0, route },
+            Command::SetRoute {
+                track: 1,
+                route: aux,
+            },
+            Command::SetAutomation(vec![lane.clone()]),
+            Command::SetFx {
+                track: 0,
+                slot: 0,
+                params: [f32::NAN; MAX_FX_PARAMS],
+                bypass: false,
+            },
+            Command::SetFx {
+                track: 700,
+                slot: 9,
+                params: [1.0; MAX_FX_PARAMS],
+                bypass: true,
+            },
+            Command::SetRoute {
+                track: 5000,
+                route: Route::default(),
+            },
+            Command::SetAutomation(vec![AutoLane {
+                track: 4000,
+                ..lane
+            }]),
+            Command::Play,
+        ];
+        for c in cmds {
+            assert!(tx.push(c).is_ok());
+        }
+        let mut buf = vec![0.0f32; 512 * 2];
+        for _ in 0..300 {
+            assert_no_alloc::assert_no_alloc(|| e.process(&mut buf));
+            assert!(buf.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
+        }
+    }
+
+    #[test]
+    fn an_effect_parameter_follows_its_lane_and_goes_back_when_the_lane_stops() {
+        use crate::fx::FxKind;
+        // A Channel EQ with its mid band at +12 dB: the lane (position 0 = -18 dB) pulls it
+        // down while it is played.
+        let level = |lane: Option<bool>| {
+            let (mut e, mut tx, _s) = rig();
+            assert!(tx
+                .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 4.0)])))
+                .is_ok());
+            let chain = effect(FxKind::MultiEq, &[(5, 440.0), (6, 12.0), (7, 0.5)]);
+            assert!(tx.push(Command::SetInserts { track: 0, chain }).is_ok());
+            if let Some(follow) = lane {
+                let lane = AutoLane {
+                    track: 0,
+                    target: AutoTarget::Fx { slot: 0, param: 6 },
+                    follow,
+                    offset_db: 0.0,
+                    points: vec![AutoPoint::new(0.0, 0.0)],
+                };
+                assert!(tx.push(Command::SetAutomation(vec![lane])).is_ok());
+            }
+            assert!(tx.push(Command::Play).is_ok());
+            energy(&render(&mut e, 0.4), 0.2, 0.4)
+        };
+        let plain = level(None);
+        let played = level(Some(true));
+        let ignored = level(Some(false));
+        assert!(played < plain * 0.5, "{played} {plain}");
+        assert!((ignored / plain - 1.0).abs() < 1e-3, "{ignored} {plain}");
+
+        // Stopping the lane puts the user's value back.
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx
+            .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 8.0)])))
+            .is_ok());
+        assert!(tx
+            .push(Command::SetInserts {
+                track: 0,
+                chain: effect(FxKind::MultiEq, &[(6, 12.0)]),
+            })
+            .is_ok());
+        let mut lane = AutoLane {
+            track: 0,
+            target: AutoTarget::Fx { slot: 0, param: 6 },
+            follow: true,
+            offset_db: 0.0,
+            points: vec![AutoPoint::new(0.0, 0.0)],
+        };
+        assert!(tx.push(Command::SetAutomation(vec![lane.clone()])).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        render(&mut e, 0.1);
+        let moved = e.chains[0].as_ref().map(|c| c.fx[0].current()[6]);
+        assert_eq!(moved, Some(-18.0));
+        lane.follow = false;
+        assert!(tx.push(Command::SetAutomation(vec![lane])).is_ok());
+        render(&mut e, 0.1);
+        let back = e.chains[0].as_ref().map(|c| c.fx[0].current()[6]);
+        assert_eq!(back, Some(12.0));
+    }
+
+    #[test]
+    fn compensation_delays_a_strip_and_the_sum_keeps_quiet_signals() {
+        // A strip delayed by 100 samples before its fader and 50 after.
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx.push(Command::SetSong(two_tracks_song(vec![]))).is_ok());
+        assert!(tx
+            .push(Command::SetPdc {
+                track: 0,
+                pdc: Box::new(Pdc::new(100, 50)),
+            })
+            .is_ok());
+        e.drain_commands();
+        let mut first = None;
+        for i in 0..400 {
+            if i == 10 {
+                e.in_l[0] = 0.5;
+                e.in_r[0] = -0.5;
+                e.touched[0] = true;
+                e.dirty.push(0);
+            }
+            let (l, r) = e.mix_strips();
+            if first.is_none() && l != 0.0 {
+                assert!((l - 0.5).abs() < 1e-6 && (r + 0.5).abs() < 1e-6, "{l} {r}");
+                first = Some(i);
+            }
+        }
+        assert_eq!(first, Some(10 + 150));
+
+        // 64-bit sums: 1000 and -1000 cancel and what was between them is still there (in
+        // 32 bits the 0.00001 would be lost: the spacing of numbers near 1000 is 0.00006).
+        let (mut e, _tx, _s) = rig();
+        for (t, v) in [(0usize, 1000.0f64), (1, 0.00001), (2, -1000.0)] {
+            e.in_l[t] = v;
+            e.touched[t] = true;
+            e.dirty.push(t as u16);
+        }
+        let (l, _) = e.mix_strips();
+        assert!((l - 0.00001).abs() < 1e-12, "{l}");
+        assert!(e.dirty.is_empty() && e.in_l[0] == 0.0);
+        // Garbage: the old compensation comes back through the queue, and a track past the
+        // end is ignored.
+        let (mut e, mut tx, _s) = rig();
+        for pdc in [Pdc::new(1, 1), Pdc::new(2, 2)] {
+            assert!(tx
+                .push(Command::SetPdc {
+                    track: 3,
+                    pdc: Box::new(pdc)
+                })
+                .is_ok());
+        }
+        assert!(tx
+            .push(Command::SetPdc {
+                track: 9000,
+                pdc: Box::new(Pdc::new(5, 5))
+            })
+            .is_ok());
+        render(&mut e, 0.01);
+        assert_eq!(e.pdc[3].as_ref().map(|p| p.lengths()), Some((2, 2)));
     }
 }

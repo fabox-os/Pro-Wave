@@ -179,16 +179,340 @@ impl RegionParams {
     }
 }
 
-/// One send slot of a channel strip (Logic: "Bus 1" with a level knob). Not routed in the
-/// engine yet: it is stored and shown, but has no effect on the sound.
-#[derive(Clone, Copy, PartialEq, Default)]
+/// One send slot of a channel strip (Logic: "Bus 1" with a level knob). The engine copies the
+/// strip's signal to the bus; the Aux strip that listens to the bus plays it.
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub struct SendSlot {
     /// Bus number 1..=8, or `None` for an empty slot.
     pub bus: Option<u8>,
-    /// 0..=1 send level.
+    /// 0..=1 send level (the knob; see `prowave_engine::send_gain`).
     pub level: f32,
     /// Pre-fader send (shown with the "eye" icon).
     pub pre: bool,
+}
+
+/// Most sends in one channel strip.
+pub const MAX_SENDS: usize = prowave_engine::MAX_SENDS;
+
+/// One effect in a channel strip's Audio FX slot (Logic: a plug-in): what it is, whether it is
+/// bypassed, and its settings in the units of `FxKind::params`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Insert {
+    pub kind: prowave_engine::FxKind,
+    pub bypass: bool,
+    pub params: [f32; prowave_engine::MAX_FX_PARAMS],
+}
+
+impl Insert {
+    /// A new effect of `kind` with its default settings.
+    pub fn new(kind: prowave_engine::FxKind) -> Self {
+        Self {
+            kind,
+            bypass: false,
+            params: kind.defaults(),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.kind.name()
+    }
+}
+
+/// The effects a Library patch names (names that are no effect here are left out).
+pub fn inserts_from_names(names: &[&str]) -> Vec<Insert> {
+    names
+        .iter()
+        .filter_map(|n| prowave_engine::FxKind::from_name(n))
+        .map(Insert::new)
+        .take(prowave_engine::MAX_INSERTS)
+        .collect()
+}
+
+/// Logic's automation modes of a channel strip.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum AutoMode {
+    Off,
+    /// Plays the automation back.
+    #[default]
+    Read,
+    /// Plays it back until the control is touched, writes while it is held, and returns to
+    /// the automation when it is let go.
+    Touch,
+    /// Like Touch, but keeps writing after the control is let go, until playback stops.
+    Latch,
+    /// Writes the control's value all the time while playing.
+    Write,
+}
+
+impl AutoMode {
+    pub const ALL: [AutoMode; 5] = [
+        AutoMode::Off,
+        AutoMode::Read,
+        AutoMode::Touch,
+        AutoMode::Latch,
+        AutoMode::Write,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AutoMode::Off => "Off",
+            AutoMode::Read => "Read",
+            AutoMode::Touch => "Touch",
+            AutoMode::Latch => "Latch",
+            AutoMode::Write => "Write",
+        }
+    }
+}
+
+/// What an automation lane moves and its points (the engine's own types).
+pub use prowave_engine::{AutoPoint, AutoTarget};
+
+/// The automation of one effect parameter: slot and parameter number, and the points, whose
+/// values are positions 0..=1 along the parameter's range.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct FxLane {
+    pub slot: u8,
+    pub param: u8,
+    pub points: Vec<AutoPoint>,
+}
+
+/// Automation of one channel strip: a lane for the fader (dB), one for the pan knob and one
+/// for each effect parameter, as points in order of beat, and what the strip is doing with them.
+#[derive(Clone, Default, PartialEq, Debug)]
+pub struct Automation {
+    pub mode: AutoMode,
+    pub volume: Vec<AutoPoint>,
+    pub pan: Vec<AutoPoint>,
+    pub fx: Vec<FxLane>,
+    /// The control held (Touch), or held and let go but still writing (Latch): the strip
+    /// plays that control's own value, not its lane. Not saved.
+    pub held: Option<AutoTarget>,
+    /// The lane the Automation editor shows, and Write mode writes. Not saved.
+    pub shown: AutoTarget,
+    /// The beat and value last written in this pass, so the next write replaces what lies
+    /// between. Not saved.
+    pub last: Option<(f64, f32)>,
+}
+
+/// Points closer than this (in beats) are written as one unless the value moves.
+const WRITE_STEP: f64 = 0.125;
+
+impl Automation {
+    /// The points of the lane of `target` (none if it has no lane).
+    pub fn lane(&self, target: AutoTarget) -> &[AutoPoint] {
+        match target {
+            AutoTarget::Volume => &self.volume,
+            AutoTarget::Pan => &self.pan,
+            AutoTarget::Fx { slot, param } => self
+                .fx
+                .iter()
+                .find(|l| l.slot == slot && l.param == param)
+                .map_or(&[], |l| &l.points),
+        }
+    }
+
+    /// The points of the lane of `target`, made if it had none (see [`Automation::prune`]).
+    pub fn lane_mut(&mut self, target: AutoTarget) -> &mut Vec<AutoPoint> {
+        match target {
+            AutoTarget::Volume => &mut self.volume,
+            AutoTarget::Pan => &mut self.pan,
+            AutoTarget::Fx { slot, param } => {
+                let i = match self
+                    .fx
+                    .iter()
+                    .position(|l| l.slot == slot && l.param == param)
+                {
+                    Some(i) => i,
+                    None => {
+                        self.fx.push(FxLane {
+                            slot,
+                            param,
+                            points: Vec::new(),
+                        });
+                        self.fx.len() - 1
+                    }
+                };
+                &mut self.fx[i].points
+            }
+        }
+    }
+
+    /// Every lane (the fader's and the pan's first), with its points; for walking over them
+    /// without making a list.
+    pub fn lanes(&self) -> impl Iterator<Item = (AutoTarget, &[AutoPoint])> {
+        [
+            (AutoTarget::Volume, &self.volume[..]),
+            (AutoTarget::Pan, &self.pan[..]),
+        ]
+        .into_iter()
+        .chain(self.fx.iter().map(|l| {
+            (
+                AutoTarget::Fx {
+                    slot: l.slot,
+                    param: l.param,
+                },
+                &l.points[..],
+            )
+        }))
+    }
+
+    /// Whether any lane has points.
+    pub fn has_lane(&self) -> bool {
+        self.lanes().any(|(_, pts)| !pts.is_empty())
+    }
+
+    /// Takes away the effect lanes that have no points.
+    pub fn prune(&mut self) {
+        self.fx.retain(|l| !l.points.is_empty());
+    }
+
+    /// Whether the engine plays the lane of `target` (rather than the fader or knob).
+    pub fn follows(&self, target: AutoTarget) -> bool {
+        match self.mode {
+            AutoMode::Off | AutoMode::Write => false,
+            AutoMode::Read => true,
+            AutoMode::Touch | AutoMode::Latch => self.held != Some(target),
+        }
+    }
+
+    /// The lane's value at `beat`, if the strip plays the lane and it has points.
+    pub fn played(&self, target: AutoTarget, beat: f64) -> Option<f32> {
+        if !self.follows(target) {
+            return None;
+        }
+        prowave_engine::lane_value(self.lane(target), beat)
+    }
+
+    /// The most points one lane keeps.
+    pub const MAX_POINTS: usize = prowave_engine::MAX_AUTO_POINTS;
+
+    /// Sets the point at `beat` (adds it, or moves the value of the one already there),
+    /// keeping the lane in order.
+    pub fn set_point(&mut self, target: AutoTarget, beat: f64, value: f32) {
+        if !beat.is_finite() || !value.is_finite() || beat < 0.0 {
+            return;
+        }
+        let (lo, hi) = Self::range(target);
+        let value = value.clamp(lo, hi);
+        let pts = self.lane_mut(target);
+        let i = pts.partition_point(|p| p.beat < beat);
+        if i < pts.len() && (pts[i].beat - beat).abs() < 1e-9 {
+            pts[i].value = value;
+        } else if pts.len() < Self::MAX_POINTS {
+            pts.insert(i, AutoPoint::new(beat, value));
+        }
+        self.prune();
+    }
+
+    /// The range of a lane's values (an effect's lane holds positions 0..=1).
+    pub fn range(target: AutoTarget) -> (f32, f32) {
+        match target {
+            AutoTarget::Volume => (-60.0, 6.0),
+            AutoTarget::Pan => (-1.0, 1.0),
+            AutoTarget::Fx { .. } => (0.0, 1.0),
+        }
+    }
+
+    /// Writes the control's value while playing: the points between the last write of this
+    /// pass and `beat` are replaced by the new one. Writes close together are skipped unless
+    /// the value moved, or `force` (the end of a pass).
+    pub fn write(&mut self, target: AutoTarget, beat: f64, value: f32, force: bool) {
+        if !beat.is_finite() || !value.is_finite() {
+            return;
+        }
+        let moved = match target {
+            AutoTarget::Volume => 0.1,
+            AutoTarget::Pan => 0.01,
+            AutoTarget::Fx { .. } => 0.004,
+        };
+        let last = self.last.filter(|(b, _)| beat >= *b);
+        if let Some((lb, lv)) = last {
+            if !force && beat - lb < WRITE_STEP && (value - lv).abs() < moved {
+                return;
+            }
+            self.lane_mut(target)
+                .retain(|p| p.beat <= lb || p.beat > beat);
+        }
+        self.set_point(target, beat, value);
+        self.last = Some((beat, value));
+    }
+
+    /// Ends the pass: the next write starts a new one.
+    pub fn end_pass(&mut self) {
+        self.last = None;
+    }
+
+    /// Removes every point of every lane.
+    pub fn clear(&mut self) {
+        self.volume.clear();
+        self.pan.clear();
+        self.fx.clear();
+        self.last = None;
+    }
+
+    /// The effect in `slot` was taken away: its lanes go, those of later effects move up.
+    pub fn insert_removed(&mut self, slot: usize) {
+        self.fx.retain(|l| l.slot as usize != slot);
+        for l in self.fx.iter_mut().filter(|l| l.slot as usize > slot) {
+            l.slot -= 1;
+        }
+        self.drop_stale_state();
+    }
+
+    /// The effects in slots `a` and `b` changed places.
+    pub fn insert_swapped(&mut self, a: usize, b: usize) {
+        for l in self.fx.iter_mut() {
+            if l.slot as usize == a {
+                l.slot = b as u8;
+            } else if l.slot as usize == b {
+                l.slot = a as u8;
+            }
+        }
+        self.drop_stale_state();
+    }
+
+    /// The effect in `slot` was replaced by another kind: its lanes mean nothing now.
+    pub fn insert_replaced(&mut self, slot: usize) {
+        self.fx.retain(|l| l.slot as usize != slot);
+        self.drop_stale_state();
+    }
+
+    /// Forget what was written or held about a lane that moved or went.
+    fn drop_stale_state(&mut self) {
+        self.last = None;
+        if matches!(self.held, Some(AutoTarget::Fx { .. })) {
+            self.held = None;
+        }
+        if matches!(self.shown, AutoTarget::Fx { .. }) {
+            self.shown = AutoTarget::Volume;
+        }
+    }
+}
+
+/// A mix group (Logic: Group): tracks whose controls move together. The attributes say which.
+#[derive(Clone, PartialEq, Debug)]
+pub struct MixGroup {
+    pub name: String,
+    /// Moving one fader moves the others by the same number of dB.
+    pub volume: bool,
+    pub pan: bool,
+    pub mute: bool,
+    pub solo: bool,
+}
+
+/// Most mix groups in a project.
+pub const MAX_GROUPS: usize = 64;
+
+impl MixGroup {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            volume: true,
+            pan: true,
+            mute: true,
+            solo: true,
+        }
+    }
 }
 
 /// Logic Pro Track Inspector values for instrument tracks.
@@ -240,11 +564,15 @@ pub struct Track {
     pub monitor: bool,
     pub volume_db: f32,
     pub pan: f32,
-    pub inserts: Vec<&'static str>,
+    pub inserts: Vec<Insert>,
     pub instrument: Option<&'static str>,
     pub regions: Vec<Region>,
     pub params: TrackParams,
-    pub send: SendSlot,
+    /// Sends to buses, in slot order (up to [`MAX_SENDS`]; an emptied slot is removed).
+    pub sends: Vec<SendSlot>,
+    pub auto: Automation,
+    /// The mix group (index into `Project::groups`) the track belongs to.
+    pub group: Option<usize>,
     /// Library category of the loaded patch (drives the track icon), if any.
     pub category: Option<&'static str>,
     /// Individual track height as a factor of the global track zoom (Logic: drag the lower
@@ -296,7 +624,9 @@ impl Track {
             instrument,
             regions: vec![],
             params: TrackParams::default(),
-            send: SendSlot::default(),
+            sends: Vec::new(),
+            auto: Automation::default(),
+            group: None,
             category: None,
             height: 1.0,
             indent: 0,
@@ -387,6 +717,8 @@ pub struct Project {
     pub position_beats: f64, // 0-based
     pub selected_track: usize,
     pub master_vol: f32,
+    /// Mix groups; a track's `group` is an index into this list.
+    pub groups: Vec<MixGroup>,
     /// Bumped whenever tracks/regions change so the engine song is rebuilt.
     pub song_rev: u64,
 }
@@ -435,7 +767,9 @@ impl Project {
             regions: vec![],
             params: TrackParams::default(),
             category: None,
-            send: SendSlot::default(),
+            sends: Vec::new(),
+            auto: Automation::default(),
+            group: None,
             height: 1.0,
             indent: 0,
             folded: false,
@@ -471,7 +805,7 @@ impl Project {
             monitor: false,
             volume_db: vol,
             pan: 0.0,
-            inserts: ins,
+            inserts: inserts_from_names(&ins),
             instrument: inst,
             regions: vec![Region {
                 name: name.into(),
@@ -490,7 +824,9 @@ impl Project {
             }],
             params: TrackParams::default(),
             category: None,
-            send: SendSlot::default(),
+            sends: Vec::new(),
+            auto: Automation::default(),
+            group: None,
             height: 1.0,
             indent: 0,
             folded: false,
@@ -560,11 +896,11 @@ impl Project {
             .iter_mut()
             .zip([Some(1u8), Some(3), Some(3), Some(3)])
         {
-            t.send = SendSlot {
+            t.sends = vec![SendSlot {
                 bus,
                 level: 0.0,
                 pre: false,
-            };
+            }];
         }
         Self {
             name: "Untitled".into(),
@@ -582,6 +918,7 @@ impl Project {
             position_beats: 16.0,
             selected_track: 0,
             master_vol: 0.8,
+            groups: Vec::new(),
             song_rev: 0,
             tempo_ramp: false,
             groove_onsets: Default::default(),
@@ -1277,6 +1614,95 @@ impl Project {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Makes a mix group named `name` (with every attribute on) and returns its index, or
+    /// `None` at the limit.
+    pub fn add_group(&mut self, name: &str) -> Option<usize> {
+        if self.groups.len() >= MAX_GROUPS {
+            return None;
+        }
+        self.groups.push(MixGroup::new(name));
+        Some(self.groups.len() - 1)
+    }
+
+    /// Puts track `i` in group `g` (or in none). Folders and VCA tracks have no strip to group.
+    pub fn assign_group(&mut self, i: usize, g: Option<usize>) -> bool {
+        let valid = g.is_none_or(|g| g < self.groups.len());
+        match self.tracks.get_mut(i) {
+            Some(t) if valid && !matches!(t.kind, TrackKind::Folder | TrackKind::Vca) => {
+                let changed = t.group != g;
+                t.group = g;
+                changed
+            }
+            _ => false,
+        }
+    }
+
+    /// Takes group `g` away; its tracks are left without one, and the groups after it move up.
+    pub fn delete_group(&mut self, g: usize) {
+        if g >= self.groups.len() {
+            return;
+        }
+        self.groups.remove(g);
+        for t in self.tracks.iter_mut() {
+            t.group = match t.group {
+                Some(x) if x == g => None,
+                Some(x) if x > g => Some(x - 1),
+                other => other,
+            };
+        }
+    }
+
+    /// The other tracks of track `i`'s group, when the group has the attribute `attr` (a
+    /// function of the group).
+    pub fn group_mates(&self, i: usize, attr: impl Fn(&MixGroup) -> bool) -> Vec<usize> {
+        let Some(g) = self.tracks.get(i).and_then(|t| t.group) else {
+            return Vec::new();
+        };
+        if !self.groups.get(g).is_some_and(attr) {
+            return Vec::new();
+        }
+        (0..self.tracks.len())
+            .filter(|j| *j != i && self.tracks[*j].group == Some(g))
+            .collect()
+    }
+
+    /// Sets Mute on track `i` and on the tracks of its group, if the group has Mute.
+    pub fn set_mute(&mut self, i: usize, on: bool) {
+        for j in std::iter::once(i).chain(self.group_mates(i, |g| g.mute)) {
+            if let Some(t) = self.tracks.get_mut(j) {
+                t.mute = on;
+            }
+        }
+    }
+
+    /// Sets Solo on track `i` and on the tracks of its group, if the group has Solo.
+    pub fn set_solo(&mut self, i: usize, on: bool) {
+        for j in std::iter::once(i).chain(self.group_mates(i, |g| g.solo)) {
+            if let Some(t) = self.tracks.get_mut(j) {
+                t.solo = on;
+            }
+        }
+    }
+
+    /// The bus an Aux strip listens to: Aux 1 takes Bus 1, the next Aux Bus 2, and so on up to
+    /// Bus 8. 0 for any other strip, and for an Aux strip past the eighth.
+    pub fn aux_bus_of(&self, i: usize) -> u8 {
+        match self.tracks.get(i) {
+            Some(t) if t.kind == TrackKind::Aux => {
+                let n = self.tracks[..=i]
+                    .iter()
+                    .filter(|t| t.kind == TrackKind::Aux)
+                    .count();
+                if n <= prowave_engine::MAX_BUSES {
+                    n as u8
+                } else {
+                    0
+                }
+            }
+            _ => 0,
         }
     }
 

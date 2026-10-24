@@ -178,6 +178,138 @@ fn signature(sig: (u8, u8)) -> (u8, u8) {
     (sig.0.clamp(1, 99), den)
 }
 
+/// The effects of a track in a file: the detailed list, else (older files) the names.
+fn inserts_from_doc(t: &prowave_project::TrackDoc) -> Vec<crate::model::Insert> {
+    if t.fx.is_empty() {
+        let names: Vec<&str> = t.inserts.iter().map(String::as_str).collect();
+        return crate::model::inserts_from_names(&names);
+    }
+    t.fx.iter()
+        .filter_map(|d| {
+            let kind = prowave_engine::FxKind::from_name(&d.kind)?;
+            let mut params = [0.0; prowave_engine::MAX_FX_PARAMS];
+            for (slot, v) in params.iter_mut().zip(&d.params) {
+                *slot = *v;
+            }
+            // Fewer numbers than the effect has: the rest are its defaults.
+            for (k, slot) in params.iter_mut().enumerate().skip(d.params.len()) {
+                *slot = kind.defaults()[k];
+            }
+            Some(crate::model::Insert {
+                kind,
+                bypass: d.bypass,
+                params: kind.clamp_params(params),
+            })
+        })
+        .take(prowave_engine::MAX_INSERTS)
+        .collect()
+}
+
+/// The sends of a track in a file: the list, else (older files) the single send.
+fn sends_from_doc(t: &prowave_project::TrackDoc) -> Vec<SendSlot> {
+    let valid = |bus: u8| (1..=8).contains(&bus).then_some(bus);
+    let mut sends: Vec<SendSlot> = t
+        .sends
+        .iter()
+        .filter_map(|s| {
+            Some(SendSlot {
+                bus: Some(valid(s.bus)?),
+                level: if s.level.is_finite() {
+                    s.level.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                },
+                pre: s.pre,
+            })
+        })
+        .take(crate::model::MAX_SENDS)
+        .collect();
+    if sends.is_empty() {
+        if let Some(bus) = t.send_bus.and_then(valid) {
+            sends.push(SendSlot {
+                bus: Some(bus),
+                level: if t.send_level.is_finite() {
+                    t.send_level.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                },
+                pre: t.send_pre,
+            });
+        }
+    }
+    sends
+}
+
+/// The automation of a track in a file, with every point made safe.
+fn automation_from_doc(t: &prowave_project::TrackDoc) -> crate::model::Automation {
+    use crate::model::{AutoMode, AutoTarget, Automation};
+    let mut a = Automation {
+        mode: AutoMode::ALL
+            .into_iter()
+            .find(|m| m.label() == t.auto_mode)
+            .unwrap_or_default(),
+        ..Automation::default()
+    };
+    a.volume = points_from_doc(AutoTarget::Volume, &t.auto_volume);
+    a.pan = points_from_doc(AutoTarget::Pan, &t.auto_pan);
+    for l in t.auto_fx.iter().take(MAX_FX_LANES) {
+        let known = usize::from(l.slot) < prowave_engine::MAX_INSERTS
+            && usize::from(l.param) < prowave_engine::MAX_FX_PARAMS;
+        let target = AutoTarget::Fx {
+            slot: l.slot,
+            param: l.param,
+        };
+        if known && a.lane(target).is_empty() {
+            let points = points_from_doc(target, &l.points);
+            if !points.is_empty() {
+                a.fx.push(crate::model::FxLane {
+                    slot: l.slot,
+                    param: l.param,
+                    points,
+                });
+            }
+        }
+    }
+    a
+}
+
+/// Most effect lanes of one track a file may have (8 effects, 16 parameters each).
+const MAX_FX_LANES: usize = prowave_engine::MAX_INSERTS * prowave_engine::MAX_FX_PARAMS;
+
+/// Points as the file keeps them: [beat, value, curve].
+fn points_to_doc(points: &[crate::model::AutoPoint]) -> Vec<[f64; 3]> {
+    points
+        .iter()
+        .map(|p| [p.beat, f64::from(p.value), f64::from(p.curve)])
+        .collect()
+}
+
+/// The points of a lane from a file: only finite ones, values and bends in range, in order of
+/// beat, one at each beat, and no more than a lane keeps.
+fn points_from_doc(
+    target: crate::model::AutoTarget,
+    doc: &[[f64; 3]],
+) -> Vec<crate::model::AutoPoint> {
+    let (lo, hi) = crate::model::Automation::range(target);
+    let mut v: Vec<crate::model::AutoPoint> = doc
+        .iter()
+        .filter(|p| p[0].is_finite() && p[0] >= 0.0 && p[1].is_finite())
+        .map(|p| crate::model::AutoPoint {
+            beat: p[0],
+            value: (p[1] as f32).clamp(lo, hi),
+            curve: if p[2].is_finite() {
+                (p[2] as f32).clamp(-1.0, 1.0)
+            } else {
+                0.0
+            },
+        })
+        .collect();
+    v.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    v.dedup_by(|b, a| (a.beat - b.beat).abs() < 1e-9);
+    v.truncate(crate::model::Automation::MAX_POINTS);
+    v
+}
+
 /// The document for `p` plus the media files to embed (each distinct audio file once).
 pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
     let mut media: Vec<MediaFile> = Vec::new();
@@ -193,16 +325,50 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             solo: t.solo,
             volume_db: t.volume_db,
             pan: t.pan,
-            inserts: t.inserts.iter().map(|s| s.to_string()).collect(),
+            inserts: t.inserts.iter().map(|s| s.name().to_string()).collect(),
+            fx: t
+                .inserts
+                .iter()
+                .map(|s| prowave_project::InsertDoc {
+                    kind: s.name().into(),
+                    bypass: s.bypass,
+                    params: s.params[..s.kind.params().len()].to_vec(),
+                })
+                .collect(),
+            sends: t
+                .sends
+                .iter()
+                .filter_map(|s| {
+                    Some(prowave_project::SendDoc {
+                        bus: s.bus?,
+                        level: s.level,
+                        pre: s.pre,
+                    })
+                })
+                .collect(),
+            auto_mode: t.auto.mode.label().into(),
+            auto_volume: points_to_doc(&t.auto.volume),
+            auto_pan: points_to_doc(&t.auto.pan),
+            auto_fx: t
+                .auto
+                .fx
+                .iter()
+                .map(|l| prowave_project::AutoFxDoc {
+                    slot: l.slot,
+                    param: l.param,
+                    points: points_to_doc(&l.points),
+                })
+                .collect(),
+            group: t.group,
             instrument: t.instrument.map(str::to_string),
             category: t.category.map(str::to_string),
             transpose: t.params.transpose,
             velocity: t.params.velocity,
             key_limit: t.params.key_limit,
             vel_limit: t.params.vel_limit,
-            send_bus: t.send.bus,
-            send_level: t.send.level,
-            send_pre: t.send.pre,
+            send_bus: t.sends.first().and_then(|s| s.bus),
+            send_level: t.sends.first().map_or(0.0, |s| s.level),
+            send_pre: t.sends.first().is_some_and(|s| s.pre),
             height: t.height,
             indent: t.indent,
             folded: t.folded,
@@ -353,6 +519,17 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         master_vol: p.master_vol,
         selected_track: p.selected_track,
         tracks,
+        groups: p
+            .groups
+            .iter()
+            .map(|g| prowave_project::GroupDoc {
+                name: g.name.clone(),
+                volume: g.volume,
+                pan: g.pan,
+                mute: g.mute,
+                solo: g.solo,
+            })
+            .collect(),
         tempo_changes: p
             .tempo_changes
             .iter()
@@ -537,7 +714,7 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             monitor: false,
             volume_db: t.volume_db.clamp(-60.0, 6.0),
             pan: t.pan.clamp(-1.0, 1.0),
-            inserts: t.inserts.iter().map(|s| intern(s)).collect(),
+            inserts: inserts_from_doc(t),
             instrument: t.instrument.as_deref().map(intern),
             regions,
             params: TrackParams {
@@ -548,11 +725,9 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
                 groove: t.groove,
                 follow_groove: t.follow_groove && !t.groove,
             },
-            send: SendSlot {
-                bus: t.send_bus,
-                level: t.send_level.clamp(0.0, 1.0),
-                pre: t.send_pre,
-            },
+            sends: sends_from_doc(t),
+            auto: automation_from_doc(t),
+            group: t.group,
             category: t.category.as_deref().map(intern),
             height: finite_in(t.height, Track::MIN_HEIGHT, Track::MAX_HEIGHT, 1.0),
             indent: t.indent,
@@ -620,6 +795,26 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
     p.metronome = doc.metronome;
     p.count_in = doc.count_in;
     p.master_vol = doc.master_vol.clamp(0.0, 2.0);
+    p.groups = doc
+        .groups
+        .iter()
+        .take(crate::model::MAX_GROUPS)
+        .map(|g| crate::model::MixGroup {
+            name: g.name.chars().take(64).collect(),
+            volume: g.volume,
+            pan: g.pan,
+            mute: g.mute,
+            solo: g.solo,
+        })
+        .collect();
+    // A group number has to name a group, and a folder or VCA track has none.
+    for t in tracks.iter_mut() {
+        if t.group.is_some_and(|g| g >= p.groups.len())
+            || matches!(t.kind, TrackKind::Folder | TrackKind::Vca)
+        {
+            t.group = None;
+        }
+    }
     p.selected_track = doc.selected_track.min(tracks.len().saturating_sub(1));
     // A VCA assignment has to point at a VCA track (never at the track itself), and a VCA
     // track cannot be assigned to another.
@@ -1231,6 +1426,180 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn effects_sends_and_automation_are_saved_and_damaged_ones_are_tamed() {
+        use crate::model::{AutoMode, AutoTarget, Insert};
+        use prowave_engine::FxKind;
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut p = Project::demo();
+        let mut eq = Insert::new(FxKind::ChannelEq);
+        eq.params[1] = 7.5;
+        let mut delay = Insert::new(FxKind::Delay);
+        delay.bypass = true;
+        delay.params[0] = 250.0;
+        p.tracks[1].inserts = vec![eq, delay];
+        p.tracks[1].sends = vec![
+            SendSlot {
+                bus: Some(2),
+                level: 0.6,
+                pre: true,
+            },
+            SendSlot {
+                bus: Some(5),
+                level: 0.2,
+                pre: false,
+            },
+        ];
+        p.tracks[1].auto.mode = AutoMode::Touch;
+        p.tracks[1].auto.set_point(AutoTarget::Volume, 4.0, -12.0);
+        p.tracks[1].auto.set_point(AutoTarget::Volume, 1.0, -3.0);
+        p.tracks[1].auto.set_point(AutoTarget::Pan, 2.0, 0.5);
+        p.tracks[1].auto.volume[0].curve = -0.4;
+        let delay_time = AutoTarget::Fx { slot: 1, param: 0 };
+        p.tracks[1].auto.set_point(delay_time, 2.0, 0.25);
+        p.tracks[1].auto.set_point(delay_time, 6.0, 0.75);
+        p.tracks[1].auto.fx[0].points[1].curve = 0.5;
+        let g = p.add_group("Keys").unwrap();
+        p.groups[g].pan = false;
+        assert!(p.assign_group(1, Some(g)));
+        assert!(p.assign_group(2, Some(g)));
+        let path = save_project(&p, &dir.path().join("fx")).unwrap();
+        let (q, warnings) = open_project(&path, &ctx).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let t = &q.tracks[1];
+        assert_eq!(t.inserts, p.tracks[1].inserts);
+        assert_eq!(t.sends, p.tracks[1].sends);
+        assert_eq!(t.auto.mode, AutoMode::Touch);
+        assert_eq!(t.auto.volume.len(), 2);
+        assert_eq!(
+            (
+                t.auto.volume[0].beat,
+                t.auto.volume[0].value,
+                t.auto.volume[0].curve
+            ),
+            (1.0, -3.0, -0.4)
+        );
+        assert_eq!(t.auto.volume[1], crate::model::AutoPoint::new(4.0, -12.0));
+        assert_eq!(t.auto.pan, [crate::model::AutoPoint::new(2.0, 0.5)]);
+        assert_eq!(t.auto.fx, p.tracks[1].auto.fx);
+        assert_eq!(t.auto.lane(delay_time)[1].curve, 0.5);
+        assert_eq!(q.groups, p.groups);
+        assert_eq!(
+            (q.tracks[1].group, q.tracks[2].group, q.tracks[0].group),
+            (Some(g), Some(g), None)
+        );
+        // Runtime state is not saved.
+        assert_eq!(t.auto.held, None);
+
+        // Files from before: names only and one send.
+        let mut doc = to_doc(&p).0;
+        doc.tracks[1].fx.clear();
+        doc.tracks[1].sends.clear();
+        doc.tracks[1].send_bus = Some(4);
+        doc.tracks[1].send_level = 0.9;
+        let old = from_doc(&doc, dir.path(), &ctx).0;
+        assert_eq!(
+            old.tracks[1].inserts.len(),
+            2,
+            "{:?}",
+            doc.tracks[1].inserts
+        );
+        assert_eq!(old.tracks[1].inserts[0], Insert::new(FxKind::ChannelEq));
+        assert_eq!(old.tracks[1].sends.len(), 1);
+        assert_eq!(old.tracks[1].sends[0].bus, Some(4));
+
+        // Damaged: unknown effects, wild numbers, too many of everything.
+        let mut doc = to_doc(&p).0;
+        let wild = prowave_project::InsertDoc {
+            kind: "Delay".into(),
+            bypass: false,
+            params: vec![f32::NAN, 1e30, -5.0],
+        };
+        doc.tracks[1].fx = vec![
+            prowave_project::InsertDoc {
+                kind: "Mystery Plug-in".into(),
+                ..Default::default()
+            },
+            wild,
+        ];
+        doc.tracks[1]
+            .fx
+            .extend((0..40).map(|_| prowave_project::InsertDoc {
+                kind: "Chorus".into(),
+                ..Default::default()
+            }));
+        doc.tracks[1].sends = (0..30)
+            .map(|k| prowave_project::SendDoc {
+                bus: k as u8,
+                level: 9.0,
+                pre: false,
+            })
+            .collect();
+        doc.tracks[1].auto_mode = "Nonsense".into();
+        doc.tracks[1].auto_volume = vec![
+            [f64::NAN, 1.0, 0.0],
+            [1.0, 1e9, 9.0],
+            [-4.0, 0.0, 0.0],
+            [2.0, -1e9, f64::NAN],
+            [2.0, 3.0, 0.0],
+        ];
+        doc.tracks[1].auto_fx = (0..300)
+            .map(|k| prowave_project::AutoFxDoc {
+                slot: (k % 40) as u8,
+                param: (k % 90) as u8,
+                points: vec![[1.0, 7.0, 0.0]],
+            })
+            .collect();
+        doc.groups = (0..100)
+            .map(|k| prowave_project::GroupDoc {
+                name: "g".repeat(200 + k),
+                ..Default::default()
+            })
+            .collect();
+        doc.tracks[1].group = Some(500);
+        doc.tracks[2].group = Some(3);
+        let q = from_doc(&doc, dir.path(), &ctx).0;
+        let t = &q.tracks[1];
+        assert!(t.inserts.len() <= prowave_engine::MAX_INSERTS);
+        assert_eq!(
+            t.inserts[0].kind,
+            FxKind::Delay,
+            "the unknown one is left out"
+        );
+        for (v, info) in t.inserts[0].params.iter().zip(t.inserts[0].kind.params()) {
+            assert!((info.min..=info.max).contains(v), "{v}");
+        }
+        assert!(t.sends.len() <= crate::model::MAX_SENDS);
+        assert!(t
+            .sends
+            .iter()
+            .all(|s| s.bus.is_some_and(|b| (1..=8).contains(&b))));
+        assert!(t.sends.iter().all(|s| s.level <= 1.0));
+        assert_eq!(t.auto.mode, AutoMode::default());
+        assert_eq!(
+            t.auto.volume,
+            [
+                crate::model::AutoPoint {
+                    beat: 1.0,
+                    value: 6.0,
+                    curve: 1.0
+                },
+                crate::model::AutoPoint::new(2.0, -60.0)
+            ]
+        );
+        assert!(t.auto.fx.len() <= 128);
+        for l in &t.auto.fx {
+            assert!(usize::from(l.slot) < prowave_engine::MAX_INSERTS);
+            assert!(usize::from(l.param) < prowave_engine::MAX_FX_PARAMS);
+            assert!(l.points.iter().all(|p| p.value == 1.0));
+        }
+        assert_eq!(q.groups.len(), crate::model::MAX_GROUPS);
+        assert!(q.groups.iter().all(|g| g.name.chars().count() <= 64));
+        assert_eq!(q.tracks[1].group, None, "no such group");
+        assert_eq!(q.tracks[2].group, Some(3));
+    }
+
+    #[test]
     fn wild_flex_data_in_a_file_is_tamed() {
         let original = AudioFile {
             path: "x.wav".into(),
@@ -1287,7 +1656,7 @@ pub(crate) mod tests {
         p.tracks[4].regions[0].params.crossfade = true;
         p.tracks[0].params.key_limit = (40, 90);
         p.tracks[1].category = Some("Piano");
-        p.tracks[2].send.pre = true;
+        p.tracks[2].sends[0].pre = true;
         p.tracks[3].height = 2.5;
         let wav = dir.path().join("loop.wav");
         write_wav(&wav);
@@ -1326,7 +1695,7 @@ pub(crate) mod tests {
         );
         assert_eq!(q.tracks[0].params.key_limit, (40, 90));
         assert_eq!(q.tracks[1].category, Some("Piano"));
-        assert!(q.tracks[2].send.pre);
+        assert!(q.tracks[2].sends[0].pre);
         assert_eq!(q.tracks[3].height, 2.5);
         assert_eq!(q.tracks[0].inserts, p.tracks[0].inserts);
         let audio = q.tracks.last().unwrap();

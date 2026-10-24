@@ -7,7 +7,7 @@
 //! both channel strips (fader, pan, M/S, meters). Fields Logic has that are not implemented
 //! yet are shown dimmed and do nothing.
 use crate::i18n::tr;
-use crate::mixer::{channel_strip, fx_rows_for, rows, Meters, NameStyle, StripKey};
+use crate::mixer::{channel_strip, fx_rows_for, rows, send_rows_for, Meters, NameStyle, StripKey};
 use crate::model::{Project, TrackKind, MAX_REGION_GAIN, MIN_REGION_GAIN};
 use crate::track_icons::{draw_icon, track_icon};
 use crate::widgets::{stroke, BTN_BG, TEXT, TEXT_DIM};
@@ -838,7 +838,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
     let strips_h = (panel.bottom() - y - 4.0).max(STRIPS_MIN_H);
     if !p.tracks.is_empty() {
         let keys = [StripKey::Track(ti), StripKey::StereoOut];
-        let r = rows(y, fx_rows_for(p, &keys));
+        let r = rows(y, fx_rows_for(p, &keys), send_rows_for(p, &keys));
         let sw = (w - 12.0) / 2.0;
         for (n, key) in keys.iter().enumerate() {
             let strip = Rect::from_min_size(
@@ -851,7 +851,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                 strip,
                 *key,
                 p,
-                &mut s.mixer.peak_hold,
+                &mut s.mixer,
                 meters,
                 &r,
                 "inspector",

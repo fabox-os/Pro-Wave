@@ -254,7 +254,7 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
    there with a name-resolution error).
    ⚠️ CI: `xtask check` fails on Ubuntu and macOS since the 0.1.9 commit (Windows passes); cause
    not found yet, the job logs need a GitHub login to read.
-4. Flex / Smart Tempo groundwork (Phases 2-3), real effects and buses.
+4. Flex / Smart Tempo (Phases 2-3), real effects, buses and automation (Phase 4), all started or done; next: Flex markers by mouse, per-note Flex Pitch, the Sampler (Phase 5).
    ✅ 2026-10-24 (second part): Smart Tempo Editor, tempo changes inside a recording (beat tracking
    by dynamic programming), multitrack analysis, Flex Time (6 modes, WSOLA, quantize audio,
    follow the project tempo), Flex Pitch (YIN, correct to key, MIDI from audio) and Groove Track
@@ -263,11 +263,37 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
    cleared after 14 days and keyed by the recording's size and date; a project file cannot ask
    for more than 4096 Flex markers or pitch moves; at most 4 Flex sounds are made at once; a file
    used in many regions is analysed once; the Flex result is capped at 10 minutes.
+   ✅ Mixer, effects, buses and automation (2026-10-24): 8 real effects in the Audio FX slots
+   (Channel EQ, Compressor, Space D reverb, Tape Delay, Chorus, Phaser, Overdrive, Filter;
+   `fx.rs`, up to 8 per strip, made off the audio thread, no allocation while they play);
+   the slot menu adds, replaces, moves, bypasses and removes them and double-click opens the
+   effect's window (sliders, EQ curve, compressor gain reduction). Sends (4 per strip, pre or
+   post fader, knob level) copy a strip to Bus 1-8; Aux strips listen to the bus of their number
+   (`routing.rs`, `EngineCore::mix_strips`); Sends on Faders; the Gain Reduction meter and the
+   EQ thumbnail are real. Automation of the fader and pan (Off, Read, Touch, Latch, Write): the
+   engine plays the lanes (read every 32 samples, VCA level added), the Mixer writes them while
+   playing, the Automation editor window adds, moves and deletes points. Copy/Paste Channel
+   Strip, New Aux and New VCA from the Mixer's menus. Saved in `.prowave` (older files load).
+   ✅ Mixer, second part (2026-10-24): the strips and buses are summed in 64 bits (a 1000 and a
+   -1000 cancel and the quiet signal between them stays); Noise Gate, Limiter (2 ms look-ahead
+   that never passes its ceiling) and a 6-band Multi-Band EQ (low shelf, four bells, high
+   shelf; 16 settings, drawn curve in the window and the strip's thumbnail); delay compensation
+   (PDC: an effect with a look-ahead delays every other strip so all stay in time, also the
+   signal sent to buses and Aux strips; bypassing it takes the delay away); automation of
+   every effect setting (a slider moved while playing writes its lane, in Read mode it moves by
+   itself; lanes follow effects that move or go); curved stretches in every lane (a handle in
+   the middle of each stretch bends it, double-click straightens it); Mix Groups (Group slot:
+   new group, pick one, settings for Volume, Pan, Mute and Solo, delete; moving one fader or
+   pan moves the group by the same amount, Mute and Solo follow from anywhere). Saved in
+   `.prowave`. Tests: engine 123, app 321 (new ones for every item above).
+   Not done: Bezier curves with two handles, automation of sends and of the Output slot, the
+   Output slot, a multi-band compressor, linear-phase EQ, CLAP / VST3 / AU plug-ins (a hosting
+   task of its own: loading the library, its parameters and its window).
    ⚠️ Started 2026-10-24: onset detection and tempo estimation of audio files in the engine
    (`analysis.rs`: log energy of the first difference in 2.5 ms blocks, peaks over a moving
    threshold; tempo from the onset strength's autocorrelation, 60-200 BPM, with a check for
    the double tempo), and Detect Tempo / Adapt Project Tempo to Region on audio regions.
-   Next: Smart Tempo Editor, tempo maps from audio, Flex markers from the onsets.
+   Done since: Smart Tempo Editor, tempo maps from audio. Next: Flex markers by mouse.
 
 Engine items already done by ChatGPT 6 and reviewed on 2026-10-20: region gain, fades and
 reverse (`ClipEdit`), `peak_of`, tempo ramps, SMPTE, optional `asio` feature, the 24-track
@@ -354,10 +380,10 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - **DoD:** Import vocal, Flex Pitch correct to scale, Flex Time quantize to groove
 
 ### Phase 4: Mixer & Channel Strip (Weeks 25-30)
-- [ ] Mixer UI: faders, pan (stereo pan with left/right puck), inserts (15 slots), sends (8 slots, pre/post), VCA, Groups, Sends on Fader
-- [ ] DSP: Channel EQ (8-band with FFT analyzer - use `rustfft` + `egui` plot), Compressor (6 models: Platinum, VCA, FET, Vintage VCA/FET/Opto with sidechain), Gate, Limiter, Overdrive
-- [ ] Automation: Track vs Region, Modes Read/Touch/Latch/Write/Trim, Bezier curves, Automation Quick Access, Sample-accurate parameter automation
-- [ ] Bus summing: 64-bit double, PDC full, Low Latency Mode
+- [~] Mixer UI: faders, pan, inserts (8 slots, done), sends (4 slots, pre/post, done), VCA, Sends on Fader and Groups (done); stereo pan puck, 15 inserts and 8 sends to do
+- [~] DSP (basic versions done: 3-band Channel EQ, 6-band Multi-Band EQ, Compressor, Noise Gate, Limiter, Overdrive): Channel EQ (8-band with FFT analyzer - use `rustfft` + `egui` plot), Compressor (6 models: Platinum, VCA, FET, Vintage VCA/FET/Opto with sidechain), Gate, Limiter, Overdrive
+- [~] Automation (fader, pan and every effect setting with Read/Touch/Latch/Write, curved stretches: done): Track vs Region, Trim, two-handle Bezier curves, Automation Quick Access, Sample-accurate parameter automation
+- [~] Bus summing: 64-bit double (done), PDC (done for the effects' look-ahead; plug-in and instrument latency to do), Low Latency Mode
 - **DoD:** Mix 24 tracks with EQ/Comp on each, automation, PDC verified null test
 
 ### Phase 5: Instruments - Part 1 (Weeks 31-40)

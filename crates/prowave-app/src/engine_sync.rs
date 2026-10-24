@@ -1,9 +1,10 @@
 //! Bridges the UI project model to `prowave-engine` using only `Command`s (never direct mutation).
 use crate::model::TrackKind;
-use crate::model::{Project, Region, TempoPoint, Track};
+use crate::model::{Insert, Project, Region, TempoPoint, Track};
 use crate::patches::synth_patch;
 use prowave_engine::{
-    Command, ControlEvent, Engine, NoteEvent, Song, SynthPatch, TrackMix, MAX_TRACKS,
+    AutoLane, AutoTarget, Chain, Command, ControlEvent, Engine, Fx, NoteEvent, Pdc, Route,
+    SendSpec, Song, SynthPatch, TrackMix, MAX_TRACKS,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -38,8 +39,154 @@ pub struct EngineSync {
     song_rev: Option<u64>,
     /// Audio layout of the song last sent with `SetSong`.
     layout: Option<AudioLayout>,
+    /// The effects, routes and automation the engine has, by track.
+    fx: Vec<Vec<Insert>>,
+    routes: Vec<Route>,
+    /// The compensation delays the engine has, by track.
+    pdc: Vec<(usize, usize)>,
+    automation: Vec<AutoLane>,
     /// A command was rejected during the last `sync`.
     retry: bool,
+}
+
+/// Where track `i`'s signal goes: its sends, and for an Aux strip the bus it listens to.
+fn route_of(p: &Project, i: usize) -> Route {
+    let Some(t) = p.tracks.get(i) else {
+        return Route::default();
+    };
+    let mut route = Route {
+        bus_in: p.aux_bus_of(i),
+        ..Route::default()
+    };
+    // An Aux strip does not send (a loop through the buses would never end).
+    if t.kind != TrackKind::Aux {
+        for (slot, s) in route.sends.iter_mut().zip(&t.sends) {
+            if let Some(bus) = s.bus {
+                *slot = SendSpec {
+                    bus,
+                    level: s.level,
+                    pre: s.pre,
+                };
+            }
+        }
+    }
+    route.sanitized()
+}
+
+/// The effects as a chain the audio thread can run (made here, off that thread).
+fn chain_of(inserts: &[Insert], sample_rate: f32) -> Box<Chain> {
+    Box::new(Chain::new(
+        inserts
+            .iter()
+            .map(|i| Fx::new(i.kind, i.params, i.bypass, sample_rate))
+            .collect(),
+    ))
+}
+
+/// How much of a lane's value is the VCA's: only a fader lane adds the VCA's level.
+fn lane_offset(p: &Project, i: usize, target: AutoTarget) -> f32 {
+    match target {
+        AutoTarget::Volume => p.vca_of(i).map_or(0.0, |v| v.volume_db),
+        _ => 0.0,
+    }
+}
+
+/// The lanes the engine should have for the project's automation.
+fn automation_lanes(p: &Project) -> Vec<AutoLane> {
+    let mut lanes = Vec::new();
+    for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
+        for (target, points) in t.auto.lanes() {
+            if !points.is_empty() {
+                lanes.push(
+                    AutoLane {
+                        track: i as u16,
+                        target,
+                        follow: t.auto.follows(target),
+                        offset_db: lane_offset(p, i, target),
+                        points: points.to_vec(),
+                    }
+                    .sanitized(),
+                );
+            }
+        }
+    }
+    lanes
+}
+
+/// Whether `sent` is what [`automation_lanes`] would make, without making it (it runs every
+/// frame, and a long recording has many points).
+fn automation_unchanged(p: &Project, sent: &[AutoLane]) -> bool {
+    let mut it = sent.iter();
+    for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
+        for (target, points) in t.auto.lanes() {
+            if points.is_empty() {
+                continue;
+            }
+            let Some(lane) = it.next() else {
+                return false;
+            };
+            let (lo, hi) = crate::model::Automation::range(target);
+            let (lo, hi) = match target {
+                AutoTarget::Volume => (-96.0f32.max(lo), hi),
+                _ => (lo, hi),
+            };
+            if lane.track as usize != i
+                || lane.target != target
+                || lane.follow != t.auto.follows(target)
+                || lane.offset_db != lane_offset(p, i, target)
+                || lane.points.len() != points.len().min(prowave_engine::MAX_AUTO_POINTS)
+                || !lane.points.iter().zip(points).all(|(a, b)| {
+                    a.beat == b.beat && a.value == b.value.clamp(lo, hi) && a.curve == b.curve
+                })
+            {
+                return false;
+            }
+        }
+    }
+    it.next().is_none()
+}
+
+/// The delay every effect of the strip puts on the sound, in samples.
+fn latency_of(t: &Track, sample_rate: f32) -> usize {
+    t.inserts
+        .iter()
+        .filter(|i| !i.bypass)
+        .map(|i| i.kind.latency_samples(sample_rate))
+        .sum()
+}
+
+/// Delay compensation for every track: (before the fader and sends, after them), in samples.
+/// Strips whose effects look ahead delay the sound; the others wait for them so everything
+/// stays in time. The signal sent to a bus is aligned too, and an Aux strip's own effects
+/// are made up for after the fader.
+fn pdc_plan(p: &Project, sample_rate: f32) -> Vec<(usize, usize)> {
+    let sounds = |t: &Track| !matches!(t.kind, TrackKind::Vca | TrackKind::Folder);
+    let lat: Vec<usize> = p
+        .tracks
+        .iter()
+        .map(|t| latency_of(t, sample_rate))
+        .collect();
+    let (mut plain, mut aux) = (0, 0);
+    for (i, _) in p.tracks.iter().enumerate().filter(|(_, t)| sounds(t)) {
+        if p.aux_bus_of(i) > 0 {
+            aux = aux.max(lat[i]);
+        } else {
+            plain = plain.max(lat[i]);
+        }
+    }
+    p.tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            if !sounds(t) {
+                (0, 0)
+            } else if p.aux_bus_of(i) > 0 {
+                (0, aux - lat[i])
+            } else {
+                (plain - lat[i], aux)
+            }
+        })
+        .collect()
 }
 
 /// Engine track number for UI track `i`. Tracks past the engine's `MAX_TRACKS` have none:
@@ -285,6 +432,10 @@ impl EngineSync {
             mtc: None,
             song_rev: None,
             layout: None,
+            fx: Vec::new(),
+            routes: Vec::new(),
+            pdc: Vec::new(),
+            automation: Vec::new(),
             retry: false,
         };
         sync.push(p);
@@ -419,6 +570,7 @@ impl EngineSync {
                 .resize(self.externals.len().max(i + 1), false);
             self.externals[i] = external;
         }
+        self.sync_strips(p);
         // Mixer moves. Until a song is accepted, its `SetSong` carries the mix instead.
         if self.layout.is_some() {
             for i in 0..p.tracks.len().min(MAX_TRACKS) {
@@ -444,6 +596,95 @@ impl EngineSync {
             }
         }
         seek_done
+    }
+
+    /// Effects, sends and automation. Each is sent only when it differs from what the engine
+    /// has; a rejected command is tried again next frame.
+    fn sync_strips(&mut self, p: &Project) {
+        let sr = self.engine.sample_rate() as f32;
+        let n = p.tracks.len().min(MAX_TRACKS).max(self.fx.len());
+        self.fx.resize_with(n, Vec::new);
+        self.routes.resize(n, Route::default());
+        for i in 0..n {
+            let want: &[Insert] = p
+                .tracks
+                .get(i)
+                .filter(|_| i < MAX_TRACKS)
+                .map_or(&[], |t| &t.inserts);
+            let same_kinds = self.fx[i].len() == want.len()
+                && self.fx[i].iter().zip(want).all(|(a, b)| a.kind == b.kind);
+            if !same_kinds {
+                let chain = chain_of(want, sr);
+                if !self.send(Command::SetInserts {
+                    track: i as u16,
+                    chain,
+                }) {
+                    return;
+                }
+                self.fx[i] = want.to_vec();
+            } else {
+                for (slot, (have, w)) in self.fx[i].iter_mut().zip(want).enumerate() {
+                    if have == w {
+                        continue;
+                    }
+                    let cmd = Command::SetFx {
+                        track: i as u16,
+                        slot: slot as u8,
+                        params: w.params,
+                        bypass: w.bypass,
+                    };
+                    if !self.engine.send(cmd) {
+                        self.retry = true;
+                        return;
+                    }
+                    *have = *w;
+                }
+            }
+            let route = route_of(p, i);
+            if self.routes[i] != route {
+                if !self.send(Command::SetRoute {
+                    track: i as u16,
+                    route,
+                }) {
+                    return;
+                }
+                self.routes[i] = route;
+            }
+        }
+        // Delay compensation follows the effects (a limiter looks ahead).
+        let plan = pdc_plan(p, sr);
+        self.pdc.resize(n, (0, 0));
+        for (i, want) in plan.iter().copied().enumerate().take(n) {
+            if self.pdc[i] != want {
+                let cmd = Command::SetPdc {
+                    track: i as u16,
+                    pdc: Box::new(Pdc::new(want.0, want.1)),
+                };
+                if !self.send(cmd) {
+                    return;
+                }
+                self.pdc[i] = want;
+            }
+        }
+        // Tracks that are gone have no compensation either.
+        for i in plan.len()..n {
+            if self.pdc[i] != (0, 0) {
+                let cmd = Command::SetPdc {
+                    track: i as u16,
+                    pdc: Box::new(Pdc::default()),
+                };
+                if !self.send(cmd) {
+                    return;
+                }
+                self.pdc[i] = (0, 0);
+            }
+        }
+        if !automation_unchanged(p, &self.automation) {
+            let lanes = automation_lanes(p);
+            if self.send(Command::SetAutomation(lanes.clone())) {
+                self.automation = lanes;
+            }
+        }
     }
 
     /// `Engine::send`, remembering a rejection so the caller keeps redrawing to retry.
@@ -479,6 +720,12 @@ impl EngineSync {
     pub fn track_meters(&mut self, n: usize) -> Vec<(f32, f32)> {
         let state = self.engine.state();
         (0..n).map(|i| state.track_peaks(i)).collect()
+    }
+
+    /// Gain reduction in dB of the compressors of the first `n` tracks, for the mixer.
+    pub fn gain_reduction(&mut self, n: usize) -> Vec<f32> {
+        let state = self.engine.state();
+        (0..n).map(|i| state.gain_reduction(i)).collect()
     }
 
     /// Highest audio-callback DSP load since the last call (1.0 = full budget).
@@ -523,7 +770,9 @@ mod tests {
             }],
             params: TrackParams::default(),
             category: None,
-            send: crate::model::SendSlot::default(),
+            sends: Vec::new(),
+            auto: crate::model::Automation::default(),
+            group: None,
             height: 1.0,
             indent: 0,
             folded: false,
@@ -541,6 +790,108 @@ mod tests {
             pitch,
             vel,
         }
+    }
+
+    #[test]
+    fn sends_aux_buses_and_automation_reach_the_engine_as_the_project_says() {
+        use crate::model::{AutoMode, AutoTarget, SendSlot};
+        let mut p = Project::demo();
+        let a1 = p.add_track(TrackKind::Aux);
+        let a2 = p.add_track(TrackKind::Aux);
+        p.tracks[0].sends = vec![
+            SendSlot {
+                bus: Some(2),
+                level: 0.5,
+                pre: true,
+            },
+            SendSlot {
+                bus: None,
+                level: 0.9,
+                pre: false,
+            },
+        ];
+        // Aux strips take Bus 1, Bus 2... in order, and do not send themselves.
+        p.tracks[a1].sends = p.tracks[0].sends.clone();
+        assert_eq!(
+            (p.aux_bus_of(a1), p.aux_bus_of(a2), p.aux_bus_of(0)),
+            (1, 2, 0)
+        );
+        assert_eq!(route_of(&p, a2).bus_in, 2);
+        assert!(!route_of(&p, a1).has_sends());
+        let r = route_of(&p, 0);
+        assert_eq!((r.bus_in, r.sends[0].bus, r.sends[0].pre), (0, 2, true));
+        assert_eq!(r.sends[1].bus, 0, "an empty slot sends nothing");
+        // More than eight Aux strips: the ninth hears no bus.
+        for _ in 0..8 {
+            p.add_track(TrackKind::Aux);
+        }
+        assert_eq!(p.aux_bus_of(p.tracks.len() - 1), 0);
+
+        // Automation: the lanes sent are what the project has, and the comparison knows it.
+        assert!(automation_unchanged(&p, &[]));
+        p.tracks[1].auto.mode = AutoMode::Read;
+        p.tracks[1].auto.set_point(AutoTarget::Volume, 2.0, -9.0);
+        p.tracks[1].auto.set_point(AutoTarget::Pan, 1.0, 0.25);
+        let lanes = automation_lanes(&p);
+        assert_eq!(lanes.len(), 2);
+        assert!(lanes.iter().all(|l| l.track == 1 && l.follow));
+        assert!(automation_unchanged(&p, &lanes));
+        p.tracks[1].auto.set_point(AutoTarget::Volume, 3.0, -9.0);
+        assert!(!automation_unchanged(&p, &lanes));
+        let lanes = automation_lanes(&p);
+        p.tracks[1].auto.mode = AutoMode::Write;
+        assert!(!automation_unchanged(&p, &lanes), "no longer played");
+        assert!(automation_lanes(&p).iter().all(|l| !l.follow));
+        // A VCA's level is added to the lane.
+        let lanes = automation_lanes(&p);
+        let vca = p.add_track(TrackKind::Vca);
+        p.tracks[vca].volume_db = -4.0;
+        p.assign_vca(1, Some(vca));
+        assert!(!automation_unchanged(&p, &lanes));
+        assert_eq!(automation_lanes(&p)[0].offset_db, -4.0);
+        // The effects as the audio thread gets them.
+        let chain = chain_of(&p.tracks[0].inserts, 48_000.0);
+        assert_eq!(chain.fx.len(), p.tracks[0].inserts.len());
+    }
+
+    #[test]
+    fn a_look_ahead_effect_delays_the_other_strips_so_everything_stays_in_time() {
+        use crate::model::Insert;
+        use prowave_engine::FxKind;
+        let sr = 48_000.0;
+        let mut p = Project::empty();
+        let a = p.add_track(TrackKind::Audio);
+        let b = p.add_track(TrackKind::Audio);
+        let aux = p.add_track(TrackKind::Aux);
+        let vca = p.add_track(TrackKind::Vca);
+        // Nothing looks ahead: nothing is delayed.
+        assert!(pdc_plan(&p, sr).iter().all(|d| *d == (0, 0)));
+        let look = FxKind::Limiter.latency_samples(sr);
+        assert!(look > 0);
+        p.tracks[a].inserts = vec![Insert::new(FxKind::Limiter)];
+        let plan = pdc_plan(&p, sr);
+        assert_eq!(latency_of(&p.tracks[a], sr), look);
+        // The limiter's own strip is the latest: the others wait for it before their sends
+        // and faders; none of them needs more after.
+        assert_eq!(plan[a], (0, 0));
+        assert_eq!(plan[b], (look, 0));
+        assert_eq!(plan[0], (look, 0));
+        assert_eq!(plan[vca], (0, 0), "a VCA has no sound");
+        // A bypassed limiter delays nothing.
+        p.tracks[a].inserts[0].bypass = true;
+        assert!(pdc_plan(&p, sr).iter().all(|d| *d == (0, 0)));
+        p.tracks[a].inserts[0].bypass = false;
+        // A limiter on an Aux strip: every other strip is delayed after its fader, by as much
+        // as the Aux strip is late; the Aux strip itself needs nothing.
+        p.tracks[aux].inserts = vec![Insert::new(FxKind::Limiter)];
+        let plan = pdc_plan(&p, sr);
+        assert_eq!(plan[aux], (0, 0));
+        assert_eq!(plan[b], (look, look));
+        assert_eq!(plan[a], (0, look));
+        // Two limiters in a row add up.
+        p.tracks[b].inserts = vec![Insert::new(FxKind::Limiter), Insert::new(FxKind::Limiter)];
+        assert_eq!(latency_of(&p.tracks[b], sr), 2 * look);
+        assert_eq!(pdc_plan(&p, sr)[a].0, look);
     }
 
     #[test]

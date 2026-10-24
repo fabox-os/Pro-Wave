@@ -5,13 +5,16 @@
 #[global_allocator]
 static ALLOC_GUARD: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
+mod automation;
 mod bench;
 mod engine_sync;
 mod event_list;
 mod file_commands;
 mod flex_edit;
+mod fx_ui;
 mod graphics;
 mod groove;
+mod groups;
 mod i18n;
 mod import;
 mod inspector;
@@ -83,6 +86,8 @@ pub struct UiState {
     pub status: Option<String>,
     pub tracks: tracks_area::TracksView,
     pub mixer: mixer::MixerView,
+    /// What Mute and Solo were last frame, so mix groups follow (see `groups.rs`).
+    pub group_watch: groups::GroupWatch,
     pub inspector: inspector::InspectorView,
     pub library: library::LibraryView,
     pub piano: piano_roll::PianoView,
@@ -147,6 +152,7 @@ impl UiState {
             status: None,
             tracks: tracks_area::TracksView::default(),
             mixer: mixer::MixerView::default(),
+            group_watch: groups::GroupWatch::default(),
             inspector: inspector::InspectorView::default(),
             library: library::LibraryView::default(),
             piano: piano_roll::PianoView::default(),
@@ -182,6 +188,7 @@ impl UiState {
         self.status = None;
         self.tracks = tracks_area::TracksView::default();
         self.mixer = mixer::MixerView::default();
+        self.group_watch.reset();
         self.inspector = inspector::InspectorView::default();
         self.piano = piano_roll::PianoView::default();
         self.piano_focus = false;
@@ -481,6 +488,8 @@ impl eframe::App for App {
         self.project.refresh_generated();
         if let Some(sync) = self.sync.as_mut() {
             sync.sync(&mut self.project);
+            automation::tick(&mut self.project);
+            groups::propagate(&mut self.project, &mut self.ui.group_watch);
             if sync.needs_retry() {
                 ctx.request_repaint();
             }
@@ -504,6 +513,7 @@ impl eframe::App for App {
         let meters = match self.sync.as_mut() {
             Some(sync) => mixer::Meters {
                 tracks: sync.track_meters(self.project.tracks.len()),
+                reduction: sync.gain_reduction(self.project.tracks.len()),
                 master: sync.master_peaks(),
             },
             None => mixer::Meters::default(),
@@ -556,6 +566,8 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show(ui, |ui| tracks_area::show(ui, p, s, &meters));
+        fx_ui::show(&ctx, p, s, &meters);
+        automation::show(&ctx, p, s);
 
         self.play_and_record_midi(&ctx);
         if std::mem::take(&mut self.ui.update_check) {
@@ -714,6 +726,131 @@ fn shot_flex_scene(app: &mut App, ctx: &egui::Context, kind: &str) {
         "editor" => smart_tempo::open_editor(&app.project, &mut app.ui, t, 0),
         "menu" => app.ui.tracks.shot_menu = Some((t, Some(0))),
         "groove" => app.ui.tracks.shot_menu = Some((0, None)),
+        _ => {}
+    }
+}
+
+/// The Mixer layout pictures (`PROWAVE_SHOT_SCENE=mix…`): the demo project playing, with two
+/// Aux strips (a reverb and a delay), sends to them, effects on the strips, a compressor
+/// working, and automation in its different modes. `mixfx` also opens the compressor's window,
+/// `mixeq` the Channel EQ's and `mixauto` the Automation editor.
+fn shot_mixer_scene(app: &mut App, kind: &str) {
+    use model::{AutoMode, AutoTarget, Insert, SendSlot, TrackKind};
+    use prowave_engine::FxKind;
+    let p = &mut app.project;
+    let aux = |p: &mut model::Project, name: &str, kind: FxKind, mix: usize| {
+        let i = p.add_track(TrackKind::Aux);
+        p.tracks[i].name = name.into();
+        let mut fx = Insert::new(kind);
+        fx.params[mix] = 1.0;
+        p.tracks[i].inserts = vec![fx];
+        p.tracks[i].volume_db = -4.0;
+    };
+    aux(p, "Hall Reverb", FxKind::Reverb, 3);
+    aux(p, "Echo", FxKind::Delay, 4);
+    let at =
+        |p: &model::Project, name: &str| p.tracks.iter().position(|t| t.name == name).unwrap_or(0);
+    let piano = at(p, "Classic Electric Piano");
+    let grand = at(p, "Steinway Grand Piano");
+    let pad = at(p, "Analog Pad");
+    let drums = at(p, "Drummer");
+    let bass = at(p, "Electric Bass");
+    let vocal = at(p, "Lead Vocal");
+    for (t, a, b) in [
+        (piano, 0.45, 0.30),
+        (grand, 0.35, 0.0),
+        (pad, 0.60, 0.25),
+        (bass, 0.20, 0.0),
+        (vocal, 0.58, 0.42),
+    ] {
+        let mut v = vec![SendSlot {
+            bus: Some(1),
+            level: a,
+            pre: t == pad,
+        }];
+        if b > 0.0 {
+            v.push(SendSlot {
+                bus: Some(2),
+                level: b,
+                pre: false,
+            });
+        }
+        p.tracks[t].sends = v;
+    }
+    // A broad boost low and high, a notch in the middle.
+    let mut eq = Insert::new(FxKind::ChannelEq);
+    eq.params[..5].copy_from_slice(&[4.0, -3.5, 600.0, 1.4, 5.0]);
+    p.tracks[piano].inserts = vec![Insert::new(FxKind::Delay), eq];
+    let mut eq2 = Insert::new(FxKind::ChannelEq);
+    eq2.params[..5].copy_from_slice(&[-2.0, 5.0, 2500.0, 0.9, 1.0]);
+    let mut comp = Insert::new(FxKind::Compressor);
+    comp.params[0] = -34.0;
+    comp.params[1] = 6.0;
+    p.tracks[grand].inserts = vec![eq2, comp];
+    let mut multi = Insert::new(FxKind::MultiEq);
+    multi.params.copy_from_slice(&[
+        70.0, 3.0, 200.0, -4.0, 1.2, 700.0, 2.5, 1.5, 2200.0, -3.0, 2.0, 5500.0, 5.0, 1.0, 11000.0,
+        -2.0,
+    ]);
+    p.tracks[pad].inserts = vec![Insert::new(FxKind::Chorus), multi];
+    // A noise gate and a limiter on the vocal, and a group of the two pianos.
+    let mut gate = Insert::new(FxKind::Gate);
+    gate.params[0] = -38.0;
+    let mut limiter = Insert::new(FxKind::Limiter);
+    limiter.params[0] = 9.0;
+    limiter.params[1] = -3.0;
+    p.tracks[vocal].inserts = vec![gate, limiter];
+    if let Some(g) = p.add_group("Keys") {
+        p.assign_group(piano, Some(g));
+        p.assign_group(grand, Some(g));
+    }
+    for (t, mode) in [
+        (piano, AutoMode::Read),
+        (grand, AutoMode::Read),
+        (pad, AutoMode::Touch),
+        (drums, AutoMode::Latch),
+        (bass, AutoMode::Off),
+    ] {
+        p.tracks[t].auto.mode = mode;
+    }
+    for (beat, db) in [
+        (0.0, -9.0),
+        (16.0, -3.2),
+        (32.0, -9.0),
+        (48.0, -1.0),
+        (64.0, -12.0),
+    ] {
+        p.tracks[piano].auto.set_point(AutoTarget::Volume, beat, db);
+    }
+    for (beat, pan) in [(0.0, -0.6), (24.0, 0.6), (48.0, -0.2)] {
+        p.tracks[piano].auto.set_point(AutoTarget::Pan, beat, pan);
+    }
+    p.tracks[grand]
+        .auto
+        .set_point(AutoTarget::Volume, 0.0, -4.0);
+    // The Tape Delay's feedback follows a lane with bent stretches.
+    let feedback = AutoTarget::Fx { slot: 0, param: 1 };
+    for (beat, v) in [(0.0, 0.2), (16.0, 0.8), (40.0, 0.35), (60.0, 0.9)] {
+        p.tracks[piano].auto.set_point(feedback, beat, v);
+    }
+    p.tracks[piano].auto.fx[0].points[0].curve = 0.7;
+    p.tracks[piano].auto.fx[0].points[1].curve = -0.6;
+    p.tracks[piano].auto.shown = feedback;
+    let (piano_t, grand_t) = (piano, grand);
+    p.selected_track = grand_t;
+    p.position_beats = 16.0;
+    p.playing = true;
+    app.ui.show_mixer = true;
+    app.ui.bottom = Bottom::Mixer;
+    match kind {
+        "fx" => app.ui.mixer.fx_window = Some((grand_t, 1)),
+        "eq" => app.ui.mixer.fx_window = Some((piano_t, 1)),
+        "multi" => app.ui.mixer.fx_window = Some((pad, 1)),
+        "limiter" => app.ui.mixer.fx_window = Some((vocal, 1)),
+        "auto" => {
+            app.ui.mixer.auto_editor.track = Some(piano_t);
+            app.ui.mixer.auto_editor.span = 72.0;
+        }
         _ => {}
     }
 }
@@ -914,6 +1051,9 @@ fn main() -> eframe::Result {
                 }
                 if let Some(kind) = scene.strip_prefix("flex") {
                     shot_flex_scene(&mut app, &cc.egui_ctx, kind);
+                }
+                if let Some(kind) = scene.strip_prefix("mix") {
+                    shot_mixer_scene(&mut app, kind);
                 }
                 if scene == "pattern" || scene == "drummer" {
                     let pr = &mut app.project;

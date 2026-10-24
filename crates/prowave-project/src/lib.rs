@@ -237,6 +237,22 @@ pub struct TrackDoc {
     pub send_bus: Option<u8>,
     pub send_level: f32,
     pub send_pre: bool,
+    /// The effects of the channel strip, first to last (`inserts` has their names for older
+    /// versions of the program).
+    pub fx: Vec<InsertDoc>,
+    /// All sends of the strip (the first is also in `send_bus`, `send_level` and `send_pre`).
+    pub sends: Vec<SendDoc>,
+    /// Automation: "Off", "Read", "Touch", "Latch" or "Write", and the points (beat, value)
+    /// of the fader (dB) and pan lanes.
+    pub auto_mode: String,
+    /// Points as [beat, value, curve].
+    pub auto_volume: Vec<[f64; 3]>,
+    pub auto_pan: Vec<[f64; 3]>,
+    /// The lanes of the effect parameters; a point's value is a position 0..=1 along the
+    /// parameter's range.
+    pub auto_fx: Vec<AutoFxDoc>,
+    /// The mix group of the track (index into `ProjectDoc::groups`).
+    pub group: Option<usize>,
     /// Individual track height (factor of the global track zoom).
     pub height: f32,
     /// Folder nesting level, 0 at the top. A track belongs to the closest `Folder` track above
@@ -255,6 +271,57 @@ pub struct TrackDoc {
     pub groove: bool,
     pub follow_groove: bool,
     pub regions: Vec<RegionDoc>,
+}
+
+/// One effect of a channel strip: its kind ("Channel EQ", "Compressor", "Space D", "Tape Delay",
+/// "Chorus", "Phaser", "Overdrive" or "Filter"), whether it is bypassed and its settings.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct InsertDoc {
+    pub kind: String,
+    pub bypass: bool,
+    pub params: Vec<f32>,
+}
+
+/// The automation lane of one effect parameter.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct AutoFxDoc {
+    pub slot: u8,
+    pub param: u8,
+    pub points: Vec<[f64; 3]>,
+}
+
+/// A mix group: tracks whose faders, pans, Mute and Solo move together as the flags say.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct GroupDoc {
+    pub name: String,
+    pub volume: bool,
+    pub pan: bool,
+    pub mute: bool,
+    pub solo: bool,
+}
+
+impl Default for GroupDoc {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            volume: true,
+            pan: true,
+            mute: true,
+            solo: true,
+        }
+    }
+}
+
+/// One send of a channel strip.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct SendDoc {
+    pub bus: u8,
+    pub level: f32,
+    pub pre: bool,
 }
 
 /// One MIDI FX of a track: its kind ("transposer", "velocity", "scale", "chord", "repeater",
@@ -300,6 +367,13 @@ impl Default for TrackDoc {
             send_bus: None,
             send_level: 0.0,
             send_pre: false,
+            fx: Vec::new(),
+            sends: Vec::new(),
+            auto_mode: "Read".into(),
+            auto_volume: Vec::new(),
+            auto_pan: Vec::new(),
+            auto_fx: Vec::new(),
+            group: None,
             height: 1.0,
             indent: 0,
             folded: false,
@@ -331,6 +405,8 @@ pub struct ProjectDoc {
     pub master_vol: f32,
     pub selected_track: usize,
     pub tracks: Vec<TrackDoc>,
+    /// Mix groups.
+    pub groups: Vec<GroupDoc>,
     /// Tempo changes after the start (Tempo track); `tempo` is the tempo at the start.
     pub tempo_changes: Vec<TempoChangeDoc>,
     /// Whether the start tempo ramps to the first tempo change (a tempo curve).
@@ -394,6 +470,7 @@ impl Default for ProjectDoc {
             master_vol: 0.8,
             selected_track: 0,
             tracks: Vec::new(),
+            groups: Vec::new(),
             tempo_changes: Vec::new(),
             tempo_ramp: false,
             markers: Vec::new(),
