@@ -25,20 +25,29 @@ pub fn context_click(resp: &Response) -> bool {
 /// Right-click menu at the pointer for `resp` (see [`context_click`]). Closes when an entry is
 /// clicked, the pointer clicks elsewhere or Escape is pressed.
 pub fn context_menu(resp: &Response, add_contents: impl FnOnce(&mut Ui)) {
-    let open = if context_click(resp) {
+    context_menu_shown(resp, false, add_contents);
+}
+
+/// [`context_menu`], or with `shown` the menu open over the middle of `resp` without a click
+/// (only for the layout pictures, `--shots`).
+pub fn context_menu_shown(resp: &Response, shown: bool, add_contents: impl FnOnce(&mut Ui)) {
+    let open = if context_click(resp) || shown {
         Some(egui::SetOpenCommand::Bool(true))
     } else if resp.clicked() {
         Some(egui::SetOpenCommand::Bool(false))
     } else {
         None
     };
-    egui::Popup::menu(resp)
-        .open_memory(open)
-        .at_pointer_fixed()
-        .show(|ui| {
-            ui.set_min_width(190.0);
-            add_contents(ui);
-        });
+    let popup = egui::Popup::menu(resp).open_memory(open);
+    let popup = if shown {
+        popup.at_position(resp.rect.center())
+    } else {
+        popup.at_pointer_fixed()
+    };
+    popup.show(|ui| {
+        ui.set_min_width(190.0);
+        add_contents(ui);
+    });
 }
 
 /// Text button with a small down chevron (Logic's "Edit ⌄"). Returns the response and width.

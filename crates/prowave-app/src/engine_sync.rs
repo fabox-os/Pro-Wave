@@ -159,18 +159,36 @@ fn song_controls(p: &Project) -> Vec<ControlEvent> {
         .collect()
 }
 
+#[cfg(test)]
+pub(crate) fn song_notes_for_test(p: &Project) -> Vec<NoteEvent> {
+    song_notes(p)
+}
+
 fn song_notes(p: &Project) -> Vec<NoteEvent> {
+    // The Groove Track's timing, for the tracks that follow it.
+    let groove = p
+        .tracks
+        .iter()
+        .any(|t| t.params.follow_groove)
+        .then(|| crate::groove::template(p))
+        .flatten();
     p.tracks
         .iter()
         .enumerate()
         .filter_map(|(ti, t)| Some((track_index(ti)?, t)))
         .flat_map(|(track, t)| {
-            let notes: Vec<NoteEvent> = t
+            let mut notes: Vec<NoteEvent> = t
                 .regions
                 .iter()
                 .filter(|r| !r.params.mute)
                 .flat_map(|r| region_notes(t, r, p.region_start_beats(r), track))
                 .collect();
+            if let Some(g) = groove
+                .as_ref()
+                .filter(|_| t.params.follow_groove && !t.params.groove)
+            {
+                crate::groove::apply(&mut notes, g);
+            }
             // The track's MIDI FX change what it plays.
             if t.midi_fx.iter().any(|s| s.on) {
                 crate::midi_fx::apply(&t.midi_fx, notes)

@@ -9,7 +9,9 @@ mod bench;
 mod engine_sync;
 mod event_list;
 mod file_commands;
+mod flex_edit;
 mod graphics;
+mod groove;
 mod i18n;
 mod import;
 mod inspector;
@@ -93,6 +95,10 @@ pub struct UiState {
     pub score: score::ScoreView,
     /// A note the Score just added is sounding: its pitch and when it stops.
     pub score_heard: Option<(u8, f64)>,
+    /// Flex Time and Flex Pitch work running in the background.
+    pub flex: flex_edit::FlexState,
+    /// The audio Groove Track's hits being read.
+    pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
@@ -150,6 +156,8 @@ impl UiState {
             score_tab: false,
             score: score::ScoreView::default(),
             score_heard: None,
+            flex: flex_edit::FlexState::default(),
+            groove: groove::GrooveState::default(),
             midi_cmd: None,
             piano_focus: false,
             audition: Vec::new(),
@@ -427,6 +435,8 @@ impl eframe::App for App {
         ui_scale::apply(&ctx, self.ui.ui_scale);
         tracks_area::poll_normalize(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::poll(&ctx, &mut self.project, &mut self.ui);
+        flex_edit::poll(&ctx, &mut self.project, &mut self.ui);
+        groove::poll(&ctx, &mut self.project, &mut self.ui);
         if let Some(probe) = self.bench.as_mut() {
             if probe.frame(&ctx) {
                 self.bench = None;
@@ -596,6 +606,7 @@ impl eframe::App for App {
         }
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
+        smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
         self.track_history(&ctx);
@@ -632,6 +643,80 @@ fn init_logging() {
 
 /// The Pro Wave logo, 256×256 with transparency (generated from dist/icons/prowave-1024.png).
 const APP_ICON_PNG: &[u8] = include_bytes!("../assets/icon-256.png");
+
+/// The Flex and Smart Tempo layout pictures (`PROWAVE_SHOT_SCENE=flex…`): a drum loop on an
+/// audio track, made in the temporary folder, with Flex markers, a Flex Pitch MIDI track and
+/// a Groove Track; `flexeditor` opens the Smart Tempo Editor on it, `flexmenu` the loop's
+/// right-click menu and `flexgroove` a track's.
+fn shot_flex_scene(app: &mut App, ctx: &egui::Context, kind: &str) {
+    let dir = std::env::temp_dir().join("prowave-shots");
+    let _ = std::fs::create_dir_all(&dir);
+    let wav = dir.join("Drum Loop.wav");
+    // Two bars of a 96 BPM beat: kick, snare and hats, a little late here and there.
+    let rate = 44_100usize;
+    let beat = 60.0 / 96.0;
+    let frames = (beat * 8.0 * 2.0 * rate as f64) as usize;
+    let mut v = vec![0f32; frames];
+    let mut seed = 7u32;
+    for k in 0..32 {
+        let t = k as f64 * beat / 2.0 + if k % 4 == 3 { 0.025 } else { 0.0 };
+        let at = (t * rate as f64) as usize;
+        let (len, level, low) = match k % 4 {
+            0 => (9000, 0.9, true),
+            2 => (6000, 0.8, false),
+            _ => (2500, 0.07, false),
+        };
+        for i in 0..len {
+            if at + i >= frames {
+                break;
+            }
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let noise = (seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0;
+            let decay = (-(i as f32) / (len as f32 / 5.0)).exp();
+            let body = if low {
+                (i as f32 * 60.0 * std::f32::consts::TAU / rate as f32).sin()
+            } else {
+                noise
+            };
+            v[at + i] += body * level * decay;
+        }
+    }
+    let stereo: Vec<f32> = v.iter().flat_map(|s| [*s, *s]).collect();
+    if prowave_engine::write_wav(&wav, &stereo, rate as u32).is_err() {
+        return;
+    }
+    let pr = &mut app.project;
+    pr.position_beats = 0.0;
+    if import::import_audio(pr, &wav, ctx).is_err() {
+        return;
+    }
+    let t = pr.tracks.len() - 1;
+    pr.tracks[t].regions[0].start_bar = 3.0;
+    // Move the audio track near the top, where the pictures see it.
+    let track = pr.tracks.remove(t);
+    pr.tracks.insert(5, track);
+    let t = 5;
+    flex_edit::set_mode(pr, t, 0, prowave_engine::FlexMode::Rhythmic);
+    if let Some(f) = pr.tracks[t].regions[0]
+        .audio
+        .as_mut()
+        .and_then(|a| a.flex.as_mut())
+    {
+        f.markers = flex_edit::markers_from(
+            (1..32).map(|k| (k as f64 * beat / 2.0, k as f64 * beat / 2.0 * 0.98)),
+        );
+    }
+    groove::set_groove_track(pr, Some(t));
+    pr.tracks[0].params.follow_groove = true;
+    pr.selected_track = t;
+    app.ui.tracks.selected = Some((t, 0));
+    match kind {
+        "editor" => smart_tempo::open_editor(&app.project, &mut app.ui, t, 0),
+        "menu" => app.ui.tracks.shot_menu = Some((t, Some(0))),
+        "groove" => app.ui.tracks.shot_menu = Some((0, None)),
+        _ => {}
+    }
+}
 
 fn main() -> eframe::Result {
     bench::mark_start();
@@ -826,6 +911,9 @@ fn main() -> eframe::Result {
                             on: true,
                         },
                     ];
+                }
+                if let Some(kind) = scene.strip_prefix("flex") {
+                    shot_flex_scene(&mut app, &cc.egui_ctx, kind);
                 }
                 if scene == "pattern" || scene == "drummer" {
                     let pr = &mut app.project;

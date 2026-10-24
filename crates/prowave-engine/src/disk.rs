@@ -183,6 +183,22 @@ impl AudioFile {
         Ok(analyzer.finish())
     }
 
+    /// The whole file as interleaved stereo at its own sample rate, for Flex edits. Stops at
+    /// [`crate::analysis::MAX_SECONDS`] (ten minutes), so a long file cannot fill the memory.
+    pub fn read_stereo(&self) -> Result<Vec<f32>, AudioError> {
+        let mut src = Source::open(&self.path)?;
+        let limit =
+            (crate::analysis::MAX_SECONDS * f64::from(self.sample_rate.max(1))) as usize * 2;
+        let mut out = Vec::new();
+        let mut buf = Vec::new();
+        while out.len() < limit && src.next_stereo(&mut buf)? {
+            out.extend(buf.iter().map(|s| if s.is_finite() { *s } else { 0.0 }));
+            buf.clear();
+        }
+        out.truncate(limit);
+        Ok(out)
+    }
+
     /// Min/max overview for waveform display. Decodes the whole file: run off the UI thread.
     /// Non-finite source samples are replaced with silence, as in streamed playback.
     pub fn peaks(&self, bins: usize) -> Result<Vec<(f32, f32)>, AudioError> {

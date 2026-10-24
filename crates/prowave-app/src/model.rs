@@ -200,6 +200,10 @@ pub struct TrackParams {
     pub key_limit: (u8, u8),
     /// Lowest/highest velocity that plays (Vel Limit).
     pub vel_limit: (u8, u8),
+    /// The Groove Track: the one whose timing the following tracks take (see `groove.rs`).
+    pub groove: bool,
+    /// Plays with the Groove Track's timing.
+    pub follow_groove: bool,
 }
 
 impl Default for TrackParams {
@@ -209,6 +213,8 @@ impl Default for TrackParams {
             velocity: 0,
             key_limit: (0, 127),
             vel_limit: (1, 127),
+            groove: false,
+            follow_groove: false,
         }
     }
 }
@@ -218,6 +224,8 @@ pub struct AudioRegion {
     pub file: AudioFile,
     /// Min/max overview, filled by a background thread after import.
     pub peaks: Arc<OnceLock<Vec<(f32, f32)>>>,
+    /// Flex Time and Flex Pitch: when set, `file` is the sound made from this edit.
+    pub flex: Option<crate::flex_edit::FlexEdit>,
 }
 
 #[derive(Clone)]
@@ -343,6 +351,10 @@ pub struct Project {
     pub tempo: f32,
     /// Whether the start tempo ramps to the first of `tempo_changes` (a tempo curve).
     pub tempo_ramp: bool,
+    /// The hits of an audio Groove Track, in beats (found in the background, not saved).
+    pub groove_onsets: std::sync::Arc<Vec<f64>>,
+    /// What `groove_onsets` were found for (see `groove::poll`).
+    pub groove_key: u64,
     /// Later tempo changes, sorted by beat, all after the start (see [`Project::tidy_tempo`]).
     pub tempo_changes: Vec<TempoPoint>,
     /// Marker track, sorted by beat (see [`Project::tidy_markers`]).
@@ -572,6 +584,8 @@ impl Project {
             master_vol: 0.8,
             song_rev: 0,
             tempo_ramp: false,
+            groove_onsets: Default::default(),
+            groove_key: 0,
             tempo_changes: Vec::new(),
             markers: Vec::new(),
             sig_changes: Vec::new(),
@@ -1810,6 +1824,7 @@ mod tests {
         AudioRegion {
             file: prowave_engine::AudioFile::open(dir.join("tone.caf")).unwrap(),
             peaks: Default::default(),
+            flex: None,
         }
     }
 

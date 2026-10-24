@@ -117,6 +117,28 @@ pub struct RegionDoc {
     pub pattern: Option<PatternDoc>,
     /// A Drummer region: the settings that make its `notes`.
     pub drummer: Option<DrummerDoc>,
+    /// Flex Time and Flex Pitch edits of an audio region (`audio` is then the recording).
+    pub flex: Option<FlexDoc>,
+}
+
+/// The Flex edit of an audio region.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct FlexDoc {
+    /// "Slicing", "Rhythmic", "Monophonic", "Polyphonic", "Speed" or "Tempophone".
+    pub mode: String,
+    /// Flex markers: [seconds into the recording, seconds from the region's start].
+    pub markers: Vec<[f64; 2]>,
+    /// Flex Pitch: [start, end] (seconds from the region's start) and semitones.
+    pub pitch: Vec<FlexPitchDoc>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct FlexPitchDoc {
+    pub start: f64,
+    pub end: f64,
+    pub semitones: f32,
 }
 
 /// The steps of a Pattern region.
@@ -229,6 +251,9 @@ pub struct TrackDoc {
     pub midi_channel: u8,
     /// MIDI FX, first to last.
     pub midi_fx: Vec<MidiFxDoc>,
+    /// The Groove Track, and the tracks that follow it.
+    pub groove: bool,
+    pub follow_groove: bool,
     pub regions: Vec<RegionDoc>,
 }
 
@@ -282,6 +307,8 @@ impl Default for TrackDoc {
             midi_port: None,
             midi_channel: 1,
             midi_fx: Vec::new(),
+            groove: false,
+            follow_groove: false,
             regions: Vec::new(),
         }
     }

@@ -160,8 +160,15 @@ pub struct TracksView {
     swipe: Option<(Vec<crate::model::CompSegment>, f32)>,
     /// Normalize Region Gain scans still running.
     pub normalize_jobs: Vec<NormalizeJob>,
+    /// For the layout pictures (`--shots`) only: the right-click menu shown open, of a track
+    /// (`(t, None)`) or of a region (`(t, Some(r))`).
+    pub shot_menu: Option<(usize, Option<usize>)>,
     /// Smart Tempo analyses still running.
     pub tempo_jobs: Vec<crate::smart_tempo::Job>,
+    /// The multitrack Smart Tempo analysis, while it runs.
+    pub tempo_all: Option<crate::smart_tempo::AllJob>,
+    /// The Smart Tempo Editor window.
+    pub tempo_editor: crate::smart_tempo::Editor,
 }
 
 impl Default for TracksView {
@@ -185,7 +192,10 @@ impl Default for TracksView {
             cycle_anchor: None,
             swipe: None,
             normalize_jobs: Vec::new(),
+            shot_menu: None,
             tempo_jobs: Vec::new(),
+            tempo_all: None,
+            tempo_editor: Default::default(),
         }
     }
 }
@@ -869,6 +879,12 @@ enum CtxAction {
     Normalize(usize, usize),
     /// Smart Tempo: say the region's tempo (false) or make it the project's (true).
     DetectTempo(usize, usize, bool),
+    /// Smart Tempo of every audio region together (multitrack).
+    AdaptTempoToAll,
+    SmartTempoEditor(usize, usize),
+    FlexMode(usize, usize, prowave_engine::FlexMode),
+    Flex(usize, usize, crate::flex_edit::Command),
+    FlexRemove(usize, usize),
     RepeatRegion,
     LocatorsByRegion,
     DeleteRegion,
@@ -878,6 +894,9 @@ enum CtxAction {
     ToggleSolo(usize),
     ResetHeight(usize),
     DeleteTrack(usize),
+    /// Makes the track the Groove Track, or (if it is) no track.
+    ToggleGrooveTrack(usize),
+    ToggleFollowGroove(usize),
 }
 
 /// What the track menu needs to know about the track that was right-clicked.
@@ -888,6 +907,9 @@ struct TrackInfo {
     solo: bool,
     custom_height: bool,
     last: bool,
+    /// The Groove Track, and whether this track follows it (`None`: there is none).
+    groove: bool,
+    follow_groove: Option<bool>,
 }
 
 fn pick(ui: &mut Ui, label: &str, key: &str, action: CtxAction, picked: &mut Option<CtxAction>) {
@@ -970,20 +992,93 @@ fn region_items(
             CtxAction::Normalize(ti, ri),
             picked,
         );
-        pick(
-            ui,
-            tr("Detect Tempo"),
-            "",
-            CtxAction::DetectTempo(ti, ri, false),
-            picked,
-        );
-        pick(
-            ui,
-            tr("Adapt Project Tempo to Region"),
-            "",
-            CtxAction::DetectTempo(ti, ri, true),
-            picked,
-        );
+        ui.menu_button(tr("Smart Tempo"), |ui| {
+            pick(
+                ui,
+                tr("Smart Tempo Editor…"),
+                "",
+                CtxAction::SmartTempoEditor(ti, ri),
+                picked,
+            );
+            pick(
+                ui,
+                tr("Detect Tempo"),
+                "",
+                CtxAction::DetectTempo(ti, ri, false),
+                picked,
+            );
+            pick(
+                ui,
+                tr("Adapt Project Tempo to Region"),
+                "",
+                CtxAction::DetectTempo(ti, ri, true),
+                picked,
+            );
+            pick(
+                ui,
+                tr("Adapt Project Tempo to All Audio Regions"),
+                "",
+                CtxAction::AdaptTempoToAll,
+                picked,
+            );
+            pick(
+                ui,
+                tr("Region Follows Project Tempo"),
+                "",
+                CtxAction::Flex(ti, ri, crate::flex_edit::Command::FollowProjectTempo),
+                picked,
+            );
+        });
+        ui.menu_button(tr("Flex Time"), |ui| {
+            ui.menu_button(tr("Flex Mode"), |ui| {
+                for mode in prowave_engine::FlexMode::ALL {
+                    pick(
+                        ui,
+                        crate::flex_edit::mode_label(mode),
+                        "",
+                        CtxAction::FlexMode(ti, ri, mode),
+                        picked,
+                    );
+                }
+            });
+            pick(
+                ui,
+                tr("Quantize Audio to 1/16"),
+                "",
+                CtxAction::Flex(ti, ri, crate::flex_edit::Command::Quantize { grid: 0.25 }),
+                picked,
+            );
+            pick(
+                ui,
+                tr("Quantize Audio to 1/8"),
+                "",
+                CtxAction::Flex(ti, ri, crate::flex_edit::Command::Quantize { grid: 0.5 }),
+                picked,
+            );
+            pick(
+                ui,
+                tr("Remove Flex Edits"),
+                "",
+                CtxAction::FlexRemove(ti, ri),
+                picked,
+            );
+        });
+        ui.menu_button(tr("Flex Pitch"), |ui| {
+            pick(
+                ui,
+                tr("Correct Pitch to Key"),
+                "",
+                CtxAction::Flex(ti, ri, crate::flex_edit::Command::CorrectPitch),
+                picked,
+            );
+            pick(
+                ui,
+                tr("Create MIDI Track from Flex Pitch"),
+                "",
+                CtxAction::Flex(ti, ri, crate::flex_edit::Command::MidiFromPitch),
+                picked,
+            );
+        });
         pick(
             ui,
             tr("Reverse Region"),
@@ -1055,6 +1150,21 @@ fn track_items(ui: &mut Ui, t: &TrackInfo, picked: &mut Option<CtxAction>) {
         );
     }
     ui.separator();
+    let groove = if t.groove {
+        tr("Clear Groove Track")
+    } else {
+        tr("Set as Groove Track")
+    };
+    pick(ui, groove, "", CtxAction::ToggleGrooveTrack(t.i), picked);
+    if let Some(follows) = t.follow_groove {
+        let label = if follows {
+            tr("Stop Following Groove Track")
+        } else {
+            tr("Follow Groove Track")
+        };
+        pick(ui, label, "", CtxAction::ToggleFollowGroove(t.i), picked);
+    }
+    ui.separator();
     let delete = ui.add_enabled(!t.last, egui::Button::new(tr("Delete Track")));
     if delete.clicked() {
         *picked = Some(CtxAction::DeleteTrack(t.i));
@@ -1100,6 +1210,24 @@ fn apply_ctx(action: CtxAction, p: &mut Project, s: &mut UiState, lanes_w: f32) 
         }
         CtxAction::Normalize(t, r) => start_normalize(p, s, t, r),
         CtxAction::DetectTempo(t, r, adapt) => crate::smart_tempo::start(p, s, t, r, adapt),
+        CtxAction::AdaptTempoToAll => crate::smart_tempo::start_all(p, s),
+        CtxAction::ToggleGrooveTrack(i) => {
+            let was = p.tracks.get(i).is_some_and(|t| t.params.groove);
+            crate::groove::set_groove_track(p, (!was).then_some(i));
+        }
+        CtxAction::ToggleFollowGroove(i) => {
+            if let Some(t) = p.tracks.get_mut(i) {
+                t.params.follow_groove = !t.params.follow_groove;
+                p.song_rev += 1;
+            }
+        }
+        CtxAction::SmartTempoEditor(t, r) => crate::smart_tempo::open_editor(p, s, t, r),
+        CtxAction::FlexMode(t, r, mode) => {
+            crate::flex_edit::set_mode(p, t, r, mode);
+            p.song_rev += 1;
+        }
+        CtxAction::Flex(t, r, command) => crate::flex_edit::start(p, s, t, r, command),
+        CtxAction::FlexRemove(t, r) => s.flex.remove_later(t, r),
         CtxAction::RepeatRegion => repeat_selected(p, v),
         CtxAction::LocatorsByRegion => set_locators_by_region(p, v),
         CtxAction::DeleteRegion => delete_selected(p, v),
@@ -1646,6 +1774,37 @@ fn draw_region(
         pos2(rr.left(), head.bottom() + 2.0),
         rr.max - vec2(0.0, 2.0),
     );
+    // A Flex edit: its mode in the corner of the name bar and its markers over the waveform.
+    if let Some((a, f)) = region
+        .audio
+        .as_ref()
+        .and_then(|a| a.flex.as_ref().map(|f| (a, f)))
+    {
+        if head.width() > 90.0 {
+            let mark = if f.pitch.is_empty() {
+                crate::flex_edit::mode_label(f.mode).to_string()
+            } else {
+                format!("{} ♪", crate::flex_edit::mode_label(f.mode))
+            };
+            g.text(
+                head.right_center() - vec2(5.0, 0.0),
+                Align2::RIGHT_CENTER,
+                mark,
+                FontId::proportional(9.5),
+                name_color,
+            );
+        }
+        let secs = a.file.duration_secs().max(1e-3);
+        for m in &f.markers {
+            let x = full.left() + (m.dst / secs) as f32 * full.width();
+            if x > inner.left() && x < inner.right() {
+                g.line_segment(
+                    [pos2(x, inner.top()), pos2(x, inner.bottom())],
+                    Stroke::new(1.0, Color32::from_rgb(0xff, 0xb0, 0x30).gamma_multiply(0.7)),
+                );
+            }
+        }
+    }
     let ink = if recording {
         Color32::from_rgb(236, 152, 155)
     } else if silenced {
@@ -2401,7 +2560,8 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
             );
             let folder_open = p.tracks[ti].regions[ri].folder.as_ref().map(|f| f.open);
             let generated = p.tracks[ti].regions[ri].generated.is_some();
-            context_menu(&resp, |ui| {
+            let shown = v.shot_menu == Some((ti, Some(ri)));
+            crate::widgets::context_menu_shown(&resp, shown, |ui| {
                 region_items(
                     ui,
                     is_audio,
@@ -2594,8 +2754,13 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
             solo: t.solo,
             custom_height: t.height != 1.0,
             last: p.tracks.len() == 1,
+            groove: t.params.groove,
+            follow_groove: crate::groove::groove_track(p)
+                .filter(|g| *g != i)
+                .map(|_| t.params.follow_groove),
         };
-        context_menu(&resp, |ui| track_items(ui, &info, &mut picked));
+        let shown = s.tracks.shot_menu == Some((i, None));
+        crate::widgets::context_menu_shown(&resp, shown, |ui| track_items(ui, &info, &mut picked));
     }
     if let Some(action) = picked {
         apply_ctx(action, p, s, lanes.width());

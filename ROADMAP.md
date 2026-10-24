@@ -255,6 +255,10 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
    ⚠️ CI: `xtask check` fails on Ubuntu and macOS since the 0.1.9 commit (Windows passes); cause
    not found yet, the job logs need a GitHub login to read.
 4. Flex / Smart Tempo groundwork (Phases 2-3), real effects and buses.
+   ✅ 2026-10-24 (second part): Smart Tempo Editor, tempo changes inside a recording (beat tracking
+   by dynamic programming), multitrack analysis, Flex Time (6 modes, WSOLA, quantize audio,
+   follow the project tempo), Flex Pitch (YIN, correct to key, MIDI from audio) and Groove Track
+   (MIDI followers). Not done: Flex markers by mouse, per-note Flex Pitch editing, audio followers.
    ⚠️ Started 2026-10-24: onset detection and tempo estimation of audio files in the engine
    (`analysis.rs`: log energy of the first difference in 2.5 ms blocks, peaks over a moving
    threshold; tempo from the onset strength's autocorrelation, 60-200 BPM, with a check for

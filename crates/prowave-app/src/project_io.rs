@@ -73,6 +73,40 @@ fn intern(s: &str) -> &'static str {
     k
 }
 
+/// Most Flex markers and pitch moves a region keeps from a file.
+const MAX_FLEX_POINTS: usize = 100_000;
+
+/// A region's Flex edit from the file: only finite times inside the limits, in order; the
+/// sound is made again from it after the project opens.
+fn flex_from_doc(d: &prowave_project::FlexDoc, original: AudioFile) -> crate::flex_edit::FlexEdit {
+    use prowave_engine::{FlexMode, PitchShift};
+    let mode = FlexMode::from_name(&d.mode).unwrap_or_default();
+    let ok = |x: f64| x.is_finite() && (0.0..=2400.0).contains(&x);
+    let markers = crate::flex_edit::markers_from(
+        d.markers
+            .iter()
+            .take(MAX_FLEX_POINTS)
+            .filter(|m| ok(m[0]) && ok(m[1]))
+            .map(|m| (m[0], m[1])),
+    );
+    let pitch = d
+        .pitch
+        .iter()
+        .take(MAX_FLEX_POINTS)
+        .filter(|p| ok(p.start) && ok(p.end) && p.end > p.start && p.semitones.is_finite())
+        .map(|p| PitchShift {
+            start: p.start,
+            end: p.end,
+            semitones: p.semitones.clamp(-24.0, 24.0),
+        })
+        .collect();
+    crate::flex_edit::FlexEdit {
+        markers,
+        pitch,
+        ..crate::flex_edit::FlexEdit::new(original, mode)
+    }
+}
+
 pub(crate) fn builtin_name(s: &str) -> Option<&'static str> {
     if let Some((k, _)) = crate::score::KEYS.iter().find(|(k, _)| *k == s) {
         return Some(k);
@@ -175,6 +209,8 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             vca: t.vca,
             midi_port: t.midi_port.clone(),
             midi_channel: t.midi_channel,
+            groove: t.params.groove,
+            follow_groove: t.params.follow_groove,
             midi_fx: t
                 .midi_fx
                 .iter()
@@ -250,18 +286,36 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
                             })
                             .collect()
                     }),
+                    // A Flex edit is saved as the recording plus the edit, never the sound
+                    // made from it.
                     audio: r.audio.as_ref().map(|a| {
+                        let file = a.flex.as_ref().map_or(&a.file, |f| &f.original);
                         by_source
-                            .entry(a.file.path.clone())
+                            .entry(file.path.clone())
                             .or_insert_with(|| {
-                                let zip_path = media_path(media.len(), &a.file.path);
+                                let zip_path = media_path(media.len(), &file.path);
                                 media.push(MediaFile {
                                     zip_path: zip_path.clone(),
-                                    source: a.file.path.clone(),
+                                    source: file.path.clone(),
                                 });
                                 zip_path
                             })
                             .clone()
+                    }),
+                    flex: r.audio.as_ref().and_then(|a| a.flex.as_ref()).map(|f| {
+                        prowave_project::FlexDoc {
+                            mode: f.mode.name().into(),
+                            markers: f.markers.iter().map(|m| [m.src, m.dst]).collect(),
+                            pitch: f
+                                .pitch
+                                .iter()
+                                .map(|p| prowave_project::FlexPitchDoc {
+                                    start: p.start,
+                                    end: p.end,
+                                    semitones: p.semitones,
+                                })
+                                .collect(),
+                        }
                     }),
                     mute: r.params.mute,
                     quantize: r.params.quantize,
@@ -417,7 +471,11 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
                         }
                     });
                     match file {
-                        Some(f) => Some(audio_region(f.clone(), ctx)),
+                        Some(f) => {
+                            let mut a = audio_region(f.clone(), ctx);
+                            a.flex = r.flex.as_ref().map(|d| flex_from_doc(d, f.clone()));
+                            Some(a)
+                        }
                         None => continue,
                     }
                 }
@@ -487,6 +545,8 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
                 velocity: t.velocity,
                 key_limit: ordered(t.key_limit, 0),
                 vel_limit: ordered(t.vel_limit, 1),
+                groove: t.groove,
+                follow_groove: t.follow_groove && !t.groove,
             },
             send: SendSlot {
                 bus: t.send_bus,
@@ -1121,6 +1181,90 @@ pub(crate) mod tests {
             valid_smpte_start([0, 10, 0, 0], SmpteRate::Fps29_97Drop),
             [0, 10, 0, 0]
         );
+    }
+
+    #[test]
+    fn flex_edits_and_the_groove_track_are_saved_and_made_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut p = Project::empty();
+        let wav = dir.path().join("take.wav");
+        write_wav(&wav);
+        crate::import::import_audio(&mut p, &wav, &ctx).unwrap();
+        let t = p.tracks.len() - 1;
+        crate::flex_edit::set_mode(&mut p, t, 0, prowave_engine::FlexMode::Slicing);
+        {
+            let f = p.tracks[t].regions[0]
+                .audio
+                .as_mut()
+                .unwrap()
+                .flex
+                .as_mut()
+                .unwrap();
+            f.markers = crate::flex_edit::markers_from([(0.1, 0.15), (0.3, 0.32)]);
+            f.pitch = vec![prowave_engine::PitchShift {
+                start: 0.0,
+                end: 0.2,
+                semitones: -1.5,
+            }];
+            // The region plays a made file that is not the recording.
+            f.rendered = 7;
+        }
+        p.tracks[t].regions[0].audio.as_mut().unwrap().file.path = dir.path().join("made.wav");
+        crate::groove::set_groove_track(&mut p, Some(t));
+        p.tracks[0].params.follow_groove = true;
+        let path = save_project(&p, &dir.path().join("flex")).unwrap();
+        let (q, warnings) = open_project(&path, &ctx).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let a = q.tracks[t].regions[0].audio.as_ref().unwrap();
+        let f = a.flex.as_ref().unwrap();
+        assert_eq!(f.mode, prowave_engine::FlexMode::Slicing);
+        assert_eq!(f.markers.len(), 2);
+        assert_eq!((f.markers[1].src, f.markers[1].dst), (0.3, 0.32));
+        assert_eq!(f.pitch.len(), 1);
+        assert_eq!(f.pitch[0].semitones, -1.5);
+        // The recording was saved (not the made file), and the sound is made again.
+        assert_eq!(a.file.path, f.original.path);
+        assert_eq!(f.rendered, 0);
+        assert!(q.tracks[t].params.groove);
+        assert!(q.tracks[0].params.follow_groove);
+    }
+
+    #[test]
+    fn wild_flex_data_in_a_file_is_tamed() {
+        let original = AudioFile {
+            path: "x.wav".into(),
+            sample_rate: 44_100,
+            frames: 1,
+            channels: 2,
+        };
+        let doc = prowave_project::FlexDoc {
+            mode: "Nonsense".into(),
+            markers: vec![
+                [f64::NAN, 1.0],
+                [1.0, 1e300],
+                [2.0, 1.0],
+                [1.0, 2.0],
+                [-1.0, 3.0],
+            ],
+            pitch: vec![
+                prowave_project::FlexPitchDoc {
+                    start: 0.0,
+                    end: 1.0,
+                    semitones: 500.0,
+                },
+                prowave_project::FlexPitchDoc {
+                    start: 2.0,
+                    end: 1.0,
+                    semitones: 1.0,
+                },
+            ],
+        };
+        let f = flex_from_doc(&doc, original);
+        assert_eq!(f.mode, prowave_engine::FlexMode::default());
+        assert_eq!(f.markers.len(), 1);
+        assert_eq!(f.pitch.len(), 1);
+        assert_eq!(f.pitch[0].semitones, 24.0);
     }
 
     #[test]
