@@ -168,6 +168,21 @@ impl AudioFile {
         Ok(peak)
     }
 
+    /// Onsets and tempo of the file (Smart Tempo): decodes up to ten minutes of it. Run off
+    /// the UI thread.
+    pub fn analyze(&self) -> Result<crate::analysis::Analysis, AudioError> {
+        let mut src = Source::open(&self.path)?;
+        let mut analyzer = crate::analysis::Analyzer::new(self.sample_rate);
+        let mut buf = Vec::new();
+        while !analyzer.is_full() && src.next_stereo(&mut buf)? {
+            for f in buf.as_chunks::<2>().0 {
+                analyzer.push((f[0] + f[1]) * 0.5);
+            }
+            buf.clear();
+        }
+        Ok(analyzer.finish())
+    }
+
     /// Min/max overview for waveform display. Decodes the whole file: run off the UI thread.
     /// Non-finite source samples are replaced with silence, as in streamed playback.
     pub fn peaks(&self, bins: usize) -> Result<Vec<(f32, f32)>, AudioError> {

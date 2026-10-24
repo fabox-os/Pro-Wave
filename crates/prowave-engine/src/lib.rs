@@ -10,6 +10,7 @@
 #[global_allocator]
 static ALLOC_GUARD: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
+mod analysis;
 mod core;
 mod disk;
 mod gain_smoothing;
@@ -23,6 +24,7 @@ mod triple;
 #[cfg(windows)]
 mod wasapi;
 
+pub use crate::analysis::{Analysis, Analyzer, TempoEstimate};
 pub use crate::core::{
     dsp_load, AudioClip, ClipEdit, Command, ControlEvent, EngineCore, EngineState, FadeCurve,
     Garbage, MidiOutEvent, NoteEvent, Shared, Song, StateReader, TrackMix, MAX_TRACKS,

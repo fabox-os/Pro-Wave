@@ -160,6 +160,8 @@ pub struct TracksView {
     swipe: Option<(Vec<crate::model::CompSegment>, f32)>,
     /// Normalize Region Gain scans still running.
     pub normalize_jobs: Vec<NormalizeJob>,
+    /// Smart Tempo analyses still running.
+    pub tempo_jobs: Vec<crate::smart_tempo::Job>,
 }
 
 impl Default for TracksView {
@@ -183,6 +185,7 @@ impl Default for TracksView {
             cycle_anchor: None,
             swipe: None,
             normalize_jobs: Vec::new(),
+            tempo_jobs: Vec::new(),
         }
     }
 }
@@ -864,6 +867,8 @@ enum CtxAction {
     ToggleTakeFolder(usize, usize),
     FlattenTakeFolder(usize, usize),
     Normalize(usize, usize),
+    /// Smart Tempo: say the region's tempo (false) or make it the project's (true).
+    DetectTempo(usize, usize, bool),
     RepeatRegion,
     LocatorsByRegion,
     DeleteRegion,
@@ -963,6 +968,20 @@ fn region_items(
             tr("Normalize Region Gain"),
             "",
             CtxAction::Normalize(ti, ri),
+            picked,
+        );
+        pick(
+            ui,
+            tr("Detect Tempo"),
+            "",
+            CtxAction::DetectTempo(ti, ri, false),
+            picked,
+        );
+        pick(
+            ui,
+            tr("Adapt Project Tempo to Region"),
+            "",
+            CtxAction::DetectTempo(ti, ri, true),
             picked,
         );
         pick(
@@ -1080,6 +1099,7 @@ fn apply_ctx(action: CtxAction, p: &mut Project, s: &mut UiState, lanes_w: f32) 
             }
         }
         CtxAction::Normalize(t, r) => start_normalize(p, s, t, r),
+        CtxAction::DetectTempo(t, r, adapt) => crate::smart_tempo::start(p, s, t, r, adapt),
         CtxAction::RepeatRegion => repeat_selected(p, v),
         CtxAction::LocatorsByRegion => set_locators_by_region(p, v),
         CtxAction::DeleteRegion => delete_selected(p, v),

@@ -35,6 +35,7 @@ mod recorder;
 mod score;
 mod scripter;
 mod signature_track;
+mod smart_tempo;
 mod start_screen;
 mod step_editor;
 mod sync_menu;
@@ -425,6 +426,7 @@ impl eframe::App for App {
         let dt = ctx.input(|i| i.stable_dt) as f64;
         ui_scale::apply(&ctx, self.ui.ui_scale);
         tracks_area::poll_normalize(&ctx, &mut self.project, &mut self.ui);
+        smart_tempo::poll(&ctx, &mut self.project, &mut self.ui);
         if let Some(probe) = self.bench.as_mut() {
             if probe.frame(&ctx) {
                 self.bench = None;

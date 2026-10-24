@@ -3,6 +3,17 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Smart Tempo, first part:** right-click an audio region > *Detect Tempo* says its tempo, *Adapt Project Tempo to Region* makes it the project's tempo. The file is read in the background and the onsets (where hits and notes start) are found along the way, ready for Flex Time.
+
+### Still to do or test
+
+❌ Smart Tempo: the Smart Tempo Editor (downbeats), tempo that changes inside a recording, multitrack analysis, Adapt Region Tempo
+❌ Flex Time and Flex Pitch
+
 ## 0.1.9
 
 ### All systems (Windows, macOS, Linux)

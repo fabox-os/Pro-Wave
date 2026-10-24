@@ -255,6 +255,11 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
    ⚠️ CI: `xtask check` fails on Ubuntu and macOS since the 0.1.9 commit (Windows passes); cause
    not found yet, the job logs need a GitHub login to read.
 4. Flex / Smart Tempo groundwork (Phases 2-3), real effects and buses.
+   ⚠️ Started 2026-10-24: onset detection and tempo estimation of audio files in the engine
+   (`analysis.rs`: log energy of the first difference in 2.5 ms blocks, peaks over a moving
+   threshold; tempo from the onset strength's autocorrelation, 60-200 BPM, with a check for
+   the double tempo), and Detect Tempo / Adapt Project Tempo to Region on audio regions.
+   Next: Smart Tempo Editor, tempo maps from audio, Flex markers from the onsets.
 
 Engine items already done by ChatGPT 6 and reviewed on 2026-10-20: region gain, fades and
 reverse (`ClipEdit`), `peak_of`, tempo ramps, SMPTE, optional `asio` feature, the 24-track
@@ -333,7 +338,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - **DoD:** Create Drummer + Bass (MIDI) + Keys, quantize, bounce
 
 ### Phase 3: Flex & Smart Tempo (Weeks 19-24) — Logic's secret sauce
-- [ ] Smart Tempo Editor: detect tempo from audio, edit downbeats, multitrack analysis
+- [ ] Smart Tempo Editor: detect tempo from audio (✅ one region, steady tempo), edit downbeats, multitrack analysis
 - [ ] Flex Time: Implement 5 modes - Slicing (use `aubio` onset detection), Rhythmic, Monophonic (use `rubberband` or `signalsmith`), Polyphonic (Elastique-like via `rubberband`), Tempophone, Speed
 - [ ] Flex Pitch: Pitch detection (YIN via `aubio` or `pitch-detection` crate), per-note editing, Gain, Drift, Vibrato, Formant
 - [ ] Groove Track: master track that other tracks follow (extract groove, apply)

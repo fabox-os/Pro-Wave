@@ -21,3 +21,6 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+
+# A target dir made inside crates/ by a relative CARGO_TARGET_DIR
+/crates/target
