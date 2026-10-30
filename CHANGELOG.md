@@ -24,6 +24,10 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Automation of effect settings and curves:** move any slider of an effect while the project plays to write it (Touch, Latch, Write), and in Read mode it moves by itself; pick the setting in the Automation editor's *Parameter* menu. A handle in the middle of each stretch of a lane bends it (double-click to straighten).
 ✅ **Mix Groups:** the strip's Group slot makes or picks a group (*Options > Create Group…* too). Tracks in a group move their faders and pans together by the same amount, and Mute and Solo follow, as the group's settings say. Saved in the project.
 
+### Linux
+
+✅ **Fixed a crash at launch** with the error "no graphics adapter can draw to this window", reported on Ubuntu 26.04 with an NVIDIA card: when OpenGL can't draw to the window, Pro Wave now restarts itself on Vulkan.
+
 ### Still to do or test
 
 ❌ Mixer: automation of sends, the Output slot, Bezier curves with two handles, plug-in (CLAP / VST3 / AU) hosting, a multi-band compressor

@@ -902,9 +902,11 @@ fn main() -> eframe::Result {
             Err(e) => tracing::warn!("app icon could not be decoded: {e}"),
         }
     }
+    let wgpu_options = graphics::config();
+    let started_backends = graphics::started_backends(&wgpu_options);
     let opts = eframe::NativeOptions {
         viewport,
-        wgpu_options: graphics::config(),
+        wgpu_options,
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -1107,6 +1109,18 @@ fn main() -> eframe::Result {
     );
     // The app (and with it the engine's open media files) is gone by now.
     project_io::remove_session_media();
+    // OpenGL can't draw to this window: the app never started, so try the system's own API.
+    if let Some(backend) = result
+        .as_ref()
+        .err()
+        .and_then(|e| graphics::relaunch_backend(started_backends, e))
+    {
+        tracing::warn!("OpenGL can't draw to this window; relaunching with {backend}");
+        match graphics::relaunch(backend) {
+            Ok(code) => std::process::exit(code),
+            Err(e) => tracing::error!("could not relaunch with {backend}: {e}"),
+        }
+    }
     if let (Some(out), Err(e)) = (&bench_out, &result) {
         bench::report_without_window(out, &e.to_string());
         return Ok(());

@@ -6,10 +6,13 @@
 //! - Windows and Linux use OpenGL when this machine has a working OpenGL driver (checked before
 //!   the window opens), and otherwise the system's own API (DirectX 12 / Vulkan), so a broken
 //!   OpenGL driver still gets a window. Starting both would cost the memory saved;
-//! - a real GPU is preferred over a software renderer.
+//! - a real GPU is preferred over a software renderer;
+//! - OpenGL can pass that check and still be unable to draw to the window, which only shows once
+//!   the window exists (NVIDIA on Wayland, it seems). The window system can't be started twice
+//!   in one process, so Pro Wave then relaunches itself on the system's own API.
 //!
 //! `WGPU_BACKEND` (`gl`, `dx12`, `vulkan`, `metal`) overrides the choice, for troubleshooting.
-use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
+use eframe::egui_wgpu::{WgpuConfiguration, WgpuError, WgpuSetup, WgpuSetupCreateNew};
 use eframe::wgpu;
 use std::sync::Arc;
 
@@ -21,6 +24,17 @@ fn native() -> wgpu::Backends {
         wgpu::Backends::DX12
     } else {
         wgpu::Backends::VULKAN
+    }
+}
+
+/// The `WGPU_BACKEND` value for [`native`].
+fn native_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "metal"
+    } else if cfg!(windows) {
+        "dx12"
+    } else {
+        "vulkan"
     }
 }
 
@@ -110,6 +124,44 @@ pub fn config() -> WgpuConfiguration {
     }
 }
 
+/// The APIs that `config` starts.
+pub fn started_backends(config: &WgpuConfiguration) -> wgpu::Backends {
+    match &config.wgpu_setup {
+        WgpuSetup::CreateNew(setup) => setup.instance_descriptor.backends,
+        WgpuSetup::Existing(_) => wgpu::Backends::empty(),
+    }
+}
+
+/// The `WGPU_BACKEND` value to relaunch with after `error`: only when [`pick`] turned down
+/// OpenGL alone, so the system's own API has not been tried. `pick` isn't used once
+/// `WGPU_BACKEND` is set, so the relaunched program can't relaunch again.
+pub fn relaunch_backend(started: wgpu::Backends, error: &eframe::Error) -> Option<&'static str> {
+    let rejected = matches!(
+        error,
+        eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError(_))
+    );
+    (rejected && started == wgpu::Backends::GL).then(native_name)
+}
+
+/// Replaces this program with a new run on `backend`, with the same arguments. Returns the exit
+/// code to leave with, if the new run was started in a way that needs waiting for.
+pub fn relaunch(backend: &str) -> std::io::Result<i32> {
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
+        .args(std::env::args_os().skip(1))
+        .env("WGPU_BACKEND", backend);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Only returns if it failed.
+        Err(command.exec())
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(command.status()?.code().unwrap_or(1))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +195,33 @@ mod tests {
             assert_eq!(backends(false), native() | wgpu::Backends::GL);
             assert!(!native().contains(wgpu::Backends::GL));
         }
+    }
+
+    #[test]
+    fn opengl_that_cannot_draw_relaunches_on_the_system_api() {
+        let rejected = || {
+            eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError(
+                "no graphics adapter can draw to this window".to_string(),
+            ))
+        };
+        assert_eq!(
+            relaunch_backend(wgpu::Backends::GL, &rejected()),
+            Some(native_name())
+        );
+        assert_eq!(wgpu::Backends::from_comma_list(native_name()), native());
+    }
+
+    #[test]
+    fn no_relaunch_once_the_system_api_was_tried_or_for_other_errors() {
+        let rejected =
+            eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError(String::new()));
+        assert_eq!(
+            relaunch_backend(native() | wgpu::Backends::GL, &rejected),
+            None
+        );
+        assert_eq!(relaunch_backend(native(), &rejected), None);
+        let other = eframe::Error::Wgpu(WgpuError::NoSurfaceFormatsAvailable);
+        assert_eq!(relaunch_backend(wgpu::Backends::GL, &other), None);
     }
 
     #[test]
