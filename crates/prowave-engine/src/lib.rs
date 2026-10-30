@@ -11,6 +11,8 @@
 static ALLOC_GUARD: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 mod analysis;
+#[cfg(not(target_arch = "wasm32"))]
+mod capture;
 mod core;
 mod disk;
 mod flex;
@@ -18,6 +20,7 @@ mod fx;
 mod gain_smoothing;
 #[cfg(not(target_arch = "wasm32"))]
 mod mapped;
+mod monitor;
 mod mtc;
 mod output;
 mod routing;
@@ -28,6 +31,10 @@ mod triple;
 mod wasapi;
 
 pub use crate::analysis::{tempo_curve, Analysis, Analyzer, TempoEstimate, STRENGTH_RATE};
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::capture::{
+    input_devices, Capture, CaptureError, InputInfo, InputSource, Recorded, MAX_INPUT_CHANNELS,
+};
 pub use crate::core::{
     dsp_load, AudioClip, ClipEdit, Command, ControlEvent, EngineCore, EngineState, FadeCurve,
     Garbage, MidiOutEvent, NoteEvent, Shared, Song, StateReader, TrackMix, MAX_TRACKS,
@@ -42,6 +49,7 @@ pub use crate::flex::{
 pub use crate::fx::{
     eq_response_db, response_db, Chain, Fx, FxKind, ParamInfo, Pdc, MAX_FX_PARAMS, MAX_INSERTS,
 };
+pub use crate::monitor::{InputFeed, MonitorTrack, MAX_MONITORS};
 pub use crate::mtc::{
     full_frame, quarter_frame_data, rate_code, rate_of_code, MtcDecoder, MtcEvent, MtcGenerator,
     MtcMessage,

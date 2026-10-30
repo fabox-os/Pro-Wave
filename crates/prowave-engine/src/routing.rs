@@ -35,6 +35,9 @@ pub fn send_gain(level: f32) -> f32 {
 pub struct Route {
     /// The bus an Aux strip takes as its input (1..=[`MAX_BUSES`]); 0 for every other strip.
     pub bus_in: u8,
+    /// The bus the strip plays into instead of Stereo Out (Logic: the Output slot); 0 is
+    /// Stereo Out.
+    pub output: u8,
     pub sends: [SendSpec; MAX_SENDS],
 }
 
@@ -44,6 +47,10 @@ impl Route {
         let ok = |b: u8| b as usize <= MAX_BUSES;
         if !ok(self.bus_in) {
             self.bus_in = 0;
+        }
+        // An Aux strip runs after the strips that feed the buses, so it cannot feed one.
+        if !ok(self.output) || self.bus_in > 0 {
+            self.output = 0;
         }
         for s in self.sends.iter_mut() {
             if !ok(s.bus) {
@@ -265,6 +272,7 @@ mod tests {
         );
         let r = Route {
             bus_in: 200,
+            output: 0,
             sends: [
                 SendSpec {
                     bus: 9,

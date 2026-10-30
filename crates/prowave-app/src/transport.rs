@@ -3,6 +3,7 @@
 //!
 //! Every icon is drawn with vector shapes here (no bitmap or font glyphs), so it renders the
 //! same on Windows, Linux and macOS.
+use crate::file_browser::Tab;
 use crate::i18n::{tr, trf};
 use crate::{
     model::{Project, SigPart},
@@ -831,12 +832,14 @@ pub fn control_bar(
     let left = [
         (icon_library as IconFn, s.show_library),
         (icon_inspector, s.show_inspector),
-        (icon_help, false),
-        (icon_toolbar, false),
+        (icon_help, s.show_quick_help),
+        (icon_toolbar, s.show_toolbar),
     ];
     match segmented(ui, &g, bar.left() + 8.0, cy, "view", &left) {
         Some(0) => s.show_library = !s.show_library,
         Some(1) => s.show_inspector = !s.show_inspector,
+        Some(2) => s.show_quick_help = !s.show_quick_help,
+        Some(3) => s.show_toolbar = !s.show_toolbar,
         _ => {}
     }
     // Smart Controls / Mixer / Editors.
@@ -920,7 +923,9 @@ pub fn control_bar(
         Stroke::new(1.6, Color32::from_rgb(0xe8, 0x6a, 0x3a)),
     );
     g.circle_filled(cap_r.center(), 4.8, REC_RED);
-    let _capture = clicked(ui, cap_r, "capture");
+    if clicked(ui, cap_r, "capture") {
+        s.capture_cmd = true;
+    }
     let cyc_bg = p.cycle.then_some(CYCLE_YELLOW);
     if tbutton(
         ui,
@@ -977,11 +982,21 @@ pub fn control_bar(
     let right: [IconFn; 4] = [icon_list_editors, icon_note_pad, icon_loops, icon_browsers];
     for (i, draw) in right.iter().enumerate() {
         let c = pos2(bar.right() - 106.0 + i as f32 * 27.5, cy);
-        // The first one is List Editors.
-        let on = (i == 0 && s.show_lists).then_some(crate::widgets::BLUE);
+        let shown = match i {
+            0 => s.show_lists,
+            1 => s.show_notes,
+            2 => s.browser.open == Some(Tab::Loops),
+            _ => s.browser.open == Some(Tab::Files),
+        };
+        let on = shown.then_some(crate::widgets::BLUE);
         let color = if on.is_some() { Color32::WHITE } else { ICON };
-        if tbutton(ui, &g, c, &format!("right{i}"), *draw, on, color) && i == 0 {
-            s.show_lists = !s.show_lists;
+        if tbutton(ui, &g, c, &format!("right{i}"), *draw, on, color) {
+            match i {
+                0 => s.show_lists = !s.show_lists,
+                1 => s.show_notes = !s.show_notes,
+                2 => s.browser.toggle(Tab::Loops),
+                _ => s.browser.toggle(Tab::Files),
+            }
         }
     }
 }

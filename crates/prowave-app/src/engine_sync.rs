@@ -3,8 +3,8 @@ use crate::model::TrackKind;
 use crate::model::{Insert, Project, Region, TempoPoint, Track};
 use crate::patches::synth_patch;
 use prowave_engine::{
-    AutoLane, AutoTarget, Chain, Command, ControlEvent, Engine, Fx, NoteEvent, Pdc, Route,
-    SendSpec, Song, SynthPatch, TrackMix, MAX_TRACKS,
+    AutoLane, AutoTarget, Chain, Command, ControlEvent, Engine, Fx, InputSource, MonitorTrack,
+    NoteEvent, Pdc, Route, SendSpec, Song, SynthPatch, TrackMix, MAX_MONITORS, MAX_TRACKS,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -21,6 +21,8 @@ struct Mix {
 pub struct EngineSync {
     pub engine: Engine,
     playing: bool,
+    /// The tracks that hear their input, as last sent.
+    monitors: Vec<MonitorTrack>,
     /// Tempo, tempo changes and signature last sent.
     tempo: Option<TempoKey>,
     metronome: bool,
@@ -49,6 +51,40 @@ pub struct EngineSync {
     retry: bool,
 }
 
+/// Play, or with Record and Count-in on, one bar of clicks first.
+fn start_command(p: &Project) -> Command {
+    if !(p.recording && p.count_in) {
+        return Command::Play;
+    }
+    let bar = p.beats_to_bar(p.position_beats).floor().max(0.0) as u32;
+    let (clicks, unit) = p.signature_of_bar(bar);
+    Command::CountIn {
+        clicks,
+        beats_per_click: 4.0 / f64::from(unit.max(1)),
+    }
+}
+
+/// The audio tracks whose I button is on.
+fn monitors_of(p: &Project) -> Vec<MonitorTrack> {
+    p.tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.kind == TrackKind::Audio && t.monitor)
+        .take(MAX_MONITORS)
+        .map(|(i, t)| {
+            let (channel, stereo) = match t.input {
+                InputSource::Mono(c) => (c, false),
+                InputSource::Stereo(c) => (c, true),
+            };
+            MonitorTrack {
+                track: i.min(usize::from(u16::MAX)) as u16,
+                channel,
+                stereo,
+            }
+        })
+        .collect()
+}
+
 /// Where track `i`'s signal goes: its sends, and for an Aux strip the bus it listens to.
 fn route_of(p: &Project, i: usize) -> Route {
     let Some(t) = p.tracks.get(i) else {
@@ -56,6 +92,7 @@ fn route_of(p: &Project, i: usize) -> Route {
     };
     let mut route = Route {
         bus_in: p.aux_bus_of(i),
+        output: t.output,
         ..Route::default()
     };
     // An Aux strip does not send (a loop through the buses would never end).
@@ -420,6 +457,7 @@ impl EngineSync {
         let mut sync = Self {
             engine,
             playing: false,
+            monitors: Vec::new(),
             tempo: None,
             metronome: false,
             cycle: (false, 0.0, 0.0),
@@ -444,7 +482,13 @@ impl EngineSync {
 
     /// Call once per frame: push UI-side changes to the engine, then pull the playhead back.
     pub fn sync(&mut self, p: &mut Project) {
+        let counted = !self.playing && p.playing && p.recording && p.count_in;
         let seek_done = self.push(p);
+        if counted && self.playing {
+            p.counting_in = true;
+        } else if p.counting_in && (!p.playing || self.engine.state().playing) {
+            p.counting_in = false;
+        }
         // Engine owns time while playing, unless a seek is still waiting to be accepted
         // (then the UI keeps the requested position and `push` retries it).
         if seek_done {
@@ -494,9 +538,18 @@ impl EngineSync {
                 beat: p.position_beats,
             }),
         };
+        let monitors = monitors_of(p);
+        if monitors != self.monitors {
+            let mut tracks = [MonitorTrack::default(); MAX_MONITORS];
+            tracks[..monitors.len()].copy_from_slice(&monitors);
+            let count = monitors.len() as u8;
+            if self.send(Command::SetMonitors { tracks, count }) {
+                self.monitors = monitors;
+            }
+        }
         if p.playing != self.playing
             && self.send(if p.playing {
-                Command::Play
+                start_command(p)
             } else {
                 Command::Pause
             })
@@ -753,6 +806,8 @@ mod tests {
             solo: false,
             rec: false,
             monitor: false,
+            input: prowave_engine::InputSource::Mono(0),
+            output: 0,
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
@@ -1154,5 +1209,55 @@ mod tests {
         }
         p.tracks.push(p.tracks[0].clone());
         assert_ne!(audio_layout(&p), before);
+    }
+
+    #[test]
+    fn record_with_count_in_clicks_one_bar_of_the_signature() {
+        let mut p = Project::empty();
+        assert!(matches!(start_command(&p), Command::Play), "not recording");
+        p.recording = true;
+        p.count_in = false;
+        assert!(matches!(start_command(&p), Command::Play), "count-in off");
+        p.count_in = true;
+        p.sig = (6, 8);
+        match start_command(&p) {
+            Command::CountIn {
+                clicks,
+                beats_per_click,
+            } => assert_eq!((clicks, beats_per_click), (6, 0.5)),
+            _ => panic!("no count-in"),
+        }
+    }
+
+    #[test]
+    fn the_i_button_makes_a_monitor_of_the_tracks_input() {
+        let mut p = Project::empty();
+        p.tracks.clear();
+        p.tracks.push(Track::new("Keys", TrackKind::Instrument));
+        p.tracks.push(Track::new("Vox", TrackKind::Audio));
+        p.tracks[0].monitor = true;
+        assert!(monitors_of(&p).is_empty(), "audio tracks only");
+        p.tracks[1].monitor = true;
+        p.tracks[1].input = InputSource::Stereo(2);
+        assert_eq!(
+            monitors_of(&p),
+            vec![MonitorTrack {
+                track: 1,
+                channel: 2,
+                stereo: true
+            }]
+        );
+    }
+
+    #[test]
+    fn a_track_can_play_into_a_bus_but_an_aux_cannot() {
+        let mut p = Project::empty();
+        p.tracks.clear();
+        p.tracks.push(Track::new("Vox", TrackKind::Audio));
+        p.tracks.push(Track::new("Aux 1", TrackKind::Aux));
+        p.tracks[0].output = 3;
+        p.tracks[1].output = 3;
+        assert_eq!(route_of(&p, 0).output, 3);
+        assert_eq!(route_of(&p, 1).output, 0);
     }
 }

@@ -253,6 +253,9 @@ struct Decoded {
     decoder: Box<dyn Decoder>,
     track_id: u32,
     sbuf: Option<SampleBuffer<f32>>,
+    /// Frames still to drop: a seek lands on a packet, which can start before the frame asked
+    /// for.
+    skip: u64,
 }
 
 impl Source {
@@ -299,6 +302,7 @@ impl Source {
                 format,
                 decoder,
                 sbuf: None,
+                skip: 0,
             }),
             sample_rate,
             frames: params.n_frames.unwrap_or(0),
@@ -363,6 +367,17 @@ impl Source {
         }
     }
 
+    /// Seeks so that the next samples are those of frame `ts` exactly, for a reader that goes
+    /// on counting from there.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn seek_exact(&mut self, ts: u64) -> Result<(), AudioError> {
+        let actual = self.seek(ts)?;
+        if let Kind::Decoded(d) = &mut self.kind {
+            d.skip = ts.saturating_sub(actual);
+        }
+        Ok(())
+    }
+
     /// Lets go of the map while nothing reads from it. A mapped file cannot be changed or
     /// deleted by other programs on Windows, so a project does not hold its audio files that
     /// way while it sits still.
@@ -413,7 +428,7 @@ impl Source {
                 path.display()
             );
             let decoded = Self::probe(&path).ok().and_then(|mut s| {
-                s.seek(pos).ok()?;
+                s.seek_exact(pos).ok()?;
                 Some(s)
             });
             match decoded {
@@ -470,12 +485,19 @@ impl Decoded {
             };
             sbuf.copy_interleaved_ref(decoded);
             let nch = spec.channels.count().max(1);
-            for f in sbuf.samples().chunks_exact(nch) {
+            let before = out.len();
+            let dropped = self.skip.min((sbuf.samples().len() / nch) as u64);
+            self.skip -= dropped;
+            for f in sbuf.samples().chunks_exact(nch).skip(dropped as usize) {
                 // Float WAV/AIFF samples can contain NaN/Inf. Keep them out of the
                 // resampler and mixer; ordinary finite values above unity remain valid.
                 let l = finite_sample(f[0]);
                 out.push(l);
                 out.push(if nch > 1 { finite_sample(f[1]) } else { l });
+            }
+            // A packet that was dropped whole gives nothing to return yet.
+            if out.len() == before && dropped > 0 {
+                continue;
             }
             return Ok(true);
         }
@@ -491,6 +513,7 @@ impl Decoded {
             },
         )?;
         self.decoder.reset();
+        self.skip = 0;
         Ok(to.actual_ts)
     }
 }
@@ -1626,6 +1649,34 @@ mod tests {
         let short = dir.path().join("short.wav");
         std::fs::write(&short, b"RIFF").unwrap();
         assert!(Source::open(&short).is_err());
+    }
+
+    #[test]
+    fn an_exact_seek_gives_the_frame_asked_for_not_the_start_of_its_packet() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_pcm(
+            dir.path(),
+            "e.wav",
+            Container::Wav,
+            16,
+            false,
+            2,
+            44_100,
+            20_000,
+        );
+        let mut whole = Source::probe(&path).unwrap();
+        let all = read_all(&mut whole);
+        // Inside a packet, and across more than one packet's worth of frames.
+        for pos in [1_000u64, 4_321, 7_001] {
+            let mut plain = Source::probe(&path).unwrap();
+            let landed = plain.seek(pos).unwrap();
+            assert!(landed < pos, "a plain seek lands before {pos}: {landed}");
+            let mut exact = Source::probe(&path).unwrap();
+            exact.seek_exact(pos).unwrap();
+            let got = read_all(&mut exact);
+            assert_eq!(got.len(), all.len() - pos as usize * 2, "at {pos}");
+            assert_eq!(got[..64], all[pos as usize * 2..pos as usize * 2 + 64]);
+        }
     }
 
     #[cfg(unix)]

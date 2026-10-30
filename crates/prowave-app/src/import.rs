@@ -59,6 +59,8 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         solo: false,
         rec: false,
         monitor: false,
+        input: prowave_engine::InputSource::Mono(0),
+        output: 0,
         volume_db: 0.0,
         pan: 0.0,
         inserts: vec![],

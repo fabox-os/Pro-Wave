@@ -2316,7 +2316,12 @@ fn header(
 // ------------------------------------------------------------------ main view
 
 pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer::Meters) {
-    let rec_target = s.rec.target();
+    let rec_targets: Vec<(usize, usize)> = s
+        .rec
+        .target()
+        .into_iter()
+        .chain(s.audio_rec.regions())
+        .collect();
     let area = ui.available_rect_before_wrap();
     ui.allocate_rect(area, Sense::hover());
     let tb = Rect::from_min_size(area.min, vec2(area.width(), TOOLBAR_H));
@@ -2660,7 +2665,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
                 p.effective_fades(ti, ri),
                 beat_px,
                 selected,
-                rec_target == Some((ti, ri)),
+                rec_targets.contains(&(ti, ri)),
                 silenced_by_solo(p, ti),
                 ti as u32 * 77 + ri as u32 * 13 + 3,
             );

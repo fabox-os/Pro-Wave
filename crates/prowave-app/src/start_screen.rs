@@ -17,17 +17,14 @@ pub enum Template {
     Songwriter,
     Electronic,
     Podcast,
-    /// The demo song with every kind of track.
-    Demo,
 }
 
 impl Template {
-    pub const ALL: [Template; 5] = [
+    pub const ALL: [Template; 4] = [
         Template::Empty,
         Template::Songwriter,
         Template::Electronic,
         Template::Podcast,
-        Template::Demo,
     ];
 
     pub fn name(self) -> &'static str {
@@ -36,7 +33,6 @@ impl Template {
             Template::Songwriter => "Songwriter",
             Template::Electronic => "Electronic",
             Template::Podcast => "Podcast",
-            Template::Demo => "Demo Song",
         }
     }
 
@@ -46,7 +42,6 @@ impl Template {
             Template::Songwriter => "Piano, drummer, bass and vocal tracks.",
             Template::Electronic => "Synths, drum machine and a reverb aux.",
             Template::Podcast => "Two voice tracks and a music bed.",
-            Template::Demo => "A finished arrangement to explore.",
         }
     }
 
@@ -56,7 +51,6 @@ impl Template {
             Template::Songwriter => IconKind::Piano,
             Template::Electronic => IconKind::Synth,
             Template::Podcast => IconKind::Mic,
-            Template::Demo => IconKind::DrummerTile,
         }
     }
 
@@ -72,10 +66,6 @@ impl Template {
         let mut p = Project::empty();
         match self {
             Template::Empty => return p,
-            Template::Demo => {
-                p = Project::demo();
-                p.position_beats = 0.0;
-            }
             Template::Songwriter => {
                 p.tracks = vec![
                     track(
@@ -421,7 +411,6 @@ mod tests {
             .map(|t| t.kind)
             .collect();
         assert!(kinds.contains(&TrackKind::Aux) && kinds.contains(&TrackKind::Drummer));
-        assert_eq!(Template::Demo.project().position_beats, 0.0);
     }
 
     #[test]

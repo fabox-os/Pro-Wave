@@ -562,6 +562,10 @@ pub struct Track {
     pub rec: bool,
     /// Input monitoring ("I" button, audio tracks only).
     pub monitor: bool,
+    /// The input an audio track records.
+    pub input: prowave_engine::InputSource,
+    /// The bus the strip plays into; 0 is Stereo Out (the mixer's Output slot).
+    pub output: u8,
     pub volume_db: f32,
     pub pan: f32,
     pub inserts: Vec<Insert>,
@@ -618,6 +622,8 @@ impl Track {
             solo: false,
             rec: false,
             monitor: false,
+            input: prowave_engine::InputSource::Mono(0),
+            output: 0,
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
@@ -711,6 +717,10 @@ pub struct Project {
     pub metronome: bool,
     /// Count-in before recording (the purple "1234" button).
     pub count_in: bool,
+    /// The count-in is running: Play is on, the song has not started yet. Not saved.
+    pub counting_in: bool,
+    /// The Note Pad's text.
+    pub notes: String,
     /// Cycle (left/right) locators, in beats.
     pub cycle_start: f64,
     pub cycle_end: f64,
@@ -760,6 +770,8 @@ impl Project {
             solo: false,
             rec: false,
             monitor: false,
+            input: prowave_engine::InputSource::Mono(0),
+            output: 0,
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
@@ -803,6 +815,8 @@ impl Project {
             solo: false,
             rec: false,
             monitor: false,
+            input: prowave_engine::InputSource::Mono(0),
+            output: 0,
             volume_db: vol,
             pan: 0.0,
             inserts: inserts_from_names(&ins),
@@ -913,6 +927,8 @@ impl Project {
             cycle: false,
             metronome: false,
             count_in: true,
+            counting_in: false,
+            notes: String::new(),
             cycle_start: 8.0,
             cycle_end: 88.0,
             position_beats: 16.0,

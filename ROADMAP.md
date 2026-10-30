@@ -304,7 +304,8 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.
   - CI: `.github/workflows/ci.yml` runs `cargo xtask check` on Ubuntu, Windows and macOS (plus the
-    cross-target builds) on every push to `main` and is green on GitHub.
+    cross-target builds) on every push to `main`. Checked 2026-10-30: Windows and all release
+    builds pass; `xtask check` fails on Ubuntu and macOS.
   - Linux: x86_64 release binary cross-builds from Windows (Zig + `cargo-zigbuild`, glibc 2.31+) and is packaged in `dist/prowave-linux-x86_64.tar.gz` with a full user README; audio thread asks for real-time priority (cpal `realtime`); window class set for desktop integration. Audio start falls back across devices/sample formats; the unsaved-changes prompt is in-app (no zenity); clippy `-D warnings` + test compilation pass for the Linux target; real DT_NEEDED is only libasound + libc. The release workflow ran on GitHub (v0.1.1) and the packaged binary stays up for 15 s under a virtual X display with software OpenGL (tarball and AppImage), but it has not been run on real Linux hardware: no audio device or GPU has been tried.
   - macOS: cannot be built on Windows (needs Apple's SDK). `.github/workflows/release.yml` builds a universal ad-hoc-signed `.app` on GitHub's macOS runner (built successfully for v0.1.1; never launched on a Mac).
   - Release packages (v0.1.1, all built and install-checked on GitHub): Linux tarball, `.deb` (installed and removed on Ubuntu), `.rpm` (installed and removed in a Fedora 41 container), AppImage, Flatpak bundle, macOS `.app`. They are workflow artifacts, not yet published as a GitHub Release.
@@ -353,7 +354,21 @@ positions (fixed, tested), prefetch size now follows the number of clips.
     get refills during import bursts; canceled requests are discarded before opening files.
   - Done (2026-10-21): `MAX_TRACKS = 1024` (track numbers are `u16`, per-track state on the heap). `cargo test --release -p prowave-engine --test thousand_tracks -- --ignored --nocapture`: 1000 stereo streams for 20 s on the development PC, 0 underruns, 37% render load (worst callback 3.6 ms of 5.3 ms); the app builds its interface for 1000 tracks in about 1.9 ms per frame (`PROWAVE_BENCH_TRACKS=1000 prowave --bench file`).
   - Memory-mapped PCM (2026-10-21): WAV and AIFF/AIFF-C with 16/24/32-bit integer or 32/64-bit float samples are read straight from a memory map (`mapped.rs`); everything else, and any file with an unusual or unfinished header, goes through the decoder. The samples are bit-identical to the decoder's (tested for every format). Measured on the development PC: no speed gain (10 minutes of 24-bit stereo read in 245 ms either way, random seeks 32 µs against 22 µs), but 1000 streaming tracks use 144 MB of private memory instead of 182 MB (the Windows working set also counts the mapped file pages, 3.8 GB for the test's files, which the system can drop). A clip with nothing to read lets go of its map after 1 s, so Windows lets other programs overwrite the file; a file that shrinks while mapped (a crash on Unix) is noticed within 250 ms and read by the decoder instead. `PROWAVE_NO_MMAP=1` turns it off. The 24-track/60-second stream check passes.
-- [ ] Project file `.prowave`: zip with `project.json` (rkyv), `media/`, `bounces/`
+- [x] Project file `.prowave`: zip with `project.json`, `media/` (JSON instead of rkyv, so older
+  files keep opening; no `bounces/` until Bounce exists). Open, Save, Save As, Save A Copy As and
+  Revert to Saved work
+- [~] Audio recording (2026-10-30): input device and channel per track (mono or stereo pair, the
+  mixer's Input slot), R arms and the meter shows the input, several tracks at once, red region
+  while recording, files saved in the project, lined up by the delay the system reports. Input
+  capture is `capture.rs`: lock-free ring, writer thread, 32-bit float WAV that stays readable
+  after a crash.
+  Tested on Windows with a real microphone (`cargo test -p prowave-app records_from_the_real_input
+  -- --ignored`, and `cargo run -p prowave-engine --example record`). The I button hears the input
+  through the track's strip (`monitor.rs`, resampled, a backlog is dropped); Count-in clicks one
+  bar before recording; tracks can play into a bus (Output slot); Capture Recording makes a region
+  of what was played on a MIDI keyboard. Not done: Linux and macOS runs, cycle takes, punch in/out,
+  more channels than the device's default format, measuring the alignment with a loopback cable
+  and the monitoring delay
 - **DoD:** Import 24 tracks 48k/24-bit, play without dropouts
 
 ### Phase 2: MIDI & Sequencer (Weeks 11-18)
@@ -401,6 +416,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [ ] Alchemy-Lite: 2 sources (VA + Sampler), Morph pad, MSEG, Arp, Granular basic (for v1.0)
 - [ ] Ultrabeat: 25 voices drum synth, built-in step sequencer
 - [ ] Studio Strings/Horns: Articulation ID system (key switch, channel, velocity)
+- [ ] Guitar and bass amp emulation (tester request, 2026-10-30): next after audio recording
 - [ ] FX full suite: Space Designer (convolution reverb with IR loading, envelope, filter, length), ChromaVerb (14 models), Delay Designer (visual tap editor, 26 taps, pitch/filter per tap), Tape Delay, Echo, Chorus, Ensemble, Flanger, Phaser, Tremolo, AutoFilter, Ringshifter, Distortion II, Bitcrusher, Overdrive, Pedalboard (35 pedals), Amp Designer (amps + cabs + mics), Match EQ, Multipressor, Exciter, SubBass, Voice Transformer, etc.
 - [ ] Mastering Assistant: rule-based chain (EQ -> Comp -> Limiter) + LUFS targeting -14 LUFS, analyze using `ebur128` crate
 - **DoD:** A/B test Channel EQ curve vs Logic (within 0.5dB), Space Designer IR load
@@ -419,6 +435,10 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [ ] Key Commands: 1200+ commands, searchable, customizable, Presets, Conflict detection
 - [ ] Live Loops: Grid (Cells, Scenes, Trigger modes, Quantize Start), Record Live Loops performance to Tracks, Remix FX (X/Y pad with Gate, Filter, Repeater, Reverse)
 - [ ] Loop Browser: Apple Loops metadata parsing (key, tempo, style), drag-drop with auto tempo/key adaptation, All Files Browser
+  - Started (2026-10-30): Loop Browser and All Files panes list a folder and add a file on
+    double-click. No Apple Loops tags or tempo matching yet.
+  - Needs first: ALAC and AAC decoding of `.caf` (`symphonia` has neither enabled, so real loops
+    probably fail to open today)
 - [ ] Video Track: Movie Track with filmstrip, SMPTE, Detect Cuts, Export Audio to Movie
 - **DoD:** 5 Logic users can do basic tracking/mixing without manual
 
@@ -429,6 +449,65 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [ ] Export: Bounce Project/Region/Track in Place (offline/real-time, normalize, dither Apogee UV22HR via `r8brain`), Export All Tracks as Audio, Export MIDI, MusicXML, AAF, ADM BWF (Atmos)
 - [ ] Performance: SIMD (`wide`, `std::simd`), benchmarks vs Logic/Reaper
 - **DoD:** Open in Chrome/Firefox, play 16-track project <30ms latency, bounce to WAV
+
+### Platform: Linux
+- [x] Release build in CI (x86_64)
+- [x] Packages: tarball, `.deb`, `.rpm`, AppImage and Flatpak, install-checked in the release workflow
+- [x] Starts under a virtual display with software OpenGL in the release workflow
+- [x] Audio thread asks for real-time priority
+- [~] Runs on real machines: testers use it on Ubuntu. The Vulkan fallback for NVIDIA on Wayland is written but not confirmed by the tester who reported the crash
+- [ ] `cargo xtask check` passes in CI (failing on Ubuntu since 0.1.9)
+- [ ] Sound and audio recording confirmed on real hardware
+- [ ] Output latency measured against the roadmap target
+- [ ] Native PipeWire and JACK back-ends
+
+### Platform: macOS
+- [x] Universal `.app` release build in CI (Apple Silicon and Intel), ad-hoc signed
+- [x] Microphone permission text in the app bundle
+- [~] Menus in the system menu bar: written, never tried on a Mac
+- [ ] `cargo xtask check` passes in CI (failing on macOS since 0.1.9)
+- [ ] Launched on a real Mac
+- [ ] Sound and audio recording confirmed through CoreAudio
+- [ ] Output latency measured against the roadmap target
+- [ ] Signed with a Developer ID and notarized
+
+---
+
+## 3b. Controls that do nothing yet (checked 2026-10-30)
+
+Everything here can be seen in the app but has no effect. All of it is greyed or dimmed, so a
+click never silently does nothing. The controls that looked active and did nothing were built
+on 2026-10-30: Count-in, Capture Recording, Quick Help, Toolbar, Note Pad, Loop Browser, All
+Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Output slots.
+
+- File: Close, Save as Template, Alternatives, Project Management, Project Settings, Page Setup,
+  Print, Movie, Import Audio File and Other Projects (dragging audio in works), Export of audio
+  and MusicXML (Selection as MIDI File works), Bounce, Share, Show in File Manager, Open in
+  Sound Library Manager, Project Alternatives
+- Edit: Undo History, Cut, Copy, Paste, Paste Replace, Select All, Split at Playhead, Join,
+  Bounce and Join
+- Track: Rename Track, Show Master / Chord / Arrangement Track, Assign Track Color / Icon,
+  Configure Track Header
+- Navigate: Go to Position
+- Record: Record / Record Repeat, Record Toggle, Record Enable, New Take,
+  Delete Take, Bounce In Place, Record Project Settings, Project Settings
+- Mix: Show / Create / Convert / Delete Automation, Group, Edit Groups, Pre-Fader Metering,
+  Mastering, Create Mastering Track, Stem Splitter
+- View: all automation entries, Advanced Tools, Smart Controls, Score Editor, Step Sequencer,
+  Session Player, Flex Editor, Performers, Movie, Customize Toolbar, Track Header, Ruler, Global
+  Tracks, Colors, Markers, Grid, Smart Tempo, Enter Full Screen
+- Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
+  Bring All to Front
+- Help: Key Commands, About Pro Wave
+- Tracks area: Edit (Cut, Copy, Paste, Select All, Split, Join), Functions (Folder, Quantize,
+  Bounce in Place, Convert to New Sampler Track, Move to Playhead), View (Show Global Tracks,
+  Configure Track Header), every tool except Pointer and Fade, waveform zoom buttons
+- Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo
+- Mixer: Select Audio Channel Strips, Create New Output Channel Strip, Show Signal Flow
+- Inspector: Channel, Freeze Mode, Q-Reference, Flex Mode, MIDI In Port and Channel, and the
+  rows under More (Dynamics, Gate Time, Clip Length, Score, Q-Velocity, Q-Length, Q-Flam,
+  Q-Range, Q-Strength)
+- Library: Delete, Save
 
 ---
 

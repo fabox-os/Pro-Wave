@@ -263,7 +263,6 @@ const WINDOW: &[&str] = &[
     "Minimize",
     "Zoom",
     "-",
-    "Record",
     "Score Editor",
     "Step Sequencer",
     "Smart Tempo",
@@ -330,6 +329,9 @@ pub(crate) const CHECKABLE: &[&str] = &[
     "Show Library",
     "Show Inspector",
     "Show List Editors",
+    "Show Quick Help",
+    "Show Project Notes",
+    "Show Media Browser",
     "Check for Updates Automatically",
     "Show Toolbar",
     "Show Track Header",
@@ -471,6 +473,12 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         | "Zoom In"
         | "Zoom Out"
         | "Record"
+        | "Capture Recording"
+        | "Quick Help"
+        | "Show Quick Help"
+        | "Show Toolbar"
+        | "Show Project Notes"
+        | "Show Media Browser"
         | "Show Piano Roll"
         | "Show Mixer"
         | "Show Library"
@@ -514,6 +522,10 @@ pub(crate) fn checked(label: &str, s: &crate::UiState) -> bool {
         "Show Library" => s.show_library,
         "Show Inspector" => s.show_inspector,
         "Show List Editors" => s.show_lists,
+        "Show Quick Help" => s.show_quick_help,
+        "Show Toolbar" => s.show_toolbar,
+        "Show Project Notes" => s.show_notes,
+        "Show Media Browser" => s.browser.open == Some(crate::file_browser::Tab::Files),
         "Check for Updates Automatically" => s.update_auto,
         "Show Tempo Track" => s.tracks.show_tempo,
         "Show Marker Track" => s.tracks.show_markers,
@@ -522,7 +534,7 @@ pub(crate) fn checked(label: &str, s: &crate::UiState) -> bool {
             Lang::from_native_name(label) == Some(i18n::current())
         }
         // Always visible in this app.
-        "Show Toolbar" | "Show Track Header" | "Show Ruler" | "Show Colors" | "Show Grid" => true,
+        "Show Track Header" | "Show Ruler" | "Show Colors" | "Show Grid" => true,
         _ => false,
     }
 }
@@ -547,6 +559,11 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         "Show Library" => s.show_library = !s.show_library,
         "Show Inspector" => s.show_inspector = !s.show_inspector,
         "Show List Editors" => s.show_lists = !s.show_lists,
+        "Show Quick Help" | "Quick Help" => s.show_quick_help = !s.show_quick_help,
+        "Show Toolbar" => s.show_toolbar = !s.show_toolbar,
+        "Show Project Notes" => s.show_notes = !s.show_notes,
+        "Show Media Browser" => s.browser.toggle(crate::file_browser::Tab::Files),
+        "Capture Recording" => s.capture_cmd = true,
         "Check for Updates…" => s.update_check = true,
         "Check for Updates Automatically" => {
             s.update_auto = !s.update_auto;
@@ -1005,6 +1022,13 @@ mod tests {
                 p.recording,
                 (s.show_mixer, s.show_library, s.show_inspector, s.show_lists),
                 (s.update_check, s.update_auto, s.show_midi_fx),
+                (
+                    s.capture_cmd,
+                    s.show_quick_help,
+                    s.show_toolbar,
+                    s.show_notes,
+                    s.browser.open
+                ),
                 s.bottom == Bottom::Mixer,
                 (s.file_cmd, s.chooser.is_some(), s.undo_cmd, s.midi_cmd),
                 (s.ui_scale, s.tracks.bar_w, s.tracks.selected),

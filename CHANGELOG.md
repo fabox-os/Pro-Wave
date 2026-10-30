@@ -3,6 +3,35 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## 0.2.0
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Audio recording:** record your voice or an instrument. Click the Input slot of an audio track's channel strip to pick the input (mono or a stereo pair) and, under *Input Device*, the audio interface or microphone. Press the track's R button (its meter then shows the input level), turn Record on and press Play: a red region grows while you record and becomes the waveform when you stop. Several armed tracks record their own inputs at the same time. The recording is saved inside the project, and it is lined up with the song by the audio delay the system reports.
+
+✅ **Hear your input:** the I button on an audio track plays its input through the track's channel strip, with its effects. Use headphones to avoid feedback.
+✅ **Count-in works:** with Count-in and Record on, Play gives one bar of clicks and then starts recording.
+✅ **Capture Recording:** the button next to Record turns what you just played on a MIDI keyboard while the song was running into a region, without having recorded it.
+✅ **The R button on instrument tracks** now picks the track MIDI records on.
+✅ **Mixer:** the Setting slot copies, pastes or resets a channel strip, and the Output slot sends a track to Stereo Out or to a bus.
+✅ **New panes:** Quick Help, a Toolbar, a Note Pad saved with the project, a Loop Browser for a folder of your choice, and All Files. Double-click a file in a browser to add it.
+✅ **Window menu:** the Record entry is gone; it switched Record on instead of opening a window.
+
+✅ **No more demo project:** Pro Wave now always starts with a clean project, and Demo Song is gone from Project Templates.
+
+### Linux
+
+✅ **Fixed a crash at launch** with the error "no graphics adapter can draw to this window", reported on Ubuntu 26.04 with an NVIDIA card: when OpenGL can't draw to the window, Pro Wave now restarts itself on Vulkan.
+
+✅ **A project's audio file that is cut shorter while it plays** now carries on from the exact place, not from the start of the block it was in.
+
+### Still to do or test
+
+❌ Audio recording: cycle takes, punch in and out, amp and pedal effects for guitar and bass
+❌ Mixer: automation of sends, Bezier curves with two handles, plug-in (CLAP / VST3 / AU) hosting, a multi-band compressor
+❌ Flex Time: dragging Flex markers with the mouse, Flex Pitch per note (drift, vibrato, formant), Groove Track for audio tracks to follow
+❌ Smart Tempo: Adapt Region Tempo while recording, a tempo that is not steady in the Editor's beat grid
+
 ## 0.1.10
 
 ### All systems (Windows, macOS, Linux)
@@ -23,10 +52,6 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Better sums:** the strips and the buses are added in 64 bits, so many tracks add up without losing quiet detail to rounding.
 ✅ **Automation of effect settings and curves:** move any slider of an effect while the project plays to write it (Touch, Latch, Write), and in Read mode it moves by itself; pick the setting in the Automation editor's *Parameter* menu. A handle in the middle of each stretch of a lane bends it (double-click to straighten).
 ✅ **Mix Groups:** the strip's Group slot makes or picks a group (*Options > Create Group…* too). Tracks in a group move their faders and pans together by the same amount, and Mute and Solo follow, as the group's settings say. Saved in the project.
-
-### Linux
-
-✅ **Fixed a crash at launch** with the error "no graphics adapter can draw to this window", reported on Ubuntu 26.04 with an NVIDIA card: when OpenGL can't draw to the window, Pro Wave now restarts itself on Vulkan.
 
 ### Still to do or test
 

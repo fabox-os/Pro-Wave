@@ -80,6 +80,8 @@ pub struct MixerView {
     pub sends_on_faders: Option<u8>,
     /// Edit > Copy Channel Strip.
     pub copied: Option<CopiedStrip>,
+    /// The audio input device that the Input slots choose from.
+    pub inputs: crate::audio_rec::InputChoice,
 }
 
 /// A channel strip's effects, sends, level and pan, as Copy Channel Strip keeps them.
@@ -103,6 +105,7 @@ impl Default for MixerView {
             auto_editor: Default::default(),
             sends_on_faders: None,
             copied: None,
+            inputs: crate::audio_rec::InputChoice::default(),
         }
     }
 }
@@ -1065,6 +1068,9 @@ pub fn channel_strip(
     }
     if !vca_strip {
         slot(g, row(r.setting, 16.0), tr("Setting"), SLOT_GRAY, TEXT);
+        if let StripKey::Track(i) = key {
+            setting_menu(ui, row(r.setting, 16.0), p, v, i, id(ns, (key, "setting")));
+        }
         let gr_bar = row(r.gain_red + 1.0, 6.0);
         g.rect_filled(gr_bar, 1.0, SLOT_EMPTY);
         if reduction > 0.05 {
@@ -1116,12 +1122,10 @@ pub fn channel_strip(
                 slot(g, input_r, &fitted, plug, plug_text);
             }
             (Some(TrackKind::Audio), _) => {
-                slot(g, input_r, &trf("Input {}", &[&1]), SLOT_GRAY, TEXT);
-                g.circle_stroke(
-                    pos2(input_r.left() + 8.0, input_r.center().y),
-                    3.5,
-                    stroke(TEXT),
-                );
+                if let StripKey::Track(i) = key {
+                    let slot_id = id(ns, (key, "input"));
+                    input_slot(ui, g, input_r, p, &mut v.inputs, i, slot_id);
+                }
             }
             _ => slot(g, input_r, "", SLOT_EMPTY, TEXT),
         }
@@ -1162,8 +1166,16 @@ pub fn channel_strip(
             } else {
                 tr("St Out")
             };
-            slot(g, row(r.output, 16.0), out, SLOT_GRAY, TEXT);
             if let StripKey::Track(i) = key {
+                output_slot(
+                    ui,
+                    g,
+                    row(r.output, 16.0),
+                    p,
+                    i,
+                    out,
+                    id(ns, (key, "output")),
+                );
                 group_slot(ui, g, row(r.group, 16.0), p, i, id(ns, (key, "vca")));
             }
         }
@@ -1409,6 +1421,155 @@ fn set_send_level(sends: &mut Vec<SendSlot>, bus: u8, db: f32) {
 /// The strip's Group slot: the mix group of the track, else the VCA track that moves its level
 /// (empty for none). Click to pick a mix group, make a new one, change what the group moves
 /// together, or pick one of the project's VCA tracks.
+/// A strip's Setting slot: copy, paste or clear what is on the strip.
+fn setting_menu(ui: &Ui, r: Rect, p: &mut Project, v: &mut MixerView, i: usize, id: egui::Id) {
+    let resp = ui.interact(r, id, Sense::click());
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(170.0);
+        let t = &mut p.tracks[i];
+        if ui.button(tr("Copy Channel Strip")).clicked() {
+            v.copied = Some(CopiedStrip {
+                inserts: t.inserts.clone(),
+                sends: t.sends.clone(),
+                volume_db: t.volume_db,
+                pan: t.pan,
+            });
+            ui.close();
+        }
+        let paste = egui::Button::new(tr("Paste Channel Strip"));
+        if ui.add_enabled(v.copied.is_some(), paste).clicked() {
+            if let Some(c) = v.copied.clone() {
+                t.inserts = c.inserts;
+                t.sends = c.sends;
+                t.volume_db = c.volume_db;
+                t.pan = c.pan;
+            }
+            ui.close();
+        }
+        ui.separator();
+        if ui.button(tr("Reset Channel Strip")).clicked() {
+            t.inserts.clear();
+            t.sends.clear();
+            t.volume_db = 0.0;
+            t.pan = 0.0;
+            ui.close();
+        }
+    });
+}
+
+/// A strip's Output slot: Stereo Out or a bus (an Aux strip plays that bus). An Aux strip
+/// always goes to Stereo Out.
+fn output_slot(
+    ui: &Ui,
+    g: &Painter,
+    r: Rect,
+    p: &mut Project,
+    i: usize,
+    stereo_out: &str,
+    id: egui::Id,
+) {
+    let current = p.tracks[i].output;
+    let text = if current == 0 {
+        stereo_out.to_string()
+    } else {
+        trf("Bus {}", &[&current])
+    };
+    slot(g, r, &text, SLOT_GRAY, TEXT);
+    if p.tracks[i].kind == TrackKind::Aux {
+        return;
+    }
+    let resp = ui.interact(r, id, Sense::click());
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(120.0);
+        if ui
+            .selectable_label(current == 0, tr("Stereo Out"))
+            .clicked()
+        {
+            p.tracks[i].output = 0;
+            ui.close();
+        }
+        for bus in 1..=prowave_engine::MAX_BUSES as u8 {
+            if ui
+                .selectable_label(current == bus, trf("Bus {}", &[&bus]))
+                .clicked()
+            {
+                p.tracks[i].output = bus;
+                ui.close();
+            }
+        }
+    });
+}
+
+/// An audio strip's Input slot: which inputs the track records, and from which device.
+fn input_slot(
+    ui: &Ui,
+    g: &Painter,
+    r: Rect,
+    p: &mut Project,
+    inputs: &mut crate::audio_rec::InputChoice,
+    i: usize,
+    id: egui::Id,
+) {
+    use crate::audio_rec::input_label;
+    use prowave_engine::InputSource;
+    let source = p.tracks[i].input;
+    slot(g, r, &input_label(source), SLOT_GRAY, TEXT);
+    // One ring for a mono input, two for a stereo pair.
+    let ring = pos2(r.left() + 8.0, r.center().y);
+    g.circle_stroke(ring, 3.5, stroke(TEXT));
+    if matches!(source, InputSource::Stereo(_)) {
+        g.circle_stroke(ring + vec2(3.0, 0.0), 3.5, stroke(TEXT));
+    }
+    let resp = ui.interact(r, id, Sense::click());
+    if resp.clicked() {
+        inputs.refresh();
+    }
+    let channels = inputs.channels();
+    let (mut picked, mut device) = (None, None);
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(150.0);
+        let mut item = |ui: &mut Ui, s: InputSource| {
+            if ui.selectable_label(s == source, input_label(s)).clicked() {
+                picked = Some(s);
+                ui.close();
+            }
+        };
+        for c in 0..channels {
+            item(ui, InputSource::Mono(c));
+        }
+        ui.separator();
+        for c in (0..channels.saturating_sub(1)).step_by(2) {
+            item(ui, InputSource::Stereo(c));
+        }
+        ui.separator();
+        ui.menu_button(tr("Input Device"), |ui| {
+            if ui
+                .selectable_label(inputs.device.is_none(), tr("System Default"))
+                .clicked()
+            {
+                device = Some(None);
+                ui.close();
+            }
+            for d in &inputs.devices {
+                let on = inputs.device.as_deref() == Some(d.id.as_str());
+                if ui.selectable_label(on, &d.name).clicked() {
+                    device = Some(Some(d.id.clone()));
+                    ui.close();
+                }
+            }
+            if inputs.devices.is_empty() {
+                ui.label(tr("No audio input found"));
+            }
+        });
+    });
+    if let Some(s) = picked {
+        p.tracks[i].input = s;
+    }
+    if let Some(d) = device {
+        inputs.pick(d);
+    }
+}
+
 fn group_slot(ui: &Ui, g: &Painter, r: Rect, p: &mut Project, i: usize, id: egui::Id) {
     let group = p.tracks[i].group.filter(|g| *g < p.groups.len());
     let name = match group {

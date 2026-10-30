@@ -110,6 +110,9 @@ fn menu_groups(menus: &str, file_commands: &str) -> Vec<Group> {
 
 /// A phase's short name: `### Phase 2: MIDI & Sequencer (Weeks 11-18)` is `2 MIDI & Sequencer`.
 fn phase_name(heading: &str) -> String {
+    if let Some(name) = heading.strip_prefix("### Platform: ") {
+        return name.to_string();
+    }
     let text = heading.trim_start_matches("### Phase ");
     let (number, title) = text.split_once(": ").unwrap_or(("", text));
     let title = title.split(" (").next().unwrap_or(title);
@@ -118,12 +121,12 @@ fn phase_name(heading: &str) -> String {
     format!("{number} {title}")
 }
 
-/// The checkboxes of each phase of `ROADMAP.md`: `[x]` done, `[~]` started, `[ ]` to do.
+/// The checkboxes of each phase and platform of `ROADMAP.md`: `[x]` done, `[~]` started, `[ ]` to do.
 fn roadmap_groups(roadmap: &str) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
     let mut inside = false;
     for line in roadmap.lines() {
-        if line.starts_with("### Phase ") {
+        if line.starts_with("### Phase ") || line.starts_with("### Platform: ") {
             inside = true;
             groups.push(Group {
                 name: phase_name(line),
@@ -487,6 +490,19 @@ pub fn pressed()
         assert_eq!(groups[1].name, "5 Instruments");
         assert_eq!(groups[1].items, [State::Todo]);
         assert_eq!(total(&groups), 3);
+    }
+
+    #[test]
+    fn each_platform_is_a_group_of_the_roadmap() {
+        let text = "### Phase 9: Polish (Weeks 1-2)\n- [x] a\n\
+                    ### Platform: Linux\n- [x] b\n- [ ] c\n\
+                    ### Platform: macOS\n- [~] d\n\
+                    ## 3b. Controls\n- [ ] not counted\n";
+        let groups = roadmap_groups(text);
+        let names: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["9 Polish", "Linux", "macOS"]);
+        assert_eq!(groups[1].items, [State::Done, State::Todo]);
+        assert_eq!(groups[2].items, [State::Partial]);
     }
 
     #[test]

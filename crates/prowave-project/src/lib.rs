@@ -265,6 +265,12 @@ pub struct TrackDoc {
     /// External MIDI tracks: the MIDI output port (by name) and the channel, 1-16.
     pub midi_port: Option<String>,
     pub midi_channel: u8,
+    /// Audio tracks: the first input channel they record (0 is Input 1), and whether they
+    /// record it and the next one as a stereo pair.
+    pub input: u16,
+    pub input_stereo: bool,
+    /// The bus the track plays into; 0 is Stereo Out.
+    pub output: u8,
     /// MIDI FX, first to last.
     pub midi_fx: Vec<MidiFxDoc>,
     /// The Groove Track, and the tracks that follow it.
@@ -380,6 +386,9 @@ impl Default for TrackDoc {
             vca: None,
             midi_port: None,
             midi_channel: 1,
+            input: 0,
+            input_stereo: false,
+            output: 0,
             midi_fx: Vec::new(),
             groove: false,
             follow_groove: false,
@@ -402,6 +411,8 @@ pub struct ProjectDoc {
     pub cycle_end: f64,
     pub metronome: bool,
     pub count_in: bool,
+    /// The Note Pad's text.
+    pub notes: String,
     pub master_vol: f32,
     pub selected_track: usize,
     pub tracks: Vec<TrackDoc>,
@@ -467,6 +478,7 @@ impl Default for ProjectDoc {
             cycle_end: 16.0,
             metronome: false,
             count_in: true,
+            notes: String::new(),
             master_vol: 0.8,
             selected_track: 0,
             tracks: Vec::new(),

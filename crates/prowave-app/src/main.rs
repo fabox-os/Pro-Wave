@@ -5,10 +5,12 @@
 #[global_allocator]
 static ALLOC_GUARD: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
+mod audio_rec;
 mod automation;
 mod bench;
 mod engine_sync;
 mod event_list;
+mod file_browser;
 mod file_commands;
 mod flex_edit;
 mod fx_ui;
@@ -39,6 +41,7 @@ mod recent_files;
 mod recorder;
 mod score;
 mod scripter;
+mod side_panes;
 mod signature_track;
 mod smart_tempo;
 mod start_screen;
@@ -77,6 +80,18 @@ pub struct UiState {
     pub lists: event_list::ListView,
     /// The MIDI recording in progress.
     pub rec: recorder::Recorder,
+    /// The audio recording in progress, and the open audio input.
+    pub audio_rec: audio_rec::AudioRecorder,
+    /// Capture Recording was asked for.
+    pub capture_cmd: bool,
+    pub show_quick_help: bool,
+    pub show_toolbar: bool,
+    /// The Note Pad.
+    pub show_notes: bool,
+    /// The Loop Browser and All Files.
+    pub browser: file_browser::BrowserView,
+    /// Files to add to the project, from the browsers.
+    pub open_paths: Vec<std::path::PathBuf>,
     /// Help > Check for Updates… was chosen.
     pub update_check: bool,
     /// Help > Check for Updates Automatically.
@@ -146,12 +161,22 @@ impl UiState {
             show_lists: false,
             lists: event_list::ListView::default(),
             rec: recorder::Recorder::default(),
+            audio_rec: audio_rec::AudioRecorder::default(),
+            capture_cmd: false,
+            show_quick_help: false,
+            show_toolbar: false,
+            show_notes: false,
+            browser: file_browser::BrowserView::default(),
+            open_paths: Vec::new(),
             update_check: false,
             update_auto: true,
             bottom: Bottom::Mixer,
             status: None,
             tracks: tracks_area::TracksView::default(),
-            mixer: mixer::MixerView::default(),
+            mixer: mixer::MixerView {
+                inputs: audio_rec::InputChoice::load(),
+                ..mixer::MixerView::default()
+            },
             group_watch: groups::GroupWatch::default(),
             inspector: inspector::InspectorView::default(),
             library: library::LibraryView::default(),
@@ -300,8 +325,8 @@ impl App {
             (ended, i.pointer.any_down())
         });
         let undo_cmd = self.ui.undo_cmd.take();
-        // A MIDI recording is one edit: it is recorded when it ends, not on every frame.
-        let recording = self.ui.rec.active();
+        // A recording is one edit: it is recorded when it ends, not on every frame.
+        let recording = self.ui.rec.active() || self.ui.audio_rec.active();
         if !dragging
             && !recording
             && (gesture_ended || undo_cmd.is_some() || self.frames_since_record >= 30)
@@ -377,7 +402,13 @@ impl App {
                 recorder::LiveNote::Sustain { .. } => continue,
             });
         }
-        match recorder::update(&mut s.rec, p, &input) {
+        // Record on an audio track is the audio recorder's (see `record_audio`).
+        let midi = if s.rec.active() || !audio_rec::takes_over(p) {
+            recorder::update(&mut s.rec, p, &input)
+        } else {
+            recorder::Outcome::Nothing
+        };
+        match midi {
             recorder::Outcome::Started(t, r) => {
                 s.tracks.selected = Some((t, r));
                 s.piano.selected.clear();
@@ -391,8 +422,47 @@ impl App {
             }
             recorder::Outcome::Nothing => {}
         }
+        if std::mem::take(&mut s.capture_cmd) {
+            match recorder::capture(&mut s.rec, p) {
+                Some(region) => s.tracks.selected = Some(region),
+                None => s.status = Some(i18n::tr("Capture Recording: nothing was played").into()),
+            }
+        }
         if s.rec.active() || !input.is_empty() {
             ctx.request_repaint();
+        }
+    }
+
+    /// Audio inputs: opens the input while a track wants it and records the armed tracks.
+    fn record_audio(&mut self, ctx: &egui::Context) {
+        let latency_us = self
+            .sync
+            .as_mut()
+            .map_or(0, |sync| sync.engine.state().output_latency_us);
+        let s = &mut self.ui;
+        match s
+            .audio_rec
+            .update(&mut s.mixer.inputs, &mut self.project, latency_us, ctx)
+        {
+            audio_rec::Outcome::Finished(kept, warning) => {
+                if kept.is_some() {
+                    s.tracks.selected = kept;
+                }
+                if warning.is_some() {
+                    s.status = warning;
+                }
+            }
+            audio_rec::Outcome::Failed(message) => s.status = Some(message),
+            audio_rec::Outcome::Nothing => {}
+        }
+        if let (Some(feed), Some(sync)) = (s.audio_rec.take_feed(), self.sync.as_mut()) {
+            sync.engine
+                .send(prowave_engine::Command::SetInput(Some(feed)));
+        }
+        if s.audio_rec.active() {
+            ctx.request_repaint();
+        } else if s.audio_rec.listening() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(33));
         }
     }
 
@@ -510,7 +580,7 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         let master_peaks = self.sync.as_mut().map(|s| s.master_peaks());
-        let meters = match self.sync.as_mut() {
+        let mut meters = match self.sync.as_mut() {
             Some(sync) => mixer::Meters {
                 tracks: sync.track_meters(self.project.tracks.len()),
                 reduction: sync.gain_reduction(self.project.tracks.len()),
@@ -518,6 +588,9 @@ impl eframe::App for App {
             },
             None => mixer::Meters::default(),
         };
+        self.ui
+            .audio_rec
+            .show_levels(&self.project, &mut meters.tracks);
         let p = &mut self.project;
         let s = &mut self.ui;
 
@@ -537,6 +610,21 @@ impl eframe::App for App {
                 .exact_size(244.0)
                 .frame(egui::Frame::new())
                 .show(ui, |ui| inspector::show(ui, p, s, &meters));
+        }
+        if s.show_toolbar {
+            egui::Panel::top("toolbar")
+                .exact_size(side_panes::TOOLBAR_HEIGHT)
+                .show(ui, |ui| side_panes::toolbar(ui, p, s));
+        }
+        if s.browser.open.is_some() {
+            egui::Panel::right("browser")
+                .exact_size(file_browser::WIDTH)
+                .show(ui, |ui| file_browser::show(ui, s));
+        }
+        if s.show_notes {
+            egui::Panel::right("notes")
+                .exact_size(side_panes::NOTES_WIDTH)
+                .show(ui, |ui| side_panes::note_pad(ui, p));
         }
         if s.show_lists {
             egui::Panel::right("lists")
@@ -569,6 +657,11 @@ impl eframe::App for App {
         fx_ui::show(&ctx, p, s, &meters);
         automation::show(&ctx, p, s);
 
+        side_panes::quick_help(&ctx, &mut self.ui);
+        for path in std::mem::take(&mut self.ui.open_paths) {
+            self.import(&path, &ctx);
+        }
+        self.record_audio(&ctx);
         self.play_and_record_midi(&ctx);
         if std::mem::take(&mut self.ui.update_check) {
             self.updater.start_check(true);
@@ -867,7 +960,7 @@ fn main() -> eframe::Result {
     if bench_out.is_none() && shots_dir.is_none() {
         updater::clean_up_after_update();
     }
-    // Measuring runs leave the user's settings (first launch, recent projects, size) alone.
+    // Measuring runs leave the user's settings (recent projects, size) alone.
     let measuring = bench_out.is_some() || shots_dir.is_some();
     // Release builds: on a crash, write a report to the temp folder instead of a raw panic.
     human_panic::setup_panic!(human_panic::Metadata::new(
@@ -917,14 +1010,12 @@ fn main() -> eframe::Result {
             // Cmd/Ctrl + = / - / 0 resize the interface through `ui_scale` instead, which
             // also keeps the fit for small windows.
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-            // The very first start shows the demo song; later starts begin clean. A benchmark
-            // run always starts clean and leaves the first launch to the user.
-            let project =
-                if shots_dir.is_some() || (!measuring && recent_files::take_first_launch()) {
-                    Project::demo()
-                } else {
-                    Project::empty()
-                };
+            // Every start begins clean; only the layout pictures need something to show.
+            let project = if shots_dir.is_some() {
+                Project::demo()
+            } else {
+                Project::empty()
+            };
             let mut audio_error = None;
             let mut midi_out = None;
             let sync = match prowave_engine::Engine::start() {

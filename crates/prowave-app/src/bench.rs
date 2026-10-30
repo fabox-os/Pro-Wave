@@ -11,7 +11,7 @@
 //! [`LAYOUT_SIZES`] and saves a picture of what it drew as `layout-<w>x<h>.png`, to check the
 //! layout on small screens on any system (a build server included).
 //!
-//! In bench mode the app touches none of the user's settings (first launch, recent projects,
+//! In bench mode the app touches none of the user's settings (recent projects,
 //! interface size). When no window can be opened (a build server without a display), only the
 //! DSP numbers are written, with `window_error`.
 use crate::model::{Project, TrackKind};

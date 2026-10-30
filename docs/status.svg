@@ -5,7 +5,7 @@
 <text x="129.4" y="33.0" font-size="12" font-weight="600" fill="#fff">35.23%</text>
 <rect x="190.4" y="16" width="68.4" height="24" fill="#555b63"/><rect x="258.8" y="16" width="62" height="24" fill="#c0392b"/>
 <text x="199.4" y="33.0" font-size="12" font-weight="600" fill="#fff">roadmap</text>
-<text x="267.8" y="33.0" font-size="12" font-weight="600" fill="#fff">22.41%</text>
+<text x="267.8" y="33.0" font-size="12" font-weight="600" fill="#fff">25.33%</text>
 <text x="16.0" y="74.0" font-size="14" font-weight="500" fill="#e6edf3">Menu entries: 35.2% (62/176)</text>
 <rect x="16.0" y="84.0" width="31.0" height="34.8" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
 <rect x="47.0" y="84.0" width="31.0" height="34.8" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
@@ -201,85 +201,106 @@
 <rect x="482.8" y="436.8" width="39.2" height="49.2" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
 <rect x="482.8" y="338.4" width="39.2" height="147.6" fill="none" stroke="#10141a" stroke-width="2"/>
 <text x="487.8" y="352.4" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">Help</text>
-<text x="538.0" y="74.0" font-size="14" font-weight="500" fill="#e6edf3">Roadmap items: 22.4% (13/58)</text>
-<rect x="538.0" y="84.0" width="45.0" height="69.3" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="583.0" y="84.0" width="45.0" height="69.3" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="628.0" y="84.0" width="45.0" height="69.3" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="538.0" y="153.3" width="45.0" height="69.3" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="583.0" y="153.3" width="45.0" height="69.3" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="628.0" y="153.3" width="45.0" height="69.3" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="538.0" y="222.6" width="67.5" height="69.3" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="605.5" y="222.6" width="67.5" height="69.3" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="538.0" y="84.0" width="134.9" height="207.9" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="543.0" y="98.0" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">1 Audio Engine Co…</text>
-<rect x="672.9" y="84.0" width="59.0" height="52.0" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="732.0" y="84.0" width="59.0" height="52.0" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="672.9" y="136.0" width="59.0" height="52.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="732.0" y="136.0" width="59.0" height="52.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="672.9" y="188.0" width="59.0" height="52.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="732.0" y="188.0" width="59.0" height="52.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="672.9" y="239.9" width="118.1" height="52.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="672.9" y="84.0" width="118.1" height="207.9" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="677.9" y="98.0" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">2 MIDI &amp; Seque…</text>
-<rect x="538.0" y="291.9" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="580.2" y="291.9" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="622.3" y="291.9" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="538.0" y="356.6" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="580.2" y="356.6" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="622.3" y="356.6" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="538.0" y="421.3" width="126.5" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="538.0" y="291.9" width="126.5" height="194.1" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="543.0" y="305.9" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">5 Instruments</text>
-<rect x="664.5" y="291.9" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="706.7" y="291.9" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="748.8" y="291.9" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="664.5" y="356.6" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="706.7" y="356.6" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="748.8" y="356.6" width="42.2" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="664.5" y="421.3" width="126.5" height="64.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="664.5" y="291.9" width="126.5" height="194.1" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="669.5" y="305.9" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">6 Instruments</text>
-<rect x="791.0" y="84.0" width="44.6" height="68.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="835.6" y="84.0" width="44.6" height="68.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="880.3" y="84.0" width="44.6" height="68.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="924.9" y="84.0" width="44.6" height="68.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="791.0" y="152.7" width="59.5" height="68.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="850.5" y="152.7" width="59.5" height="68.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="910.1" y="152.7" width="59.5" height="68.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="791.0" y="84.0" width="178.6" height="137.5" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="796.0" y="98.0" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">8 UI</text>
-<rect x="791.0" y="221.5" width="44.6" height="49.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="835.6" y="221.5" width="44.6" height="49.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="880.3" y="221.5" width="44.6" height="49.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="924.9" y="221.5" width="44.6" height="49.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="791.0" y="270.6" width="178.6" height="49.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="791.0" y="221.5" width="178.6" height="98.2" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="796.0" y="235.5" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">3 Flex &amp; Smart Tempo</text>
-<rect x="969.6" y="84.0" width="37.2" height="78.6" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="1006.8" y="84.0" width="37.2" height="78.6" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="969.6" y="162.6" width="37.2" height="78.6" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="1006.8" y="162.6" width="37.2" height="78.6" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="969.6" y="241.1" width="74.4" height="78.6" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="969.6" y="84.0" width="74.4" height="235.7" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="974.6" y="98.0" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">9 WASM,…</text>
-<rect x="791.0" y="319.7" width="42.2" height="83.2" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="833.2" y="319.7" width="42.2" height="83.2" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="791.0" y="402.8" width="42.2" height="83.2" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="833.2" y="402.8" width="42.2" height="83.2" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="791.0" y="319.7" width="84.3" height="166.3" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="796.0" y="333.7" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">0 Foundat…</text>
-<rect x="875.3" y="319.7" width="42.2" height="83.2" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="917.5" y="319.7" width="42.2" height="83.2" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="875.3" y="402.8" width="42.2" height="83.2" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="917.5" y="402.8" width="42.2" height="83.2" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="875.3" y="319.7" width="84.3" height="166.3" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="880.3" y="333.7" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">4 Mixer &amp;…</text>
-<rect x="959.7" y="319.7" width="42.2" height="83.2" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="1001.8" y="319.7" width="42.2" height="83.2" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="959.7" y="402.8" width="42.2" height="83.2" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="1001.8" y="402.8" width="42.2" height="83.2" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="959.7" y="319.7" width="84.3" height="166.3" fill="none" stroke="#10141a" stroke-width="2"/>
-<text x="964.7" y="333.7" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">7 Plugin…</text>
+<text x="538.0" y="74.0" font-size="14" font-weight="500" fill="#e6edf3">Roadmap items: 25.3% (19/75)</text>
+<rect x="538.0" y="84.0" width="44.7" height="45.5" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="582.7" y="84.0" width="44.7" height="45.5" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="627.5" y="84.0" width="44.7" height="45.5" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="672.2" y="84.0" width="44.7" height="45.5" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="538.0" y="129.5" width="44.7" height="45.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="582.7" y="129.5" width="44.7" height="45.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="627.5" y="129.5" width="44.7" height="45.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="672.2" y="129.5" width="44.7" height="45.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="538.0" y="175.0" width="178.9" height="45.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="538.0" y="84.0" width="178.9" height="136.4" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="543.0" y="98.0" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">Linux</text>
+<rect x="538.0" y="220.4" width="44.7" height="60.6" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="582.7" y="220.4" width="44.7" height="60.6" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="627.5" y="220.4" width="44.7" height="60.6" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="672.2" y="220.4" width="44.7" height="60.6" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="538.0" y="281.1" width="44.7" height="60.6" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="582.7" y="281.1" width="44.7" height="60.6" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="627.5" y="281.1" width="44.7" height="60.6" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="672.2" y="281.1" width="44.7" height="60.6" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="538.0" y="220.4" width="178.9" height="121.3" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="543.0" y="234.4" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">1 Audio Engine Core</text>
+<rect x="716.9" y="84.0" width="42.1" height="64.4" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="759.0" y="84.0" width="42.1" height="64.4" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="716.9" y="148.4" width="42.1" height="64.4" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="759.0" y="148.4" width="42.1" height="64.4" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="716.9" y="212.8" width="42.1" height="64.4" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="759.0" y="212.8" width="42.1" height="64.4" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="716.9" y="277.3" width="42.1" height="64.4" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="759.0" y="277.3" width="42.1" height="64.4" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="716.9" y="84.0" width="84.2" height="257.7" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="721.9" y="98.0" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">macOS</text>
+<rect x="538.0" y="341.7" width="43.9" height="48.1" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="581.9" y="341.7" width="43.9" height="48.1" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="625.7" y="341.7" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="538.0" y="389.8" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="581.9" y="389.8" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="625.7" y="389.8" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="538.0" y="437.9" width="131.6" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="538.0" y="341.7" width="131.6" height="144.3" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="543.0" y="355.7" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">2 MIDI &amp; Sequenc…</text>
+<rect x="669.6" y="341.7" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="713.4" y="341.7" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="757.3" y="341.7" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="669.6" y="389.8" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="713.4" y="389.8" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="757.3" y="389.8" width="43.9" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="669.6" y="437.9" width="131.6" height="48.1" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="669.6" y="341.7" width="131.6" height="144.3" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="674.6" y="355.7" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">5 Instruments</text>
+<rect x="801.1" y="84.0" width="44.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="845.9" y="84.0" width="44.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="890.6" y="84.0" width="44.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="935.3" y="84.0" width="44.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="801.1" y="137.0" width="59.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="860.8" y="137.0" width="59.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="920.4" y="137.0" width="59.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="801.1" y="84.0" width="179.0" height="106.1" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="806.1" y="98.0" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">6 Instruments</text>
+<rect x="801.1" y="190.1" width="44.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="845.9" y="190.1" width="44.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="890.6" y="190.1" width="44.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="935.3" y="190.1" width="44.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="801.1" y="243.1" width="59.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="860.8" y="243.1" width="59.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="920.4" y="243.1" width="59.7" height="53.0" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="801.1" y="190.1" width="179.0" height="106.1" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="806.1" y="204.1" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">8 UI</text>
+<rect x="980.1" y="84.0" width="32.0" height="70.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="1012.0" y="84.0" width="32.0" height="70.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="980.1" y="154.7" width="32.0" height="70.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="1012.0" y="154.7" width="32.0" height="70.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="980.1" y="225.4" width="63.9" height="70.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="980.1" y="84.0" width="63.9" height="212.2" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="985.1" y="98.0" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">3 Flex…</text>
+<rect x="801.1" y="296.2" width="42.9" height="52.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="844.0" y="296.2" width="42.9" height="52.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="886.8" y="296.2" width="42.9" height="52.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="801.1" y="348.9" width="64.3" height="52.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="865.4" y="348.9" width="64.3" height="52.7" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="801.1" y="296.2" width="128.6" height="105.5" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="806.1" y="310.2" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">9 WASM, Collabor…</text>
+<rect x="801.1" y="401.6" width="42.9" height="42.2" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="844.0" y="401.6" width="42.9" height="42.2" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="886.8" y="401.6" width="42.9" height="42.2" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="801.1" y="443.8" width="128.6" height="42.2" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="801.1" y="401.6" width="128.6" height="84.4" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="806.1" y="415.6" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">0 Foundation</text>
+<rect x="929.7" y="296.2" width="38.1" height="47.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="967.8" y="296.2" width="38.1" height="47.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="1005.9" y="296.2" width="38.1" height="47.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="929.7" y="343.6" width="114.3" height="47.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="929.7" y="296.2" width="114.3" height="94.9" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="934.7" y="310.2" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">4 Mixer &amp; Chan…</text>
+<rect x="929.7" y="391.1" width="38.1" height="47.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="967.8" y="391.1" width="38.1" height="47.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="1005.9" y="391.1" width="38.1" height="47.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="929.7" y="438.5" width="114.3" height="47.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="929.7" y="391.1" width="114.3" height="94.9" fill="none" stroke="#10141a" stroke-width="2"/>
+<text x="934.7" y="405.1" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">7 Plugin Hosti…</text>
 <rect x="16.0" y="498.0" width="11" height="11" fill="#2ea043"/>
 <text x="32.0" y="508.0" font-size="12" font-weight="400" fill="#9da7b3">done</text>
 <rect x="88.0" y="498.0" width="11" height="11" fill="#b08a1e"/>

@@ -14,6 +14,7 @@ use crate::pattern::{
     Direction, DrumStyle, DrummerParams, PatternParams, PatternRow, StepRate, MAX_ROWS, MAX_STEPS,
 };
 use egui::Color32;
+use prowave_engine::InputSource;
 use prowave_engine::{AudioFile, FadeCurve, SmpteRate};
 use prowave_project::{
     media_path, CompDoc, ControlDoc, DrummerDoc, MarkerDoc, MediaFile, MidiFxDoc, NoteDoc,
@@ -375,6 +376,11 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             vca: t.vca,
             midi_port: t.midi_port.clone(),
             midi_channel: t.midi_channel,
+            input: match t.input {
+                InputSource::Mono(c) | InputSource::Stereo(c) => c,
+            },
+            input_stereo: matches!(t.input, InputSource::Stereo(_)),
+            output: t.output,
             groove: t.params.groove,
             follow_groove: t.params.follow_groove,
             midi_fx: t
@@ -516,6 +522,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         cycle_end: p.cycle_end,
         metronome: p.metronome,
         count_in: p.count_in,
+        notes: p.notes.clone(),
         master_vol: p.master_vol,
         selected_track: p.selected_track,
         tracks,
@@ -735,6 +742,12 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             vca: t.vca,
             midi_port: port_name(&t.midi_port),
             midi_channel: t.midi_channel.clamp(1, 16),
+            input: input_source(t.input, t.input_stereo),
+            output: if usize::from(t.output) <= prowave_engine::MAX_BUSES {
+                t.output
+            } else {
+                0
+            },
             midi_fx: t
                 .midi_fx
                 .iter()
@@ -794,6 +807,11 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
     p.cycle_end = doc.cycle_end.max(p.cycle_start);
     p.metronome = doc.metronome;
     p.count_in = doc.count_in;
+    p.notes = doc
+        .notes
+        .chars()
+        .take(crate::side_panes::MAX_NOTES)
+        .collect();
     p.master_vol = doc.master_vol.clamp(0.0, 2.0);
     p.groups = doc
         .groups
@@ -981,6 +999,21 @@ fn media_root() -> PathBuf {
     std::env::temp_dir().join("prowave-media")
 }
 
+/// Where this session's audio recordings go until the project is saved.
+pub fn recordings_dir() -> PathBuf {
+    session_media_dir().join("recordings")
+}
+
+/// A track's input from a project file, which can hold any number.
+fn input_source(channel: u16, stereo: bool) -> InputSource {
+    let channel = channel.min(prowave_engine::MAX_INPUT_CHANNELS as u16 - 2);
+    if stereo {
+        InputSource::Stereo(channel)
+    } else {
+        InputSource::Mono(channel)
+    }
+}
+
 /// This process's media folder (`<temp>/prowave-media/<pid>`), removed on exit.
 fn session_media_dir() -> PathBuf {
     media_root().join(std::process::id().to_string())
@@ -1102,6 +1135,25 @@ pub(crate) mod tests {
         bad.tracks[0].vca = Some(99);
         let (r, _) = from_doc(&bad, Path::new("."), &egui::Context::default());
         assert_eq!(r.tracks[0].vca, None);
+    }
+
+    #[test]
+    fn audio_tracks_keep_their_input() {
+        let mut p = Project::empty();
+        p.tracks.clear();
+        p.tracks.push(Track::new("Vox", TrackKind::Audio));
+        p.tracks.push(Track::new("Guitar", TrackKind::Audio));
+        p.tracks[0].input = InputSource::Mono(3);
+        p.tracks[1].input = InputSource::Stereo(2);
+        let (mut doc, _) = to_doc(&p);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].input, InputSource::Mono(3));
+        assert_eq!(q.tracks[1].input, InputSource::Stereo(2));
+        // A damaged or hand-edited file cannot ask for a channel that cannot exist.
+        doc.tracks[1].input = u16::MAX;
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        let top = prowave_engine::MAX_INPUT_CHANNELS as u16 - 2;
+        assert_eq!(r.tracks[1].input, InputSource::Stereo(top));
     }
 
     #[test]
@@ -1881,5 +1933,21 @@ pub(crate) mod tests {
         assert_eq!(got.controls, p.tracks[0].regions[0].controls);
         // An ordinary region stays ordinary.
         assert!(q.tracks[1].regions[0].folder.is_none());
+    }
+
+    #[test]
+    fn notes_and_outputs_are_saved() {
+        let mut p = Project::empty();
+        p.notes = "Second verse: double the vocal".into();
+        p.tracks[0].output = 2;
+        let (mut doc, _) = to_doc(&p);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.notes, p.notes);
+        assert_eq!(q.tracks[0].output, 2);
+        doc.tracks[0].output = 200;
+        doc.notes = "x".repeat(crate::side_panes::MAX_NOTES + 10);
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(r.tracks[0].output, 0, "no such bus");
+        assert_eq!(r.notes.len(), crate::side_panes::MAX_NOTES);
     }
 }

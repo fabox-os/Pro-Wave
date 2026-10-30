@@ -128,13 +128,11 @@ mod tests {
             assert!(n >= last, "went back in time: {n} after {last}");
             last = n;
             if done {
-                assert_eq!(
-                    n, 200_000,
-                    "the last value is there once the writer is done"
-                );
                 break;
             }
         }
+        // `is_finished` does not order anything; `join` does, so now the last value must show.
         assert!(writer.join().is_ok());
+        assert_eq!(r.read()[0], 200_000);
     }
 }

@@ -28,33 +28,6 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
     Some(base.join("prowave"))
 }
 
-/// True the first time this version of Pro Wave starts on this computer (it then opens the
-/// demo song); false on every later start, which begins with a clean project. Remembered by
-/// the version number in the `first-launch-done` file in the config folder, so each new
-/// version shows the demo once. A `demo-always` file in the same folder (made by hand, only
-/// on a developer's machine) shows it on every start. Without a config folder every start is
-/// a later one, so the demo never comes back by surprise.
-pub fn take_first_launch() -> bool {
-    config_dir().is_some_and(|dir| take_first_launch_in(&dir, env!("CARGO_PKG_VERSION")))
-}
-
-fn take_first_launch_in(dir: &Path, version: &str) -> bool {
-    if dir.join("demo-always").exists() {
-        return true;
-    }
-    let marker = dir.join("first-launch-done");
-    if std::fs::read_to_string(&marker).is_ok_and(|seen| seen.trim() == version) {
-        return false;
-    }
-    if let Err(e) = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&marker, version)) {
-        tracing::warn!(
-            "cannot remember the first launch in {}: {e}",
-            marker.display()
-        );
-    }
-    true
-}
-
 /// The recent-projects list. `Recent::default()` is an in-memory list that never touches disk
 /// (used by tests); [`Recent::load`] is the real, persistent one.
 #[derive(Default)]
@@ -187,24 +160,5 @@ mod tests {
         let mut r = Recent::from_file(Some(dir.path().to_path_buf()));
         r.add(&touch(dir.path(), "a.prowave"));
         assert_eq!(r.paths().len(), 1);
-    }
-
-    #[test]
-    fn the_demo_shows_once_per_version_or_always_with_the_marker_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("prowave");
-        assert!(
-            take_first_launch_in(&config, "0.1.7"),
-            "nothing remembered yet"
-        );
-        assert!(!take_first_launch_in(&config, "0.1.7"));
-        assert!(
-            take_first_launch_in(&config, "0.1.8"),
-            "a new version shows it again"
-        );
-        assert!(!take_first_launch_in(&config, "0.1.8"));
-        std::fs::write(config.join("demo-always"), b"").unwrap();
-        assert!(take_first_launch_in(&config, "0.1.8"));
-        assert!(take_first_launch_in(&config, "0.1.8"));
     }
 }

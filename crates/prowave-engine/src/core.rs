@@ -3,6 +3,7 @@
 use crate::disk::{Block, ClipShared};
 use crate::fx::{Chain, Pdc, MAX_FX_PARAMS};
 use crate::gain_smoothing::GainRamp;
+use crate::monitor::{InputFeed, MonitorTrack, MAX_MONITORS};
 use crate::mtc::{MtcGenerator, MtcMessage};
 #[cfg(test)]
 use crate::routing::AutoPoint;
@@ -324,6 +325,19 @@ impl AudioClip {
 /// payload travels back through the garbage queue so it is freed off the audio thread.
 pub enum Command {
     Play,
+    /// Clicks `clicks` times, `beats_per_click` quarter notes apart, then plays from where
+    /// the playhead is (Logic: Count-in). Pause or Stop cancels it.
+    CountIn {
+        clicks: u8,
+        beats_per_click: f64,
+    },
+    /// The live input, for monitoring. Replaces the one before.
+    SetInput(Option<Box<InputFeed>>),
+    /// The tracks that hear their input now (the first `count` of `tracks`).
+    SetMonitors {
+        tracks: [MonitorTrack; MAX_MONITORS],
+        count: u8,
+    },
     Pause,
     /// Stop and return to the position the transport started from.
     Stop,
@@ -447,6 +461,7 @@ impl Command {
                 | Self::SetInserts { .. }
                 | Self::SetPdc { .. }
                 | Self::SetAutomation(_)
+                | Self::SetInput(_)
         )
     }
 
@@ -471,6 +486,7 @@ pub enum Garbage {
     Chain(Box<Chain>),
     Pdc(Box<Pdc>),
     Automation(Vec<AutoLane>),
+    Input(Box<InputFeed>),
 }
 
 /// What the engine shows the UI after each audio block: the playhead, the transport and the
@@ -653,6 +669,15 @@ pub struct EngineCore {
     click_remaining: u32,
     click_phase: f32,
     click_freq: f32,
+    /// A count-in is running: the clicks left, the frames to the next one, the frames
+    /// between clicks and how many clicks it has.
+    counting: bool,
+    count_left: u8,
+    count_wait: u32,
+    count_step: u32,
+    input: Option<Box<InputFeed>>,
+    monitors: [MonitorTrack; MAX_MONITORS],
+    monitor_count: usize,
     track_gain_l: Vec<f32>,
     track_gain_r: Vec<f32>,
     track_ramp_l: Vec<GainRamp>,
@@ -772,6 +797,13 @@ impl EngineCore {
             click_remaining: 0,
             click_phase: 0.0,
             click_freq: 1000.0,
+            counting: false,
+            count_left: 0,
+            count_wait: 0,
+            count_step: 1,
+            input: None,
+            monitors: [MonitorTrack::default(); MAX_MONITORS],
+            monitor_count: 0,
             track_gain_l: vec![1.0; MAX_TRACKS],
             track_gain_r: vec![1.0; MAX_TRACKS],
             track_ramp_l: vec![GainRamp::new(1.0); MAX_TRACKS],
@@ -1005,6 +1037,7 @@ impl EngineCore {
         let sounding = self.playing
             || self.voices.iter().any(|v| v.active)
             || self.click_remaining > 0
+            || self.counting
             || (self.test_hz > 0.0 && self.test_gain > 0.0);
         if sounding {
             (self.sr * 0.005).round().max(1.0) as u32
@@ -1066,10 +1099,11 @@ impl EngineCore {
         for i in 0..MAX_TRACKS {
             let has_chain = self.chains[i].as_ref().is_some_and(|c| !c.fx.is_empty());
             let has_pdc = self.pdc[i].as_ref().is_some_and(|p| !p.is_empty());
+            let to_bus = self.routes[i].output > 0;
             self.strip_kind[i] = if self.routes[i].bus_in > 0 {
                 self.aux.push(i as u16);
                 2
-            } else if has_chain || has_pdc || self.routes[i].has_sends() {
+            } else if has_chain || has_pdc || to_bus || self.routes[i].has_sends() {
                 self.complex.push(i as u16);
                 1
             } else {
@@ -1177,8 +1211,58 @@ impl EngineCore {
             None => (yl, yr),
         };
         if audible {
-            out.0 += yl;
-            out.1 += yr;
+            if route.output > 0 {
+                self.bus_l[route.output as usize - 1] += yl;
+                self.bus_r[route.output as usize - 1] += yr;
+            } else {
+                out.0 += yl;
+                out.1 += yr;
+            }
+        }
+    }
+
+    /// One frame of a count-in: a click on each beat, then the transport starts.
+    fn tick_count_in(&mut self) {
+        if self.count_wait == 0 {
+            if self.count_left == 0 {
+                self.counting = false;
+                self.start_beat = self.beat;
+                self.playing = true;
+                self.mtc_locate();
+                return;
+            }
+            self.click_remaining = (0.03 * self.sr) as u32;
+            self.click_phase = 0.0;
+            self.click_freq = 1000.0;
+            self.count_left -= 1;
+            self.count_wait = self.count_step;
+        }
+        self.count_wait -= 1;
+    }
+
+    /// One frame of the live input into the strips of the tracks that monitor it.
+    fn hear_input(&mut self) {
+        let Some(feed) = self.input.as_mut() else {
+            return;
+        };
+        feed.advance();
+        for m in &self.monitors[..self.monitor_count] {
+            let t = m.track as usize;
+            if t >= MAX_TRACKS || !self.track_audible[t] {
+                continue;
+            }
+            let l = feed.value(m.channel as usize);
+            let r = if m.stereo {
+                feed.value(m.channel as usize + 1)
+            } else {
+                l
+            };
+            self.in_l[t] += l as f64;
+            self.in_r[t] += r as f64;
+            if !self.touched[t] {
+                self.touched[t] = true;
+                self.dirty.push(t as u16);
+            }
         }
     }
 
@@ -1226,7 +1310,39 @@ impl EngineCore {
             }
             let Ok(cmd) = self.rx.pop() else { break };
             match cmd {
+                Command::CountIn {
+                    clicks,
+                    beats_per_click,
+                } => {
+                    if self.playing {
+                        continue;
+                    }
+                    let span = if beats_per_click.is_finite() && beats_per_click > 0.0 {
+                        self.tempo_map.seconds_at(self.beat + beats_per_click)
+                            - self.tempo_map.seconds_at(self.beat)
+                    } else {
+                        0.0
+                    };
+                    self.count_step = ((span * self.sr as f64).round() as u32).max(1);
+                    self.count_left = clicks;
+                    self.count_wait = 0;
+                    self.counting = true;
+                }
+                Command::SetInput(feed) => {
+                    let mut feed = feed;
+                    if let Some(f) = feed.as_mut() {
+                        f.set_output_rate(self.sr);
+                    }
+                    if let Some(old) = std::mem::replace(&mut self.input, feed) {
+                        let _ = self.trash.push(Garbage::Input(old));
+                    }
+                }
+                Command::SetMonitors { tracks, count } => {
+                    self.monitors = tracks;
+                    self.monitor_count = (count as usize).min(MAX_MONITORS);
+                }
                 Command::Play => {
+                    self.counting = false;
                     if !self.playing {
                         self.start_beat = self.beat;
                     }
@@ -1234,11 +1350,13 @@ impl EngineCore {
                     self.mtc_locate();
                 }
                 Command::Pause => {
+                    self.counting = false;
                     self.playing = false;
                     self.kill_voices();
                     self.mtc_locate();
                 }
                 Command::Stop => {
+                    self.counting = false;
                     self.playing = false;
                     let b = self.start_beat;
                     self.seek(b);
@@ -1543,8 +1661,14 @@ impl EngineCore {
         }
         self.track_pk_l.fill(0.0);
         self.track_pk_r.fill(0.0);
+        if let Some(feed) = self.input.as_mut() {
+            feed.trim(self.monitor_count > 0);
+        }
 
         for frame in out.as_chunks_mut::<2>().0 {
+            if self.counting {
+                self.tick_count_in();
+            }
             let sample_beat = self.beat;
             // Advance once per track/sample, not once per voice or overlapping audio clip.
             if self.mix_ramp_remaining > 0 {
@@ -1603,6 +1727,9 @@ impl EngineCore {
             }
             if !self.ext_notes.is_empty() {
                 self.release_ext_notes(false);
+            }
+            if self.monitor_count > 0 {
+                self.hear_input();
             }
             for v in self.voices.iter_mut().filter(|v| v.active) {
                 if v.live {
@@ -2138,6 +2265,109 @@ mod tests {
         let mut buf = vec![0.0f32; 24_000 * 2];
         e.process(&mut buf);
         assert!(buf.iter().all(|x| *x == 0.0));
+    }
+
+    #[test]
+    fn a_count_in_clicks_each_beat_then_plays_from_the_same_place() {
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx.push(Command::SetPosition { beat: 8.0 }).is_ok());
+        let (clicks, beats_per_click) = (2, 1.0);
+        let cmd = Command::CountIn {
+            clicks,
+            beats_per_click,
+        };
+        assert!(tx.push(cmd).is_ok());
+        // 120 BPM: 2 beats are 1 second at 48 kHz.
+        let mut buf = vec![0.0f32; 47_000 * 2];
+        assert_no_alloc::assert_no_alloc(|| e.process(&mut buf));
+        assert!(!e.playing && e.counting, "still counting");
+        assert_eq!(e.beat, 8.0, "the playhead waits");
+        assert!(buf[..960].iter().any(|x| x.abs() > 0.05), "first click");
+        let second = 24_000 * 2;
+        assert!(buf[second..second + 960].iter().any(|x| x.abs() > 0.05));
+        let mut more = vec![0.0f32; 2_000 * 2];
+        e.process(&mut more);
+        assert!(e.playing && !e.counting);
+        assert!(e.beat > 8.0 && e.beat < 8.1, "{}", e.beat);
+    }
+
+    #[test]
+    fn stopping_cancels_a_count_in() {
+        let (mut e, mut tx, _s) = rig();
+        let cmd = Command::CountIn {
+            clicks: 4,
+            beats_per_click: 1.0,
+        };
+        assert!(tx.push(cmd).is_ok());
+        let mut buf = vec![0.0f32; 256];
+        e.process(&mut buf);
+        assert!(tx.push(Command::Pause).is_ok());
+        e.process(&mut buf);
+        assert!(!e.counting && !e.playing);
+    }
+
+    #[test]
+    fn a_monitored_track_hears_its_input_through_its_strip() {
+        let (mut e, mut tx, mut s) = rig();
+        let song = Song::new(Vec::new(), vec![TrackMix::default(), TrackMix::default()]);
+        assert!(tx.push(Command::SetSong(Box::new(song))).is_ok());
+        let (mut input, rx) = rtrb::RingBuffer::new(8192);
+        let feed = InputFeed::new(rx, 2, 48_000);
+        assert!(tx.push(Command::SetInput(Some(Box::new(feed)))).is_ok());
+        let mut tracks = [MonitorTrack::default(); MAX_MONITORS];
+        tracks[0] = MonitorTrack {
+            track: 1,
+            channel: 1,
+            stereo: false,
+        };
+        assert!(tx.push(Command::SetMonitors { tracks, count: 1 }).is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        for _ in 0..256 {
+            assert!(input.push(0.0).is_ok());
+            assert!(input.push(0.25).is_ok());
+        }
+        assert_no_alloc::assert_no_alloc(|| e.process(&mut buf));
+        let loudest = buf.iter().fold(0f32, |m, x| m.max(x.abs()));
+        assert!(loudest > 0.1, "input 2 is heard: {loudest}");
+        assert!(s.read().track_peaks(1).0 > 0.2 && s.read().track_peaks(0).0 == 0.0);
+        // No more tracks listening: silence, and the input does not pile up.
+        assert!(tx.push(Command::SetMonitors { tracks, count: 0 }).is_ok());
+        for _ in 0..256 {
+            assert!(input.push(0.5).is_ok());
+        }
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| *x == 0.0));
+    }
+
+    #[test]
+    fn a_strip_with_a_bus_output_is_heard_only_through_that_bus() {
+        let play = |listen: bool| {
+            let (mut e, mut tx, _s) = rig();
+            let song = Song::new(
+                vec![note(0.0, 4.0)],
+                vec![TrackMix::default(), TrackMix::default()],
+            );
+            assert!(tx.push(Command::SetSong(Box::new(song))).is_ok());
+            let route = Route {
+                output: 2,
+                ..Route::default()
+            };
+            assert!(tx.push(Command::SetRoute { track: 0, route }).is_ok());
+            if listen {
+                let route = Route {
+                    bus_in: 2,
+                    ..Route::default()
+                };
+                assert!(tx.push(Command::SetRoute { track: 1, route }).is_ok());
+            }
+            assert!(tx.push(Command::Play).is_ok());
+            let mut buf = vec![0.0f32; 9_600];
+            e.process(&mut buf);
+            buf.iter().fold(0f32, |m, x| m.max(x.abs()))
+        };
+        assert!(play(false) < 1e-6, "nothing listens to the bus");
+        assert!(play(true) > 0.01, "the Aux plays it");
     }
 
     #[test]
