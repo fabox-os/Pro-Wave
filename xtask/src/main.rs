@@ -6,7 +6,9 @@
 //! - `rt-check`: the no-allocation tests for the audio thread (debug build, assert_no_alloc)
 //! - `bench`: release build checked against the lightweight targets (startup, memory, binary
 //!   size, 24-track DSP load); see bench.rs
+//! - `status`: counts the working menu entries and roadmap items for the README; see status.rs
 mod bench;
+mod status;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -262,8 +264,15 @@ fn main() -> ExitCode {
         "wasm-check" => wasm_steps().iter().all(run),
         "rt-check" => run(&rt_step()),
         "bench" => bench::bench(&root()),
+        "status" => match status::run(&root()) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("xtask status: {e}");
+                false
+            }
+        },
         _ => {
-            eprintln!("usage: cargo xtask <check|wasm-check|rt-check|bench>");
+            eprintln!("usage: cargo xtask <check|wasm-check|rt-check|bench|status>");
             false
         }
     };

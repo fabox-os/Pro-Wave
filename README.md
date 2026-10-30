@@ -4,9 +4,9 @@
 workflow modelled on Apple's Logic Pro. It is drawn entirely with [egui](https://github.com/emilk/egui)
 and plays audio through [cpal](https://github.com/RustAudio/cpal): no Electron, no JUCE.
 
-> **Status:** early development. Tracks, MIDI and audio regions, the Piano Roll, the Mixer, the
-> Library and the built-in synthesizer work; recording, undo/redo, effects processing and most
-> of Logic's instruments are still to come. [`ROADMAP.md`](ROADMAP.md) has the full plan and
+> **Status:** early development. Tracks, MIDI and audio regions, MIDI and audio recording, the
+> Piano Roll, the Mixer with effects and automation, the Library and the built-in synthesizer
+> work; most of Logic's instruments and many editing commands are still to come. [`ROADMAP.md`](ROADMAP.md) has the full plan and
 > [`resume.md`](resume.md) a detailed status of what works today.
 
 ![Pro Wave: Tracks area with MIDI and audio regions, the Library, inspector and Mixer](docs/screenshots/tracks-and-mixer.webp)
@@ -25,6 +25,21 @@ and plays audio through [cpal](https://github.com/RustAudio/cpal): no Electron, 
 ProWave is an independent project. It is not affiliated with, sponsored by or endorsed by Apple
 Inc. Logic Pro is a trademark of Apple Inc., used here only to describe the workflow ProWave
 follows. ProWave contains no Apple code, artwork or sounds.
+
+## Status
+
+How much of the app works today, counted from the source: a menu entry is done when it can be
+used, and a roadmap item when it is ticked in [`ROADMAP.md`](ROADMAP.md). Run `cargo xtask status`
+to update this section.
+
+<!-- status:start (made by `cargo xtask status`) -->
+![Pro Wave status: menu entries and roadmap items, done and to do](docs/status.svg)
+
+| | Done | Started | Total | Done % |
+| --- | ---: | ---: | ---: | ---: |
+| Menu entries | 62 | 0 | 176 | 35.23% |
+| Roadmap items | 13 | 5 | 58 | 22.41% |
+<!-- status:end -->
 
 ## What works
 
