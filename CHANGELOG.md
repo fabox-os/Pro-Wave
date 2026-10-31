@@ -3,6 +3,24 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## 0.2.1
+
+### All systems (Windows, macOS, Linux)
+
+✅ **More audio formats:** Pro Wave now opens Ogg Vorbis (`.ogg`, `.oga`), M4A and MP4 (AAC and ALAC) files, and ADPCM audio, besides WAV, AIFF, FLAC, MP3 and CAF.
+✅ **Recording tells you when the input fails:** if the microphone or audio interface is unplugged or taken away by the system while you record, the take now says "Part of the recording was lost" instead of ending quietly.
+
+### Linux
+
+✅ **Graphics problems at launch:** when the window can't be drawn, Pro Wave now tries up to three more ways by itself before giving up: Vulkan, then the X11 window system when running under Wayland, then software OpenGL. This is for NVIDIA cards (reported on Ubuntu 26.04 with an RTX 5060) and other machines where OpenGL starts but can't draw to the window.
+✅ **Wayland:** the window now has the same name as its menu entry (`prowave-studio`, or the Flatpak's own name inside a Flatpak), so the desktop shows Pro Wave's icon and groups its windows.
+
+### Still to do or test
+
+❌ Linux: the graphics fallbacks are written but not yet confirmed by a tester with an NVIDIA card; audio recording and sound on real Linux and macOS hardware
+❌ Audio recording: cycle takes, punch in and out, amp and pedal effects for guitar and bass
+❌ Apple Loops: reading their tags and tempo (the audio formats they use now open)
+
 ## 0.2.0
 
 ### All systems (Windows, macOS, Linux)

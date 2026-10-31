@@ -948,6 +948,16 @@ fn shot_mixer_scene(app: &mut App, kind: &str) {
     }
 }
 
+/// The window's class (Wayland: its app id). Wayland desktops find the icon and the menu entry
+/// by the `.desktop` file's name, which is `prowave-studio` for the packages and the Flatpak's
+/// own id inside a Flatpak, so the class is the same; X11 desktops use `StartupWMClass`.
+fn window_app_id() -> String {
+    std::env::var("FLATPAK_ID")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "prowave-studio".to_string())
+}
+
 fn main() -> eframe::Result {
     bench::mark_start();
     // Started by an update that is waiting for the program to close: put the update in place.
@@ -979,7 +989,7 @@ fn main() -> eframe::Result {
         // Just the app name, on every system: no project name or view in the title bar.
         .with_title("Pro Wave")
         // Window class: lets Linux desktops match the window to its .desktop entry and icon.
-        .with_app_id("prowave")
+        .with_app_id(window_app_id())
         // Windows and Linux: no title bar from the system; the menu bar row has the window
         // buttons (see window_chrome.rs).
         .with_decorations(!window_chrome::CUSTOM);
@@ -1201,15 +1211,24 @@ fn main() -> eframe::Result {
     // The app (and with it the engine's open media files) is gone by now.
     project_io::remove_session_media();
     // OpenGL can't draw to this window: the app never started, so try the system's own API.
-    if let Some(backend) = result
-        .as_ref()
-        .err()
-        .and_then(|e| graphics::relaunch_backend(started_backends, e))
-    {
-        tracing::warn!("OpenGL can't draw to this window; relaunching with {backend}");
-        match graphics::relaunch(backend) {
+    let step = std::env::var(graphics::STEP_VAR)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty());
+    if let Some(how) = result.as_ref().err().and_then(|e| {
+        graphics::next_relaunch(
+            step,
+            started_backends,
+            e,
+            wayland,
+            cfg!(target_os = "linux"),
+        )
+    }) {
+        tracing::warn!("the window could not be drawn; relaunching ({how:?})");
+        match graphics::relaunch(&how) {
             Ok(code) => std::process::exit(code),
-            Err(e) => tracing::error!("could not relaunch with {backend}: {e}"),
+            Err(e) => tracing::error!("could not relaunch: {e}"),
         }
     }
     if let (Some(out), Err(e)) = (&bench_out, &result) {

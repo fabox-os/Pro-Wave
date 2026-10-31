@@ -304,8 +304,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.
   - CI: `.github/workflows/ci.yml` runs `cargo xtask check` on Ubuntu, Windows and macOS (plus the
-    cross-target builds) on every push to `main`. Checked 2026-10-30: Windows and all release
-    builds pass; `xtask check` fails on Ubuntu and macOS.
+    cross-target builds) on every push to `main`. Checked 2026-10-31: green on all three systems.
   - Linux: x86_64 release binary cross-builds from Windows (Zig + `cargo-zigbuild`, glibc 2.31+) and is packaged in `dist/prowave-linux-x86_64.tar.gz` with a full user README; audio thread asks for real-time priority (cpal `realtime`); window class set for desktop integration. Audio start falls back across devices/sample formats; the unsaved-changes prompt is in-app (no zenity); clippy `-D warnings` + test compilation pass for the Linux target; real DT_NEEDED is only libasound + libc. The release workflow ran on GitHub (v0.1.1) and the packaged binary stays up for 15 s under a virtual X display with software OpenGL (tarball and AppImage), but it has not been run on real Linux hardware: no audio device or GPU has been tried.
   - macOS: cannot be built on Windows (needs Apple's SDK). `.github/workflows/release.yml` builds a universal ad-hoc-signed `.app` on GitHub's macOS runner (built successfully for v0.1.1; never launched on a Mac).
   - Release packages (v0.1.1, all built and install-checked on GitHub): Linux tarball, `.deb` (installed and removed on Ubuntu), `.rpm` (installed and removed in a Fedora 41 container), AppImage, Flatpak bundle, macOS `.app`. They are workflow artifacts, not yet published as a GitHub Release.
@@ -357,7 +356,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [x] Project file `.prowave`: zip with `project.json`, `media/` (JSON instead of rkyv, so older
   files keep opening; no `bounces/` until Bounce exists). Open, Save, Save As, Save A Copy As and
   Revert to Saved work
-- [~] Audio recording (2026-10-30): input device and channel per track (mono or stereo pair, the
+- [~] Audio recording (2026-10-30; a failing input device marks the take as lost, 2026-10-31): input device and channel per track (mono or stereo pair, the
   mixer's Input slot), R arms and the meter shows the input, several tracks at once, red region
   while recording, files saved in the project, lined up by the delay the system reports. Input
   capture is `capture.rs`: lock-free ring, writer thread, 32-bit float WAV that stays readable
@@ -437,8 +436,9 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [ ] Loop Browser: Apple Loops metadata parsing (key, tempo, style), drag-drop with auto tempo/key adaptation, All Files Browser
   - Started (2026-10-30): Loop Browser and All Files panes list a folder and add a file on
     double-click. No Apple Loops tags or tempo matching yet.
-  - Needs first: ALAC and AAC decoding of `.caf` (`symphonia` has neither enabled, so real loops
-    probably fail to open today)
+  - Done (2026-10-31): ALAC and AAC decoding are enabled (with Ogg Vorbis, M4A/MP4 and ADPCM),
+    so the audio inside Apple Loops should open. Tried only with test files, not with real
+    Apple Loops.
 - [ ] Video Track: Movie Track with filmstrip, SMPTE, Detect Cuts, Export Audio to Movie
 - **DoD:** 5 Logic users can do basic tracking/mixing without manual
 
@@ -455,8 +455,10 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [x] Packages: tarball, `.deb`, `.rpm`, AppImage and Flatpak, install-checked in the release workflow
 - [x] Starts under a virtual display with software OpenGL in the release workflow
 - [x] Audio thread asks for real-time priority
-- [~] Runs on real machines: testers use it on Ubuntu. The Vulkan fallback for NVIDIA on Wayland is written but not confirmed by the tester who reported the crash
-- [ ] `cargo xtask check` passes in CI (failing on Ubuntu since 0.1.9)
+- [~] Runs on real machines: testers use it on Ubuntu. The graphics fallbacks for NVIDIA (Vulkan, then X11 under Wayland, then software OpenGL) are written but not confirmed by the tester who reported the crash
+- [x] Wayland: the window's app id matches the menu entry (`prowave-studio`, the Flatpak id in a Flatpak)
+- [x] Opens Ogg Vorbis, M4A/MP4 (AAC, ALAC) and ADPCM files besides WAV, AIFF, FLAC, MP3 and CAF
+- [x] `cargo xtask check` passes in CI (checked 2026-10-31)
 - [ ] Sound and audio recording confirmed on real hardware
 - [ ] Output latency measured against the roadmap target
 - [ ] Native PipeWire and JACK back-ends
@@ -465,7 +467,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [x] Universal `.app` release build in CI (Apple Silicon and Intel), ad-hoc signed
 - [x] Microphone permission text in the app bundle
 - [~] Menus in the system menu bar: written, never tried on a Mac
-- [ ] `cargo xtask check` passes in CI (failing on macOS since 0.1.9)
+- [x] `cargo xtask check` passes in CI (checked 2026-10-31)
 - [ ] Launched on a real Mac
 - [ ] Sound and audio recording confirmed through CoreAudio
 - [ ] Output latency measured against the roadmap target

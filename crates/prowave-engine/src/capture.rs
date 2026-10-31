@@ -20,7 +20,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -143,6 +143,8 @@ struct Shared {
     overruns: AtomicU64,
     /// Glitches the device reported. The stream goes on, so a recording does too.
     xruns: AtomicU64,
+    /// The device failed (unplugged, or the system took it away): nothing more arrives.
+    failed: AtomicBool,
     /// Delay from the converter to the callback, as the system reports it.
     latency_us: AtomicU32,
     /// Peak of each channel since the last [`Capture::take_peaks`] (an `f32` as bits; for
@@ -156,6 +158,7 @@ impl Shared {
             frames_pushed: AtomicU64::new(0),
             overruns: AtomicU64::new(0),
             xruns: AtomicU64::new(0),
+            failed: AtomicBool::new(false),
             latency_us: AtomicU32::new(0),
             peaks: std::array::from_fn(|_| AtomicU32::new(0)),
         }
@@ -383,6 +386,12 @@ fn writer_loop(
         if overruns != overruns_seen {
             // Audio is missing from the ring: the running files are shorter than the take.
             overruns_seen = overruns;
+            for (_, rec) in &mut recs {
+                rec.lost = true;
+            }
+        }
+        if shared.failed.load(Ordering::Relaxed) {
+            // The input stopped for good: the running files end short of the take.
             for (_, rec) in &mut recs {
                 rec.lost = true;
             }
@@ -765,7 +774,10 @@ where
                 ErrorKind::Xrun => {
                     err_shared.xruns.fetch_add(1, Ordering::Relaxed);
                 }
-                _ => tracing::error!("audio input error: {err}"),
+                _ => {
+                    err_shared.failed.store(true, Ordering::Relaxed);
+                    tracing::error!("audio input error: {err}");
+                }
             },
             None,
         )
@@ -920,6 +932,21 @@ mod tests {
         let done = cap.stop(id).unwrap();
         assert_eq!(done.frames, 200, "the take keeps going");
         assert!(done.lost, "and says that it has a gap");
+    }
+
+    #[test]
+    fn a_device_that_fails_marks_the_recording_as_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unplugged.wav");
+        let (mut cap, mut tx, shared) = fake(1, 48_000);
+        let id = cap.start(&path, InputSource::Mono(0), 0).unwrap();
+        push(&ramp(0, 100, 1), 1, &mut tx, &shared);
+        settle();
+        shared.failed.store(true, Ordering::Relaxed);
+        settle();
+        let done = cap.stop(id).unwrap();
+        assert_eq!(done.frames, 100, "what arrived is kept");
+        assert!(done.lost, "and the take says it is cut short");
     }
 
     #[test]

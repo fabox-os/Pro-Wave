@@ -9,7 +9,8 @@
 //! - a real GPU is preferred over a software renderer;
 //! - OpenGL can pass that check and still be unable to draw to the window, which only shows once
 //!   the window exists (NVIDIA on Wayland, it seems). The window system can't be started twice
-//!   in one process, so Pro Wave then relaunches itself on the system's own API.
+//!   in one process, so Pro Wave then relaunches itself on the system's own API, and on Linux,
+//!   if that fails too, on X11 (under Wayland) and then on software OpenGL ([`next_relaunch`]).
 //!
 //! `WGPU_BACKEND` (`gl`, `dx12`, `vulkan`, `metal`) overrides the choice, for troubleshooting.
 use eframe::egui_wgpu::{WgpuConfiguration, WgpuError, WgpuSetup, WgpuSetupCreateNew};
@@ -24,17 +25,6 @@ fn native() -> wgpu::Backends {
         wgpu::Backends::DX12
     } else {
         wgpu::Backends::VULKAN
-    }
-}
-
-/// The `WGPU_BACKEND` value for [`native`].
-fn native_name() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "metal"
-    } else if cfg!(windows) {
-        "dx12"
-    } else {
-        "vulkan"
     }
 }
 
@@ -132,24 +122,77 @@ pub fn started_backends(config: &WgpuConfiguration) -> wgpu::Backends {
     }
 }
 
-/// The `WGPU_BACKEND` value to relaunch with after `error`: only when [`pick`] turned down
-/// OpenGL alone, so the system's own API has not been tried. `pick` isn't used once
-/// `WGPU_BACKEND` is set, so the relaunched program can't relaunch again.
-pub fn relaunch_backend(started: wgpu::Backends, error: &eframe::Error) -> Option<&'static str> {
+/// A new run of Pro Wave with another way of reaching the screen.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Relaunch {
+    /// How many relaunches this run is, passed on in [`STEP_VAR`].
+    pub step: u8,
+    pub set: &'static [(&'static str, &'static str)],
+    pub remove: &'static [&'static str],
+}
+
+/// Counts the relaunches, so each way is tried once and the chain ends.
+pub const STEP_VAR: &str = "PROWAVE_GRAPHICS_STEP";
+
+/// What to try after `error` stopped the window from opening, `step` relaunches in:
+///
+/// 1. OpenGL was refused alone: the system's own API (Vulkan on Linux);
+/// 2. on Linux under Wayland: the X11 window system (XWayland), where NVIDIA's drivers are
+///    the most tested, with Pro Wave choosing the API again;
+/// 3. on Linux: software OpenGL, slow but it draws on any machine.
+///
+/// A `WGPU_BACKEND` set by the user is theirs: no step 1 then.
+pub fn next_relaunch(
+    step: u8,
+    started: wgpu::Backends,
+    error: &eframe::Error,
+    wayland: bool,
+    linux: bool,
+) -> Option<Relaunch> {
+    let wgpu_error = matches!(error, eframe::Error::Wgpu(_));
     let rejected = matches!(
         error,
         eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError(_))
     );
-    (rejected && started == wgpu::Backends::GL).then(native_name)
+    match step {
+        0 if rejected && started == wgpu::Backends::GL => Some(Relaunch {
+            step: 1,
+            set: if cfg!(target_os = "macos") {
+                &[("WGPU_BACKEND", "metal")]
+            } else if cfg!(windows) {
+                &[("WGPU_BACKEND", "dx12")]
+            } else {
+                &[("WGPU_BACKEND", "vulkan")]
+            },
+            remove: &[],
+        }),
+        1 if linux && wgpu_error && wayland => Some(Relaunch {
+            step: 2,
+            set: &[],
+            remove: &["WAYLAND_DISPLAY", "WGPU_BACKEND"],
+        }),
+        1 | 2 if linux && wgpu_error => Some(Relaunch {
+            step: 3,
+            set: &[("WGPU_BACKEND", "gl"), ("LIBGL_ALWAYS_SOFTWARE", "1")],
+            remove: &[],
+        }),
+        _ => None,
+    }
 }
 
-/// Replaces this program with a new run on `backend`, with the same arguments. Returns the exit
-/// code to leave with, if the new run was started in a way that needs waiting for.
-pub fn relaunch(backend: &str) -> std::io::Result<i32> {
+/// Replaces this program with a new run as `how` says, with the same arguments. Returns the
+/// exit code to leave with, if the new run was started in a way that needs waiting for.
+pub fn relaunch(how: &Relaunch) -> std::io::Result<i32> {
     let mut command = std::process::Command::new(std::env::current_exe()?);
     command
         .args(std::env::args_os().skip(1))
-        .env("WGPU_BACKEND", backend);
+        .env(STEP_VAR, how.step.to_string());
+    for (name, value) in how.set {
+        command.env(name, value);
+    }
+    for name in how.remove {
+        command.env_remove(name);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -197,31 +240,59 @@ mod tests {
         }
     }
 
-    #[test]
-    fn opengl_that_cannot_draw_relaunches_on_the_system_api() {
-        let rejected = || {
-            eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError(
-                "no graphics adapter can draw to this window".to_string(),
-            ))
-        };
-        assert_eq!(
-            relaunch_backend(wgpu::Backends::GL, &rejected()),
-            Some(native_name())
-        );
-        assert_eq!(wgpu::Backends::from_comma_list(native_name()), native());
+    fn rejected() -> eframe::Error {
+        eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError(
+            "no graphics adapter can draw to this window".to_string(),
+        ))
     }
 
     #[test]
-    fn no_relaunch_once_the_system_api_was_tried_or_for_other_errors() {
-        let rejected =
-            eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError(String::new()));
+    fn opengl_that_cannot_draw_relaunches_on_the_system_api() {
+        let how = next_relaunch(0, wgpu::Backends::GL, &rejected(), true, true).unwrap();
+        assert_eq!(how.step, 1);
+        assert_eq!(how.set[0].0, "WGPU_BACKEND");
         assert_eq!(
-            relaunch_backend(native() | wgpu::Backends::GL, &rejected),
+            wgpu::Backends::from_comma_list(how.set[0].1),
+            native(),
+            "the value names the system's API"
+        );
+    }
+
+    #[test]
+    fn no_first_relaunch_once_the_system_api_was_tried_or_for_other_errors() {
+        let all = native() | wgpu::Backends::GL;
+        assert_eq!(next_relaunch(0, all, &rejected(), true, true), None);
+        assert_eq!(next_relaunch(0, native(), &rejected(), true, true), None);
+        let other = eframe::Error::Wgpu(WgpuError::NoSurfaceFormatsAvailable);
+        assert_eq!(
+            next_relaunch(0, wgpu::Backends::GL, &other, true, true),
             None
         );
-        assert_eq!(relaunch_backend(native(), &rejected), None);
-        let other = eframe::Error::Wgpu(WgpuError::NoSurfaceFormatsAvailable);
-        assert_eq!(relaunch_backend(wgpu::Backends::GL, &other), None);
+    }
+
+    #[test]
+    fn linux_under_wayland_then_tries_x11_and_then_software_opengl() {
+        let gl = wgpu::Backends::GL;
+        let x11 = next_relaunch(1, gl, &rejected(), true, true).unwrap();
+        assert_eq!(x11.step, 2);
+        assert!(x11.remove.contains(&"WAYLAND_DISPLAY"));
+        assert!(x11.remove.contains(&"WGPU_BACKEND"));
+        let soft = next_relaunch(2, gl, &rejected(), true, true).unwrap();
+        assert_eq!(soft.step, 3);
+        assert!(soft.set.contains(&("LIBGL_ALWAYS_SOFTWARE", "1")));
+        assert_eq!(next_relaunch(3, gl, &rejected(), true, true), None);
+    }
+
+    #[test]
+    fn without_wayland_the_system_api_failing_goes_straight_to_software() {
+        let soft = next_relaunch(1, wgpu::Backends::GL, &rejected(), false, true).unwrap();
+        assert_eq!(soft.step, 3);
+    }
+
+    #[test]
+    fn only_linux_goes_past_the_first_relaunch() {
+        let none = next_relaunch(1, wgpu::Backends::GL, &rejected(), true, false);
+        assert_eq!(none, None);
     }
 
     #[test]

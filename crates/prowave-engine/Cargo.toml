@@ -11,7 +11,7 @@ default = []
 asio = ["cpal/asio"]
 
 [dependencies]
-symphonia = { version = "0.5", default-features = false, features = ["wav", "aiff", "pcm", "flac", "mp3", "caf"] }
+symphonia = { version = "0.5", default-features = false, features = ["wav", "aiff", "pcm", "flac", "mp3", "caf", "ogg", "vorbis", "isomp4", "aac", "alac", "adpcm"] }
 cpal = "0.18.2"
 rtrb = "0.4.0"
 tracing = "0.1.44"

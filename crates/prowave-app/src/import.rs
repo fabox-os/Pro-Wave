@@ -10,7 +10,18 @@ pub fn is_audio_path(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
         matches!(
             e.to_ascii_lowercase().as_str(),
-            "wav" | "wave" | "aif" | "aiff" | "aifc" | "flac" | "mp3" | "caf"
+            "wav"
+                | "wave"
+                | "aif"
+                | "aiff"
+                | "aifc"
+                | "flac"
+                | "mp3"
+                | "caf"
+                | "ogg"
+                | "oga"
+                | "m4a"
+                | "mp4"
         )
     })
 }

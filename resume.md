@@ -205,8 +205,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 
 - **Latency on Windows:** ~32 ms with WASAPI shared mode; the roadmap target (<20 ms / <10 ms)
   needs ASIO (cpal `asio` feature), not wired yet.
-- **CI** runs on every push to `main`. Windows and all release builds pass; `cargo xtask check`
-  fails on Ubuntu and macOS.
+- **CI** runs on every push to `main` (Ubuntu, Windows, macOS) and is green.
 - **macOS:** the app compiles and bundles on GitHub's macOS runner (universal `.app`), but it
   has never been launched on a Mac, so Mac-only problems (Metal, CoreAudio, menus, Cmd
   shortcuts) are untested.
