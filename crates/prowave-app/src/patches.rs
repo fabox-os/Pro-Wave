@@ -364,7 +364,7 @@ fn by_category(category: &str, name: &str) -> SynthPatch {
         "Bass" => bass(),
         "Drum Kit" | "Percussion" => kit(Kit::Acoustic),
         "Electronic Drum Kit" => kit(Kit::Electronic),
-        "Guitar" | "World" => pluck(),
+        "Guitar" | "Guitar Amp" | "World" => pluck(),
         "Keyboards" | "Vintage Electric Piano" => electric_piano(),
         "Mallet" => mallet(),
         "Orchestral" | "Studio Strings" => strings(),

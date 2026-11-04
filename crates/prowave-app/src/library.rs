@@ -90,6 +90,19 @@ pub static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        name: "Guitar Amp",
+        instrument: Some("Sampler"),
+        fx: &["Amp Designer", "Channel EQ", "Space D"],
+        patches: &[
+            "British Crunch",
+            "Clean Combo",
+            "Plexi Lead",
+            "Studio Clean",
+            "Surf Combo",
+            "Tweed Drive",
+        ],
+    },
+    Category {
         name: "Keyboards",
         instrument: Some("E-Piano"),
         fx: KEYS_FX,
@@ -676,6 +689,19 @@ mod tests {
         assert_eq!((t.name.clone(), t.instrument, t.inserts.clone()), before);
         assert_eq!(t.category, None);
         assert!(v.loaded.is_none());
+    }
+
+    #[test]
+    fn the_guitar_amp_patches_put_the_amp_on_the_track() {
+        let mut p = Project::demo();
+        p.selected_track = 0;
+        let mut v = LibraryView::default();
+        load_patch(&mut p, &mut v, category("Guitar Amp"), 0);
+        assert_eq!(p.tracks[0].category, Some("Guitar Amp"));
+        assert!(p.tracks[0]
+            .inserts
+            .iter()
+            .any(|i| i.kind == prowave_engine::FxKind::Amp));
     }
 
     #[test]

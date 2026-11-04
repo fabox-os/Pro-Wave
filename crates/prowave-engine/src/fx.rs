@@ -27,6 +27,7 @@ pub enum FxKind {
     Gate,
     Limiter,
     MultiEq,
+    Amp,
 }
 
 /// One parameter of an effect.
@@ -156,6 +157,184 @@ const LIMIT_PARAMS: [ParamInfo; 3] = [
     p("Ceiling", -12.0, 0.0, -0.3, "dB"),
     pl("Release", 10.0, 1000.0, 100.0, "ms"),
 ];
+const AMP_PARAMS: [ParamInfo; 9] = [
+    p("Amp", 0.0, 4.0, 0.0, ""),
+    p("Gain", 0.0, 40.0, 12.0, "dB"),
+    p("Bass", -12.0, 12.0, 0.0, "dB"),
+    p("Mid", -12.0, 12.0, 0.0, "dB"),
+    p("Treble", -12.0, 12.0, 0.0, "dB"),
+    p("Presence", 0.0, 10.0, 5.0, ""),
+    p("Master", -24.0, 6.0, -6.0, "dB"),
+    p("Cabinet", 0.0, 3.0, 0.0, ""),
+    p("Mic", 0.0, 1.0, 0.5, ""),
+];
+
+/// The amp models, in the order of the "Amp" parameter (Logic's Amp Designer has a list of
+/// amplifier models; these are Pro Wave's own).
+pub const AMP_MODELS: [&str; 5] = [
+    "Clean Combo",
+    "Tweed",
+    "British Crunch",
+    "Plexi Lead",
+    "Bass Amp",
+];
+
+/// The speaker cabinets, in the order of the "Cabinet" parameter ("Off" is a direct signal).
+pub const AMP_CABS: [&str; 4] = ["1x12 Combo", "4x12 British", "4x10 Bass", "Off"];
+
+/// What makes one amplifier model sound like itself: its gain structure, the filters around
+/// the valves and the centres of its tone stack.
+struct AmpModel {
+    /// Input sensitivity: how hard the first valve is driven at 0 dB of Gain.
+    input: f32,
+    /// Trim of each of the four gain stages (each also gets a quarter of the Gain knob).
+    stages: [f32; 4],
+    /// Grid bias of every stage: the asymmetry that makes the even harmonics.
+    bias: f32,
+    /// Input high-pass (Hz): rumble and handling noise.
+    input_hp: f32,
+    /// Low-pass before the valves (Hz): the amp's own loss of the very top.
+    pre_lp: f32,
+    /// Inter-stage coupling capacitors (Hz): the bass does not build up in the chain.
+    coupling_hz: f32,
+    bass_hz: f32,
+    mid_hz: f32,
+    mid_q: f32,
+    treble_hz: f32,
+    presence_hz: f32,
+    /// How strongly Presence acts (1.0 = ±6 dB).
+    presence_amt: f32,
+    /// Makes up the quietness of the gain structure, in dB.
+    level_db: f32,
+}
+
+static AMP_VOICES: [AmpModel; 5] = [
+    AmpModel {
+        input: 1.0,
+        stages: [1.0, 0.9, 0.8, 0.7],
+        bias: 0.05,
+        input_hp: 55.0,
+        pre_lp: 8_000.0,
+        coupling_hz: 90.0,
+        bass_hz: 110.0,
+        mid_hz: 650.0,
+        mid_q: 0.8,
+        treble_hz: 3_000.0,
+        presence_hz: 4_500.0,
+        presence_amt: 0.6,
+        level_db: 6.0,
+    },
+    AmpModel {
+        input: 1.2,
+        stages: [1.0, 0.85, 0.7, 0.6],
+        bias: 0.12,
+        input_hp: 50.0,
+        pre_lp: 7_200.0,
+        coupling_hz: 75.0,
+        bass_hz: 120.0,
+        mid_hz: 500.0,
+        mid_q: 0.9,
+        treble_hz: 3_100.0,
+        presence_hz: 4_200.0,
+        presence_amt: 0.7,
+        level_db: 7.0,
+    },
+    AmpModel {
+        input: 1.6,
+        stages: [1.0, 0.8, 0.65, 0.55],
+        bias: 0.1,
+        input_hp: 60.0,
+        pre_lp: 7_000.0,
+        coupling_hz: 65.0,
+        bass_hz: 100.0,
+        mid_hz: 800.0,
+        mid_q: 1.2,
+        treble_hz: 3_300.0,
+        presence_hz: 5_200.0,
+        presence_amt: 1.0,
+        level_db: 6.0,
+    },
+    AmpModel {
+        input: 2.2,
+        stages: [1.0, 0.8, 0.6, 0.5],
+        bias: 0.16,
+        input_hp: 65.0,
+        pre_lp: 6_800.0,
+        coupling_hz: 55.0,
+        bass_hz: 90.0,
+        mid_hz: 900.0,
+        mid_q: 1.3,
+        treble_hz: 3_500.0,
+        presence_hz: 6_000.0,
+        presence_amt: 1.2,
+        level_db: 6.0,
+    },
+    AmpModel {
+        input: 1.1,
+        stages: [1.0, 0.9, 0.8, 0.7],
+        bias: 0.08,
+        input_hp: 35.0,
+        pre_lp: 6_000.0,
+        coupling_hz: 40.0,
+        bass_hz: 80.0,
+        mid_hz: 550.0,
+        mid_q: 0.7,
+        treble_hz: 2_600.0,
+        presence_hz: 3_000.0,
+        presence_amt: 0.4,
+        level_db: 5.0,
+    },
+];
+
+/// The colour of a speaker cabinet: its low cut, two resonances and two low-passes.
+struct CabVoice {
+    hp: f32,
+    /// (frequency, gain, Q) of each resonance.
+    peak1: [f32; 3],
+    peak2: [f32; 3],
+    lp1: f32,
+    lp2: f32,
+}
+
+static AMP_CAB_VOICES: [CabVoice; 3] = [
+    CabVoice {
+        hp: 95.0,
+        peak1: [120.0, 3.0, 1.2],
+        peak2: [2_600.0, 2.5, 0.9],
+        lp1: 5_200.0,
+        lp2: 7_500.0,
+    },
+    CabVoice {
+        hp: 80.0,
+        peak1: [110.0, 4.0, 1.1],
+        peak2: [2_200.0, 3.0, 1.0],
+        lp1: 4_700.0,
+        lp2: 6_800.0,
+    },
+    CabVoice {
+        hp: 40.0,
+        peak1: [90.0, 2.5, 1.0],
+        peak2: [1_800.0, 2.0, 0.8],
+        lp1: 4_200.0,
+        lp2: 6_000.0,
+    },
+];
+
+/// One side of the 31-tap half-band filter that doubles the sample rate around the valves
+/// (Kaiser window, 8 stops at the base rate, about 45 dB down from 6 kHz). The taps are
+/// symmetric, so only one side is stored; the centre is the flat half.
+const HB_SIDE: [f32; 8] = [
+    0.313_045_53,
+    -0.091_224_81,
+    0.041_536_7,
+    -0.019_227_64,
+    0.008_020_324,
+    -0.002_734_441,
+    0.000_642_254,
+    -0.000_049_63,
+];
+const HB_CENTRE: f32 = 0.499_983_4;
+
 const MULTI_PARAMS: [ParamInfo; 16] = [
     pl("Low Freq", 30.0, 400.0, 80.0, "Hz"),
     p("Low Gain", -18.0, 18.0, 0.0, "dB"),
@@ -184,7 +363,7 @@ fn limiter_len(sr: f32) -> usize {
 }
 
 impl FxKind {
-    pub const ALL: [FxKind; 11] = [
+    pub const ALL: [FxKind; 12] = [
         FxKind::ChannelEq,
         FxKind::Compressor,
         FxKind::Reverb,
@@ -196,6 +375,7 @@ impl FxKind {
         FxKind::Gate,
         FxKind::Limiter,
         FxKind::MultiEq,
+        FxKind::Amp,
     ];
 
     /// The name the mixer shows in the slot.
@@ -212,6 +392,7 @@ impl FxKind {
             FxKind::Gate => "Noise Gate",
             FxKind::Limiter => "Limiter",
             FxKind::MultiEq => "Multi-Band EQ",
+            FxKind::Amp => "Amp Designer",
         }
     }
 
@@ -239,6 +420,7 @@ impl FxKind {
             "noise gate" | "gate" => FxKind::Gate,
             "limiter" | "adaptive limiter" => FxKind::Limiter,
             "multi-band eq" | "multiband eq" | "multi band eq" => FxKind::MultiEq,
+            "amp designer" | "amp" | "guitar amp" => FxKind::Amp,
             _ => return None,
         })
     }
@@ -257,6 +439,7 @@ impl FxKind {
             FxKind::Gate => &GATE_PARAMS,
             FxKind::Limiter => &LIMIT_PARAMS,
             FxKind::MultiEq => &MULTI_PARAMS,
+            FxKind::Amp => &AMP_PARAMS,
         }
     }
 
@@ -377,6 +560,15 @@ impl Biquad {
             a1: a1 / a0,
             a2: a2 / a0,
             ..Self::default()
+        }
+    }
+
+    /// The new filter with the old one's memory, so a knob that turns does not click.
+    fn retuned(self, new: Biquad) -> Biquad {
+        Biquad {
+            z1: self.z1,
+            z2: self.z2,
+            ..new
         }
     }
 
@@ -651,6 +843,93 @@ impl LimiterState {
     }
 }
 
+/// A 31-tap half-band filter, one run per channel: doubles or halves the rate with about
+/// 45 dB of image and alias rejection.
+#[derive(Clone, Copy, Debug, Default)]
+struct Halfband {
+    buf: [f32; 32],
+    /// Where the newest sample went.
+    pos: usize,
+}
+
+impl Halfband {
+    /// One sample in, one sample out.
+    #[inline]
+    fn tick(&mut self, x: f32) -> f32 {
+        self.pos = (self.pos + 1) & 31;
+        self.buf[self.pos] = x;
+        let at = |d: usize| self.buf[(self.pos + 32 - d) & 31];
+        // The centre tap is the middle of the window, fifteen samples back.
+        let mut y = HB_CENTRE * at(15);
+        for (i, w) in HB_SIDE.iter().enumerate() {
+            let k = 2 * i + 1;
+            y += w * (at(15 - k) + at(15 + k));
+        }
+        y
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// The Amp Designer: four valve stages that clip softly (with a little asymmetry for the even
+/// harmonics), the model's tone stack, a speaker cabinet and a microphone position. The
+/// valves run at twice the sample rate, through a half-band filter, so the harmonics they
+/// make do not fold back into the audible range.
+#[derive(Clone, Debug)]
+struct AmpState {
+    input_hp: [Biquad; 2],
+    pre_lp: [Biquad; 2],
+    coupling: [[Biquad; 3]; 2],
+    tone: [[Biquad; 4]; 2],
+    cab: [[Biquad; 5]; 2],
+    mic: [Biquad; 2],
+    up: [Halfband; 2],
+    down: [Halfband; 2],
+    dc_in: [f32; 2],
+    dc_out: [f32; 2],
+    /// Gain of each valve stage, from the Gain knob and the model.
+    stage_gain: [f32; 4],
+    bias: f32,
+    bias_dc: f32,
+    master: f32,
+}
+
+impl AmpState {
+    fn new() -> Self {
+        Self {
+            input_hp: [Biquad::unity(); 2],
+            pre_lp: [Biquad::unity(); 2],
+            coupling: [[Biquad::unity(); 3]; 2],
+            tone: [[Biquad::unity(); 4]; 2],
+            cab: [[Biquad::unity(); 5]; 2],
+            mic: [Biquad::unity(); 2],
+            up: [Halfband::default(); 2],
+            down: [Halfband::default(); 2],
+            dc_in: [0.0; 2],
+            dc_out: [0.0; 2],
+            stage_gain: [1.0; 4],
+            bias: 0.0,
+            bias_dc: 0.0,
+            master: 1.0,
+        }
+    }
+
+    /// One sample through the four valve stages, at twice the sample rate.
+    #[inline]
+    fn distort(&mut self, ch: usize, mut x: f32) -> f32 {
+        for stage in 0..4 {
+            // The coupling capacitor between the valves takes out the DC the bias adds.
+            if stage > 0 {
+                x = self.coupling[ch][stage - 1].tick(x);
+            }
+            x = (x * self.stage_gain[stage] + self.bias).tanh() - self.bias_dc;
+        }
+        x
+    }
+}
+
 #[derive(Clone, Debug)]
 enum State {
     MultiEq([[Biquad; 6]; 2]),
@@ -664,6 +943,7 @@ enum State {
     Phaser(Box<PhaserState>),
     Drive(DriveState),
     Filter([Biquad; 2]),
+    Amp(Box<AmpState>),
 }
 
 /// One effect with its state. Make it with [`Fx::new`] off the audio thread.
@@ -724,6 +1004,7 @@ impl Fx {
             }),
             FxKind::Limiter => State::Limiter(Box::new(LimiterState::new(sr))),
             FxKind::MultiEq => State::MultiEq([[Biquad::unity(); 6]; 2]),
+            FxKind::Amp => State::Amp(Box::new(AmpState::new())),
         };
         let mut fx = Self {
             kind,
@@ -827,6 +1108,68 @@ impl Fx {
                         z2: old.z2,
                         ..n
                     };
+                }
+            }
+            State::Amp(s) => {
+                let model = &AMP_VOICES[pr[0].round().clamp(0.0, 4.0) as usize];
+                // The Gain knob is spread over the four valves, so each one clips in turn.
+                let drive = (10f32.powf(pr[1] / 20.0) * model.input).max(1e-6);
+                for (stage, trim) in s.stage_gain.iter_mut().zip(model.stages) {
+                    *stage = (drive.powf(0.25) * trim).max(1e-3);
+                }
+                s.bias = model.bias;
+                s.bias_dc = model.bias.tanh();
+                s.master = 10f32.powf((pr[6] + model.level_db) / 20.0);
+                let mic = pr[8];
+                // The coupling capacitors sit between valves, so they run at the doubled rate.
+                let sr2 = sr * 2.0;
+                let input_hp = Biquad::make(Shape::High, model.input_hp, 0.7, 0.0, sr);
+                let pre_lp = Biquad::make(Shape::Low, model.pre_lp, 0.7, 0.0, sr);
+                let coupling = [Biquad::make(Shape::High, model.coupling_hz, 0.7, 0.0, sr2); 3];
+                let presence = ((pr[5] - 5.0) / 5.0 * 6.0 * model.presence_amt).clamp(-12.0, 12.0);
+                let tone = [
+                    Biquad::make(Shape::LowShelf, model.bass_hz, 0.7, pr[2], sr),
+                    Biquad::make(Shape::Peak, model.mid_hz, model.mid_q, pr[3], sr),
+                    Biquad::make(Shape::HighShelf, model.treble_hz, 0.7, pr[4], sr),
+                    Biquad::make(Shape::HighShelf, model.presence_hz, 0.7, presence, sr),
+                ];
+                let cab_index = pr[7].round().clamp(0.0, 3.0) as usize;
+                let cab = if cab_index == 3 {
+                    [Biquad::unity(); 5]
+                } else {
+                    let c = &AMP_CAB_VOICES[cab_index];
+                    // Towards the edge of the cone the microphone hears less of the top.
+                    let edge = 0.6 + 0.4 * mic;
+                    let off_axis = (mic - 0.5) * 2.0;
+                    [
+                        Biquad::make(Shape::High, c.hp, 0.7, 0.0, sr),
+                        Biquad::make(Shape::Peak, c.peak1[0], c.peak1[2], c.peak1[1], sr),
+                        Biquad::make(
+                            Shape::Peak,
+                            c.peak2[0],
+                            c.peak2[2],
+                            c.peak2[1] + off_axis,
+                            sr,
+                        ),
+                        Biquad::make(Shape::Low, c.lp1 * edge, 0.75, 0.0, sr),
+                        Biquad::make(Shape::Low, c.lp2 * edge, 0.6, 0.0, sr),
+                    ]
+                };
+                let mic_shelf = Biquad::make(Shape::HighShelf, 3_500.0, 0.7, -4.0 + 6.0 * mic, sr);
+                for ch in 0..2 {
+                    // Keep each filter's memory so a moving knob does not click.
+                    s.input_hp[ch] = s.input_hp[ch].retuned(input_hp);
+                    s.pre_lp[ch] = s.pre_lp[ch].retuned(pre_lp);
+                    for (old, n) in s.coupling[ch].iter_mut().zip(&coupling) {
+                        *old = old.retuned(*n);
+                    }
+                    for (old, n) in s.tone[ch].iter_mut().zip(tone) {
+                        *old = old.retuned(n);
+                    }
+                    for (old, n) in s.cab[ch].iter_mut().zip(cab) {
+                        *old = old.retuned(n);
+                    }
+                    s.mic[ch] = s.mic[ch].retuned(mic_shelf);
                 }
             }
             _ => {}
@@ -983,6 +1326,35 @@ impl Fx {
                 (out[0], out[1])
             }
             State::Filter(f) => (f[0].tick(l), f[1].tick(r)),
+            State::Amp(s) => {
+                let input = [l, r];
+                let mut out = [0f32; 2];
+                for ch in 0..2 {
+                    let filtered = s.input_hp[ch].tick(input[ch]);
+                    let x = s.pre_lp[ch].tick(filtered);
+                    // Twice the rate around the valves, so their harmonics fold back far
+                    // above what is heard. The half-band filter restores the level.
+                    let u0 = s.up[ch].tick(x) * 2.0;
+                    let u1 = s.up[ch].tick(0.0) * 2.0;
+                    let y0 = s.distort(ch, u0);
+                    let y1 = s.distort(ch, u1);
+                    let _ = s.down[ch].tick(y0);
+                    let mut y = s.down[ch].tick(y1);
+                    for f in s.tone[ch].iter_mut() {
+                        y = f.tick(y);
+                    }
+                    for f in s.cab[ch].iter_mut() {
+                        y = f.tick(y);
+                    }
+                    y = s.mic[ch].tick(y);
+                    // The output coupling capacitor: no DC leaves the amplifier.
+                    let dc = y - s.dc_in[ch] + 0.995 * s.dc_out[ch];
+                    s.dc_in[ch] = y;
+                    s.dc_out[ch] = dc;
+                    out[ch] = dc * s.master;
+                }
+                (out[0], out[1])
+            }
             State::MultiEq(f) => {
                 let [left, right] = f;
                 let a = left.iter_mut().fold(l, |x, filter| filter.tick(x));
@@ -1083,6 +1455,21 @@ impl Fx {
             }
             State::Drive(s) => {
                 s.tone = [0.0; 2];
+                s.dc_in = [0.0; 2];
+                s.dc_out = [0.0; 2];
+            }
+            State::Amp(s) => {
+                s.input_hp.iter_mut().for_each(|b| *b = b.cleared());
+                s.pre_lp.iter_mut().for_each(|b| *b = b.cleared());
+                s.coupling
+                    .iter_mut()
+                    .flatten()
+                    .for_each(|b| *b = b.cleared());
+                s.tone.iter_mut().flatten().for_each(|b| *b = b.cleared());
+                s.cab.iter_mut().flatten().for_each(|b| *b = b.cleared());
+                s.mic.iter_mut().for_each(|b| *b = b.cleared());
+                s.up.iter_mut().for_each(Halfband::clear);
+                s.down.iter_mut().for_each(Halfband::clear);
                 s.dc_in = [0.0; 2];
                 s.dc_out = [0.0; 2];
             }
@@ -1541,6 +1928,134 @@ mod tests {
         chain.set_param(7, 1, -3.0);
         chain.restore();
         assert_eq!(chain.fx[0].current()[1], 3.0);
+    }
+
+    /// Amplitude of the sine at `hz` in `x` (a one-bin DFT).
+    fn tone_amp(x: &[f32], hz: f32) -> f32 {
+        let (mut re, mut im) = (0.0f32, 0.0f32);
+        for (i, v) in x.iter().enumerate() {
+            let a = TAU * hz * i as f32 / SR;
+            re += v * a.cos();
+            im -= v * a.sin();
+        }
+        2.0 * (re * re + im * im).sqrt() / x.len().max(1) as f32
+    }
+
+    #[test]
+    fn the_halfband_filter_has_unity_gain_and_keeps_a_tone() {
+        // Sum of the taps is one: a steady level stays the same.
+        let mut hb = Halfband::default();
+        let mut y = 0.0;
+        for _ in 0..64 {
+            y = hb.tick(1.0);
+        }
+        assert!((y - 1.0).abs() < 0.01, "{y}");
+        // Doubling the rate and halving it again returns the tone at its own level.
+        let tone = sine(1000.0, 0.5, 0.5);
+        let mut up = Halfband::default();
+        let mut down = Halfband::default();
+        let mut out = Vec::new();
+        for x in &tone {
+            let u0 = up.tick(*x) * 2.0;
+            let u1 = up.tick(0.0) * 2.0;
+            let _ = down.tick(u0);
+            out.push(down.tick(u1));
+        }
+        let level = rms(&out[10_000..]) / rms(&tone[10_000..]);
+        assert!((level - 1.0).abs() < 0.01, "{level}");
+    }
+
+    #[test]
+    fn the_amp_designer_saturates_harder_as_the_gain_goes_up() {
+        let input = sine(200.0, 0.5, 0.3);
+        let thd = |gain: f32| {
+            // Plexi Lead, flat tone, cabinet off, master up so only the valves shape it.
+            let mut fx = with(
+                FxKind::Amp,
+                &[
+                    (0, 3.0),
+                    (1, gain),
+                    (2, 0.0),
+                    (3, 0.0),
+                    (4, 0.0),
+                    (5, 5.0),
+                    (6, -6.0),
+                    (7, 3.0),
+                    (8, 0.5),
+                ],
+            );
+            let out = run(&mut fx, &input);
+            let out = &out[12_000..];
+            let fundamental = tone_amp(out, 200.0);
+            let rest = (rms(out).powi(2) - 0.5 * fundamental * fundamental)
+                .max(0.0)
+                .sqrt();
+            let peak = out.iter().fold(0f32, |m, x| m.max(x.abs()));
+            // The valves keep the peaks in hand instead of letting the gain blow them up.
+            assert!(peak < 3.0, "gain {gain}: peak {peak}");
+            rest / fundamental.max(1e-6)
+        };
+        let clean = thd(0.0);
+        let crunch = thd(18.0);
+        let lead = thd(36.0);
+        assert!(clean < 0.1, "clean: {clean}");
+        assert!(crunch > clean * 2.0, "{clean} -> {crunch}");
+        assert!(lead > crunch, "{crunch} -> {lead}");
+    }
+
+    #[test]
+    fn the_amp_designer_models_and_cabinets_sound_different() {
+        // The same hot input through each model: no two make the same sound.
+        let input = sine(220.0, 0.4, 0.4);
+        let sound = |model: f32| {
+            let mut fx = with(FxKind::Amp, &[(0, model), (1, 24.0), (7, 3.0)]);
+            run(&mut fx, &input)[12_000..].to_vec()
+        };
+        let all: Vec<Vec<f32>> = (0..5).map(|m| sound(m as f32)).collect();
+        for (a, x) in all.iter().enumerate() {
+            for (b, y) in all.iter().enumerate().skip(a + 1) {
+                let different = x.iter().zip(y).any(|(p, q)| (p - q).abs() > 1e-3);
+                assert!(different, "models {a} and {b} sound alike");
+            }
+        }
+        // A cabinet takes the top off; Off leaves it alone.
+        let high = sine(8000.0, 0.4, 0.05);
+        let through = |cab: f32| {
+            let mut fx = with(
+                FxKind::Amp,
+                &[(0, 0.0), (1, 0.0), (6, 0.0), (7, cab), (8, 0.5)],
+            );
+            rms(&run(&mut fx, &high)[12_000..])
+        };
+        let combo = through(0.0);
+        let off = through(3.0);
+        assert!(combo < off * 0.2, "combo {combo}, off {off}");
+        // The microphone position matters too: the edge is duller than on-axis.
+        let edge = {
+            let mut fx = with(
+                FxKind::Amp,
+                &[(0, 0.0), (1, 0.0), (6, 0.0), (7, 0.0), (8, 0.0)],
+            );
+            rms(&run(&mut fx, &high)[12_000..])
+        };
+        let centre = {
+            let mut fx = with(
+                FxKind::Amp,
+                &[(0, 0.0), (1, 0.0), (6, 0.0), (7, 0.0), (8, 1.0)],
+            );
+            rms(&run(&mut fx, &high)[12_000..])
+        };
+        assert!(edge < centre * 0.7, "edge {edge}, centre {centre}");
+    }
+
+    #[test]
+    fn the_amp_designer_reports_no_latency_and_reset_silences_it() {
+        assert_eq!(FxKind::Amp.latency_samples(SR), 0);
+        let mut fx = with(FxKind::Amp, &[(0, 3.0), (1, 30.0)]);
+        run(&mut fx, &sine(200.0, 0.2, 0.5));
+        fx.reset();
+        assert_eq!(fx.process(0.0, 0.0), (0.0, 0.0));
+        assert_eq!(fx.latency_samples(), 0);
     }
 
     #[test]

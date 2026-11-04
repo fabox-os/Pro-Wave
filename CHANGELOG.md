@@ -3,6 +3,16 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Amp Designer:** an amplifier for guitar and bass in any Audio FX slot. Pick one of five models (Clean Combo, Tweed, British Crunch, Plexi Lead, Bass Amp), set Gain, Bass, Mid, Treble, Presence and Master, and choose a cabinet (1x12 Combo, 4x12 British, 4x10 Bass, or none) and where the microphone stands, from the edge of the cone to its centre. The four valve stages clip softly and a little unevenly, as valves do; they run at twice the sample rate so the harmonics they make do not fold back into the sound. Double-click the slot for its faceplate. Every knob can be automated like the other effects, and the Library's new *Guitar Amp* set loads the amp on a track in one click.
+
+### Still to do or test
+
+❌ Amp Designer: a pedal board before the amp, impulse-response cabinets, and a listen with real guitar and bass recordings
+
 ## 0.2.1
 
 ### All systems (Windows, macOS, Linux)

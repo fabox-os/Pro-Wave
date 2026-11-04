@@ -1489,7 +1489,12 @@ pub(crate) mod tests {
         let mut delay = Insert::new(FxKind::Delay);
         delay.bypass = true;
         delay.params[0] = 250.0;
-        p.tracks[1].inserts = vec![eq, delay];
+        let mut amp = Insert::new(FxKind::Amp);
+        amp.params[0] = 3.0; // Plexi Lead
+        amp.params[1] = 28.0;
+        amp.params[7] = 1.0; // 4x12 British
+        amp.params[8] = 0.8;
+        p.tracks[1].inserts = vec![eq, delay, amp];
         p.tracks[1].sends = vec![
             SendSlot {
                 bus: Some(2),
@@ -1552,11 +1557,12 @@ pub(crate) mod tests {
         let old = from_doc(&doc, dir.path(), &ctx).0;
         assert_eq!(
             old.tracks[1].inserts.len(),
-            2,
+            3,
             "{:?}",
             doc.tracks[1].inserts
         );
         assert_eq!(old.tracks[1].inserts[0], Insert::new(FxKind::ChannelEq));
+        assert_eq!(old.tracks[1].inserts[2], Insert::new(FxKind::Amp));
         assert_eq!(old.tracks[1].sends.len(), 1);
         assert_eq!(old.tracks[1].sends[0].bus, Some(4));
 

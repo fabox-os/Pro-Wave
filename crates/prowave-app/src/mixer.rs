@@ -756,7 +756,7 @@ fn send_slot(
 }
 
 /// The effects an Audio FX slot can hold, in the order of its menu.
-const FX_MENU: [prowave_engine::FxKind; 11] = prowave_engine::FxKind::ALL;
+const FX_MENU: [prowave_engine::FxKind; 12] = prowave_engine::FxKind::ALL;
 
 /// What the user chose in an Audio FX slot's menu.
 enum InsertAct {
