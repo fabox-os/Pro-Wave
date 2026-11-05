@@ -1,10 +1,17 @@
 //! The Loop Browser and the All Files browser (the two buttons at the right of the control bar):
 //! a folder list; double-click a file to add it to the project.
 //!
-//! The Loop Browser shows the audio files of a folder of your choice, which it remembers. It
-//! does not read Apple Loops tags, and loops in ALAC or AAC do not open yet.
+//! The Loop Browser shows the audio files of a folder of your choice, which it remembers. For
+//! Apple Loops (`.caf`) it also reads the tags (tempo, key, category) on a background thread,
+//! shows them under the file name and lets the search find them. It does not yet stretch a
+//! loop to the project's tempo and key.
+use crate::apple_loops::{self, LoopTags};
 use crate::i18n::tr;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 
 /// Width of the pane.
 pub const WIDTH: f32 = 280.0;
@@ -24,6 +31,43 @@ struct Entry {
     folder: bool,
 }
 
+/// A background read of the Apple Loops tags of the files in a folder.
+struct TagScan {
+    results: Receiver<(PathBuf, Option<LoopTags>)>,
+    /// Set when the folder on show changes, so the thread stops early.
+    cancel: Arc<AtomicBool>,
+}
+
+impl TagScan {
+    /// Starts reading the tags of `paths`.
+    fn start(paths: Vec<PathBuf>) -> Option<Self> {
+        let (tx, results) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&cancel);
+        std::thread::Builder::new()
+            .name("loop-tags".into())
+            .spawn(move || {
+                for path in paths {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let tags = apple_loops::read_file(&path);
+                    if tx.send((path, tags)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self { results, cancel })
+    }
+}
+
+impl Drop for TagScan {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
 #[derive(Default)]
 pub struct BrowserView {
     /// The pane on show, if any.
@@ -33,6 +77,9 @@ pub struct BrowserView {
     listed: Option<(Tab, PathBuf)>,
     entries: Vec<Entry>,
     search: String,
+    /// The Apple Loops tags read so far (`None`: the file has none), and the read still running.
+    tags: HashMap<PathBuf, Option<LoopTags>>,
+    scan: Option<TagScan>,
 }
 
 impl BrowserView {
@@ -104,6 +151,11 @@ fn matches(name: &str, search: &str) -> bool {
     name.to_lowercase().contains(&search.trim().to_lowercase())
 }
 
+/// Whether a file shows for `search`: its name, or any of its Apple Loops tags, matches.
+fn entry_matches(name: &str, tags: Option<&LoopTags>, search: &str) -> bool {
+    matches(name, search) || tags.is_some_and(|t| t.matches(&search.trim().to_lowercase()))
+}
+
 pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
     let v = &mut s.browser;
     let Some(tab) = v.open else { return };
@@ -111,6 +163,37 @@ pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
     if v.listed.as_ref() != Some(&(tab, dir.clone())) {
         v.entries = list(&dir, tab);
         v.listed = Some((tab, dir.clone()));
+        // Read the tags of the loops of the new folder in the background.
+        v.tags.clear();
+        let loops = v
+            .entries
+            .iter()
+            .filter(|e| !e.folder && tab == Tab::Loops)
+            .map(|e| e.path.clone())
+            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("caf")))
+            .collect::<Vec<_>>();
+        v.scan = if loops.is_empty() {
+            None
+        } else {
+            TagScan::start(loops)
+        };
+    }
+    if let Some(scan) = &v.scan {
+        loop {
+            match scan.results.try_recv() {
+                Ok((path, tags)) => {
+                    v.tags.insert(path, tags);
+                }
+                Err(TryRecvError::Empty) => {
+                    ui.ctx().request_repaint();
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    v.scan = None;
+                    break;
+                }
+            }
+        }
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -159,7 +242,10 @@ pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
     let mut enter = None;
     let mut add = None;
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for e in v.entries.iter().filter(|e| matches(&e.name, &v.search)) {
+        for e in v.entries.iter().filter(|e| {
+            let tags = v.tags.get(&e.path).and_then(Option::as_ref);
+            entry_matches(&e.name, tags, &v.search)
+        }) {
             let text = if e.folder {
                 format!("▸ {}", e.name)
             } else {
@@ -170,6 +256,18 @@ pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
                 enter = Some(e.path.clone());
             } else if !e.folder && row.double_clicked() {
                 add = Some(e.path.clone());
+            }
+            if let Some(line) = v
+                .tags
+                .get(&e.path)
+                .and_then(Option::as_ref)
+                .map(LoopTags::summary)
+                .filter(|line| !line.is_empty())
+            {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.weak(egui::RichText::new(line).small());
+                });
             }
         }
     });
@@ -229,5 +327,93 @@ mod tests {
         assert!(matches("Funky Drums.wav", " drums "));
         assert!(matches("x.wav", ""));
         assert!(!matches("x.wav", "bass"));
+    }
+
+    /// A minimal Apple Loop: a CAF file whose metadata chunk names a category and key.
+    fn loop_bytes(category: &str) -> Vec<u8> {
+        let mut body = vec![
+            0x29, 0x81, 0x92, 0x73, 0xb5, 0xbf, 0x4a, 0xef, 0xb7, 0x8d, 0x62, 0xd1, 0xef, 0x90,
+            0xbb, 0x2c,
+        ];
+        body.extend_from_slice(&2u32.to_be_bytes());
+        for text in ["category", category, "key signature", "G"] {
+            body.extend_from_slice(text.as_bytes());
+            body.push(0);
+        }
+        let mut file = b"caff\0\x01\0\0uuid".to_vec();
+        file.extend_from_slice(&(body.len() as i64).to_be_bytes());
+        file.extend(body);
+        file
+    }
+
+    #[test]
+    fn a_file_shows_for_a_search_that_matches_its_name_or_its_tags() {
+        let tags = LoopTags {
+            category: "Bass".into(),
+            key: "G".into(),
+            ..LoopTags::default()
+        };
+        assert!(entry_matches("Funky.caf", Some(&tags), "funk"));
+        assert!(entry_matches("Funky.caf", Some(&tags), " BASS "));
+        assert!(!entry_matches("Funky.caf", Some(&tags), "drums"));
+        assert!(
+            !entry_matches("Funky.caf", None, "bass"),
+            "no tags, no match"
+        );
+        assert!(entry_matches("Funky.caf", None, ""));
+    }
+
+    #[test]
+    fn the_tags_of_the_loops_in_a_folder_are_read_in_the_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let bass = dir.path().join("Bass One.caf");
+        let plain = dir.path().join("plain.caf");
+        std::fs::write(&bass, loop_bytes("Bass")).unwrap();
+        std::fs::write(&plain, b"not a caf").unwrap();
+        let scan = TagScan::start(vec![bass.clone(), plain.clone()]).unwrap();
+        let mut found = HashMap::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while found.len() < 2 && std::time::Instant::now() < deadline {
+            match scan.results.try_recv() {
+                Ok((path, tags)) => {
+                    found.insert(path, tags);
+                }
+                Err(TryRecvError::Empty) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        assert_eq!(
+            found[&bass].as_ref().map(|t| t.category.as_str()),
+            Some("Bass")
+        );
+        assert_eq!(found[&plain], None, "a file without the tags has none");
+    }
+
+    #[test]
+    fn the_loop_browser_draws_a_folder_of_loops_and_finds_them_by_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Groove.caf"), loop_bytes("Bass")).unwrap();
+        std::fs::write(dir.path().join("Hits.caf"), loop_bytes("Drums")).unwrap();
+        let mut s = crate::UiState::new();
+        s.browser.open = Some(Tab::Loops);
+        s.browser.dir = Some(dir.path().to_path_buf());
+        let mut h = crate::ui_test::Harness::new(300.0, 600.0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while s.browser.tags.len() < 2 && std::time::Instant::now() < deadline {
+            h.frame(vec![], |ui| show(ui, &mut s));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(s.browser.tags.len(), 2, "both loops were read");
+        let drums: Vec<&str> = s
+            .browser
+            .entries
+            .iter()
+            .filter(|e| {
+                let tags = s.browser.tags.get(&e.path).and_then(Option::as_ref);
+                entry_matches(&e.name, tags, "drums")
+            })
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(drums, ["Hits.caf"], "found by its category, not its name");
     }
 }
