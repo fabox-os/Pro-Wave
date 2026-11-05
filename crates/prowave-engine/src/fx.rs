@@ -334,6 +334,10 @@ const HB_SIDE: [f32; 8] = [
     -0.000_049_63,
 ];
 const HB_CENTRE: f32 = 0.499_983_4;
+/// The delay the Amp Designer's up and down half-band pair adds, in samples at the base rate:
+/// measured as 14.5 samples (the impulse response splits evenly between two samples), so
+/// it is reported rounded up, to keep the mix from running ahead of the amp.
+const AMP_LATENCY: usize = 15;
 
 const MULTI_PARAMS: [ParamInfo; 16] = [
     pl("Low Freq", 30.0, 400.0, 80.0, "Hz"),
@@ -396,11 +400,12 @@ impl FxKind {
         }
     }
 
-    /// How many samples the effect delays the sound by (its look-ahead), at `sample_rate`.
-    /// The mixer delays every other strip by the same amount.
+    /// How many samples the effect delays the sound by (its look-ahead or its filters'
+    /// delay), at `sample_rate`. The mixer delays every other strip by the same amount.
     pub fn latency_samples(self, sample_rate: f32) -> usize {
         match self {
             FxKind::Limiter => limiter_len(sample_rate.clamp(8_000.0, 384_000.0)) - 1,
+            FxKind::Amp => AMP_LATENCY,
             _ => 0,
         }
     }
@@ -2049,13 +2054,39 @@ mod tests {
     }
 
     #[test]
-    fn the_amp_designer_reports_no_latency_and_reset_silences_it() {
-        assert_eq!(FxKind::Amp.latency_samples(SR), 0);
+    fn the_amp_designer_reports_its_oversampling_delay_and_reset_silences_it() {
+        // The up and down half-band pair delays the sound by about 14.5 samples; the amp
+        // reports it rounded up (see AMP_LATENCY).
+        let mut up = Halfband::default();
+        let mut down = Halfband::default();
+        let mut pair = Vec::new();
+        for i in 0..120 {
+            let x = if i == 50 { 1.0 } else { 0.0 };
+            let u0 = up.tick(x) * 2.0;
+            let u1 = up.tick(0.0) * 2.0;
+            let _ = down.tick(u0);
+            pair.push(down.tick(u1));
+        }
+        let centre = pair
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i as f32) * v.abs())
+            .sum::<f32>()
+            / pair.iter().map(|v| v.abs()).sum::<f32>();
+        let measured = centre - 50.0;
+        assert!((measured - 14.5).abs() < 0.2, "delay {measured}");
+        let reported = FxKind::Amp.latency_samples(SR);
+        assert_eq!(reported, 15);
+        assert!(reported as f32 >= measured && (reported as f32) - measured < 1.0);
+
         let mut fx = with(FxKind::Amp, &[(0, 3.0), (1, 30.0)]);
+        assert_eq!(fx.latency_samples(), 15);
         run(&mut fx, &sine(200.0, 0.2, 0.5));
         fx.reset();
         assert_eq!(fx.process(0.0, 0.0), (0.0, 0.0));
-        assert_eq!(fx.latency_samples(), 0);
+        // A bypassed amp passes the sound straight through, so it adds no delay.
+        let bypassed = Fx::new(FxKind::Amp, FxKind::Amp.defaults(), true, SR);
+        assert_eq!(bypassed.latency_samples(), 0);
     }
 
     #[test]
