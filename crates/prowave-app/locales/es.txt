@@ -710,3 +710,9 @@ To record MIDI, press R on an instrument track, then Record and Play. = Para gra
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = El botón I te deja oír la entrada de una pista de audio. Usa auriculares para evitar acoples.
 With Count-in on, recording starts after one bar of clicks. = Con la claqueta previa, la grabación empieza tras un compás de clics.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Capturar grabación convierte en región lo que acabas de tocar en un teclado MIDI.
+# Amp Designer
+Amp = Amplificador
+Cabinet = Pantalla
+Mic = Micrófono
+From the edge of the cone to its centre = Del borde del cono a su centro
+Guitar Amp = Amplificador de guitarra
