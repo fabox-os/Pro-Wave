@@ -10,6 +10,7 @@ use crate::routing::AutoPoint;
 #[cfg(test)]
 use crate::routing::SendSpec;
 use crate::routing::{send_gain, AutoLane, AutoTarget, Route, MAX_BUSES};
+use crate::soundfont::SfPlayer;
 use crate::synth::{kit_voice, osc, Kit, Svf, SynthPatch};
 use crate::tempo_map::{SmpteRate, TempoMap};
 use crate::triple::{triple_buffer, Reader, Writer};
@@ -411,6 +412,13 @@ pub enum Command {
         track: u16,
         patch: SynthPatch,
     },
+    /// Makes `track` play its notes with a SoundFont instrument (`None`: back to its synth
+    /// patch). The player is made off the audio thread; the one it replaces, and the notes
+    /// sounding on it, go away with it.
+    SetTrackSoundFont {
+        track: u16,
+        player: Option<Box<SfPlayer>>,
+    },
     /// The effects of a channel strip (Logic: Audio FX slots), made off the audio thread. The
     /// strip's old effects come back through the garbage queue; their tails stop.
     SetInserts {
@@ -487,6 +495,7 @@ pub enum Garbage {
     Pdc(Box<Pdc>),
     Automation(Vec<AutoLane>),
     Input(Box<InputFeed>),
+    SoundFont(Box<SfPlayer>),
 }
 
 /// What the engine shows the UI after each audio block: the playhead, the transport and the
@@ -637,6 +646,25 @@ struct Voice {
 /// the bulk of the synth's cost, without audible stepping.
 const CTRL_BLOCK: u32 = 16;
 
+/// The most SoundFont notes sounding at once across all tracks. A note that finds no free
+/// slot is not played.
+const MAX_SF_NOTES: usize = 128;
+
+/// A note played by a track's SoundFont instrument (see [`SfPlayer`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct SfNote {
+    active: bool,
+    track: u16,
+    pitch: u8,
+    /// Timeline notes end at this beat; live notes end on their `NoteOff`.
+    end_beat: f64,
+    live: bool,
+    /// Safety net so a live note whose `NoteOff` never came still ends.
+    live_left: u32,
+    /// The note's `NoteOff` was sent (or it must end at the next frame).
+    released: bool,
+}
+
 /// The app's halves of the queues a core publishes to.
 pub(crate) struct Readers {
     pub state: Option<StateReader>,
@@ -688,6 +716,12 @@ pub struct EngineCore {
     track_audible: Vec<bool>,
     track_patch: Vec<SynthPatch>,
     track_external: Vec<bool>,
+    /// SoundFont instruments per track (`None`: the track plays its synth patch).
+    sf: Vec<Option<Box<SfPlayer>>>,
+    /// The tracks that have a SoundFont instrument, rendered every frame.
+    sf_tracks: Vec<u16>,
+    /// The SoundFont notes sounding now (a fixed table: nothing is allocated per note).
+    sf_notes: [SfNote; MAX_SF_NOTES],
     /// Effects per strip (an empty box for none), sends and bus inputs.
     chains: Vec<Option<Box<Chain>>>,
     /// Delay compensation per strip.
@@ -814,6 +848,9 @@ impl EngineCore {
             track_audible: vec![true; MAX_TRACKS],
             track_patch: vec![SynthPatch::default(); MAX_TRACKS],
             track_external: vec![false; MAX_TRACKS],
+            sf: (0..MAX_TRACKS).map(|_| None).collect(),
+            sf_tracks: Vec::with_capacity(MAX_TRACKS),
+            sf_notes: [SfNote::default(); MAX_SF_NOTES],
             chains: (0..MAX_TRACKS).map(|_| None).collect(),
             pdc: (0..MAX_TRACKS).map(|_| None).collect(),
             routes: vec![Route::default(); MAX_TRACKS],
@@ -994,6 +1031,9 @@ impl EngineCore {
         self.release_ext_sustain();
         for v in self.voices.iter_mut().filter(|v| !v.live) {
             v.active = false;
+        }
+        for n in self.sf_notes.iter_mut().filter(|n| n.active && !n.live) {
+            n.released = true;
         }
         // The external instruments' timeline notes stop as well (live ones are kept).
         let mut i = 0;
@@ -1433,6 +1473,23 @@ impl EngineCore {
                         *slot = patch.sanitized();
                     }
                 }
+                Command::SetTrackSoundFont { track, player } => {
+                    let t = track as usize;
+                    if t < MAX_TRACKS {
+                        self.sf_stop_track(track);
+                        let old = std::mem::replace(&mut self.sf[t], player);
+                        if let Some(mut old) = old {
+                            old.all_notes_off();
+                            let _ = self.trash.push(Garbage::SoundFont(old));
+                        }
+                        self.sf_tracks.retain(|&x| x as usize != t);
+                        if self.sf[t].is_some() {
+                            self.sf_tracks.push(track);
+                        }
+                    } else if let Some(p) = player {
+                        let _ = self.trash.push(Garbage::SoundFont(p));
+                    }
+                }
                 Command::SetInserts { track, chain } => {
                     let t = track as usize;
                     if t < MAX_TRACKS {
@@ -1554,6 +1611,11 @@ impl EngineCore {
             self.ext_note_on(n, false);
             return 0;
         }
+        let sf_track = n.track.min(MAX_TRACKS as u16 - 1);
+        if self.sf.get(sf_track as usize).is_some_and(Option::is_some) {
+            self.sf_note_on(sf_track, n.pitch, n.vel, n.end_beat, false);
+            return 0;
+        }
         // No free voice: steal the first one.
         let idx = self
             .voices
@@ -1619,6 +1681,11 @@ impl EngineCore {
             );
             return;
         }
+        let sf_track = track.min(MAX_TRACKS as u16 - 1);
+        if self.sf.get(sf_track as usize).is_some_and(Option::is_some) {
+            self.sf_note_on(sf_track, pitch, vel, f64::MAX, true);
+            return;
+        }
         let idx = self.trigger(NoteEvent {
             start_beat: 0.0,
             end_beat: f64::MAX,
@@ -1648,6 +1715,80 @@ impl EngineCore {
             v.active && v.live && v.pitch == pitch && track.is_none_or(|t| v.track == t)
         }) {
             v.releasing = true;
+        }
+        for n in self.sf_notes.iter_mut().filter(|n| {
+            n.active && n.live && n.pitch == pitch && track.is_none_or(|t| n.track == t)
+        }) {
+            n.released = true;
+        }
+    }
+
+    /// Starts a SoundFont note on `track`, which has a player. A note that finds no free slot
+    /// is not played.
+    fn sf_note_on(&mut self, track: u16, pitch: u8, vel: u8, end_beat: f64, live: bool) {
+        let Some(slot) = self.sf_notes.iter().position(|n| !n.active) else {
+            return;
+        };
+        if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+            player.note_on(pitch, vel);
+        }
+        self.sf_notes[slot] = SfNote {
+            active: true,
+            track,
+            pitch,
+            end_beat,
+            live,
+            live_left: (4.0 * self.sr) as u32,
+            released: false,
+        };
+    }
+
+    /// Ends the SoundFont notes that are due: a timeline note at its end beat (or when the
+    /// transport stops), a live note on its `NoteOff` (or after the safety time).
+    fn sf_release_due(&mut self) {
+        for n in self.sf_notes.iter_mut().filter(|n| n.active) {
+            let due = if n.live {
+                n.live_left = n.live_left.saturating_sub(1);
+                n.live_left == 0 || n.released
+            } else {
+                n.released || !self.playing || self.beat >= n.end_beat
+            };
+            if due {
+                n.active = false;
+                if let Some(Some(player)) = self.sf.get_mut(n.track as usize) {
+                    player.note_off(n.pitch);
+                }
+            }
+        }
+    }
+
+    /// Stops the SoundFont notes of `track` at once (its instrument is being replaced).
+    fn sf_stop_track(&mut self, track: u16) {
+        for n in self
+            .sf_notes
+            .iter_mut()
+            .filter(|n| n.active && n.track == track)
+        {
+            n.active = false;
+        }
+    }
+
+    /// Adds one frame of every SoundFont instrument to its track's strip.
+    fn sf_render(&mut self) {
+        for k in 0..self.sf_tracks.len() {
+            let t = self.sf_tracks[k] as usize;
+            let Some(Some(player)) = self.sf.get_mut(t) else {
+                continue;
+            };
+            let (x, y) = player.render();
+            if self.track_audible[t] {
+                self.in_l[t] += finite_or_zero(x) as f64;
+                self.in_r[t] += finite_or_zero(y) as f64;
+                if !self.touched[t] {
+                    self.touched[t] = true;
+                    self.dirty.push(t as u16);
+                }
+            }
         }
     }
 
@@ -1730,6 +1871,9 @@ impl EngineCore {
             }
             if self.monitor_count > 0 {
                 self.hear_input();
+            }
+            if !self.sf_tracks.is_empty() {
+                self.sf_release_due();
             }
             for v in self.voices.iter_mut().filter(|v| v.active) {
                 if v.live {
@@ -1829,6 +1973,7 @@ impl EngineCore {
                     }
                 }
             }
+            self.sf_render();
             let (ml, mr) = self.mix_strips();
             l += ml;
             r += mr;
@@ -2245,6 +2390,194 @@ mod tests {
         let mut buf = vec![0.0f32; 48_000 * 2];
         e.process(&mut buf);
         assert!(buf.iter().all(|x| x.is_finite()));
+        assert!(buf.iter().any(|x| x.abs() > 0.01));
+    }
+
+    /// A core with a garbage queue the test can read (to see the instruments it retires).
+    fn rig_with_garbage() -> (EngineCore, Producer<Command>, rtrb::Consumer<Garbage>) {
+        let (tx, rx) = rtrb::RingBuffer::new(64);
+        let (gtx, grx) = rtrb::RingBuffer::new(8);
+        let core = EngineCore::new(48_000, rx, gtx, Arc::new(Shared::new()));
+        (core, tx, grx)
+    }
+
+    fn sine_player(sr: f32) -> Box<SfPlayer> {
+        let Ok(bank) =
+            crate::soundfont::SoundFontBank::load(&crate::soundfont::test_font::sine_font())
+        else {
+            panic!("the test SoundFont loads");
+        };
+        let Some(preset) = bank.presets().first().cloned() else {
+            panic!("a preset");
+        };
+        let Ok(player) = SfPlayer::new(&bank, &preset, sr) else {
+            panic!("a player");
+        };
+        Box::new(player)
+    }
+
+    #[test]
+    fn a_soundfont_track_plays_its_notes_through_its_strip_and_ends_them() {
+        let (mut e, mut tx, mut s) = rig();
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(sine_player(48_000.0)),
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetSong(Box::new(Song::new(
+                vec![note(0.0, 1.0)],
+                vec![TrackMix::default()]
+            ))))
+            .is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        // 120 BPM: one beat is half a second. The note lasts one beat.
+        let mut buf = vec![0.0f32; 48_000 * 2 * 2];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+        let first_half_second: f32 = buf[..48_000 * 2 / 2].iter().map(|x| x.abs()).sum();
+        assert!(
+            first_half_second > 1.0,
+            "the note sounds: {first_half_second}"
+        );
+        assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+    }
+
+    #[test]
+    fn a_live_soundfont_note_sounds_while_stopped_and_stops_on_note_off() {
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx
+            .push(Command::SetSong(Box::new(Song::new(
+                vec![],
+                vec![TrackMix::default()]
+            ))))
+            .is_ok());
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(sine_player(48_000.0)),
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 69,
+                vel: 100,
+                track: 0
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 4_800 * 2];
+        e.process(&mut buf);
+        // The test font is quiet (its peak is about 0.04 here); real banks are louder.
+        assert!(
+            buf.iter().any(|x| x.abs() > 0.02),
+            "live note sounds while stopped"
+        );
+        assert!(tx.push(Command::NoteOff { pitch: 69 }).is_ok());
+        // The note fades out after its NoteOff (the test sample alone would last a second).
+        let mut peaks = [0f32; 8];
+        for peak in peaks.iter_mut() {
+            let mut tail = vec![0.0f32; 4_800 * 2];
+            e.process(&mut tail);
+            *peak = tail.iter().fold(0f32, |m, x| m.max(x.abs()));
+        }
+        assert!(peaks[3] < peaks[0] * 0.5, "the note fades: {peaks:?}");
+        assert!(peaks[7] < 0.001, "the note is released: {peaks:?}");
+    }
+
+    #[test]
+    fn replacing_a_soundfont_returns_the_old_player_and_stops_its_notes() {
+        let (mut e, mut tx, mut garbage) = rig_with_garbage();
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 1,
+                player: Some(sine_player(48_000.0)),
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 60,
+                vel: 100,
+                track: 1
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 480 * 2];
+        e.process(&mut buf);
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 1,
+                player: None,
+            })
+            .is_ok());
+        e.process(&mut buf);
+        match garbage.pop() {
+            Ok(Garbage::SoundFont(_)) => {}
+            _ => panic!("the old player goes back to the UI thread"),
+        }
+        assert!(
+            e.sf_notes.iter().all(|n| !(n.active && n.track == 1)),
+            "its notes stopped"
+        );
+    }
+
+    /// The General MIDI SoundFont named by `PROWAVE_TEST_SF2`, if set (it is not in the repo):
+    /// a real piano note reaches the strip through the engine's own command path.
+    #[test]
+    fn a_general_midi_piano_plays_through_the_engine_if_a_soundfont_is_provided() {
+        let Ok(path) = std::env::var("PROWAVE_TEST_SF2") else {
+            return;
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            panic!("cannot read {path}");
+        };
+        let Ok(bank) = crate::soundfont::SoundFontBank::load(&bytes) else {
+            panic!("the SoundFont loads");
+        };
+        let Some(piano) = bank.presets().first().cloned() else {
+            panic!("a preset");
+        };
+        let Ok(player) = SfPlayer::new(&bank, &piano, 48_000.0) else {
+            panic!("a player");
+        };
+        let (mut e, mut tx, mut s) = rig();
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(Box::new(player)),
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetSong(Box::new(Song::new(
+                vec![note(0.0, 2.0)],
+                vec![TrackMix::default()]
+            ))))
+            .is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 48_000 * 2];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+        let peak = s.read().track_peaks(0).0;
+        assert!(peak > 0.05, "the piano is heard on its track: {peak}");
+    }
+
+    #[test]
+    fn soundfont_notes_do_not_allocate_on_the_audio_thread() {
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(sine_player(48_000.0)),
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetSong(Box::new(Song::new(
+                vec![note(0.0, 2.0), note(0.5, 1.0)],
+                vec![TrackMix::default()]
+            ))))
+            .is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 4_800 * 2];
+        assert_no_alloc::assert_no_alloc(|| e.process(&mut buf));
         assert!(buf.iter().any(|x| x.abs() > 0.01));
     }
 

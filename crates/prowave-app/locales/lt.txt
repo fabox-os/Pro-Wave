@@ -710,3 +710,4 @@ To record MIDI, press R on an instrument track, then Record and Play. = Norėdam
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = Mygtukas I leidžia girdėti garso takelio įvestį. Kad išvengtumėte grįžtamojo ryšio, naudokite ausines.
 With Count-in on, recording starts after one bar of clicks. = Įjungus įskaitymą, įrašas prasideda po vieno takto spragtelėjimų.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Užfiksuoti įrašą paverčia sritimi tai, ką ką tik grojote MIDI klaviatūra.
+

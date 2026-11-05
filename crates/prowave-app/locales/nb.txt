@@ -710,3 +710,4 @@ To record MIDI, press R on an instrument track, then Record and Play. = For å t
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = Med I-knappen hører du inngangen til et lydspor. Bruk hodetelefoner for å unngå rundgang.
 With Count-in on, recording starts after one bar of clicks. = Med inntelling på starter opptaket etter én takt med klikk.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Fang opptak gjør det du nettopp spilte på et MIDI-klaviatur til en region.
+

@@ -38,7 +38,7 @@ to update this section.
 | | Done | Started | Total | Done % |
 | --- | ---: | ---: | ---: | ---: |
 | Menu entries | 62 | 0 | 176 | 35.23% |
-| Roadmap items | 23 | 7 | 77 | 29.87% |
+| Roadmap items | 24 | 7 | 77 | 31.17% |
 <!-- status:end -->
 
 ## What works
@@ -51,8 +51,11 @@ to update this section.
   waveforms; move, repeat and delete regions with snapping; per-track heights.
 - **Piano Roll:** draw, select, move, resize and delete notes; quantize (with strength and swing),
   scale quantize, velocity lane, playable keyboard.
-- **Mixer:** channel strips with sends, pan, faders and meters; Library patches that change a
-  track's instrument and sound; Region and Track inspectors applied non-destructively.
+- **Mixer:** channel strips with sends, pan, faders and meters, and real effects in the Audio FX
+  slots: EQ, compressor, reverb, delay, chorus, phaser, overdrive, filter, gate, limiter,
+  multi-band EQ and the **Amp Designer** for guitar and bass (five amplifiers, three cabinets and
+  a microphone position); buses, automation and mix groups; Library patches that change a track's
+  instrument and sound; Region and Track inspectors applied non-destructively.
 - **Projects:** `.prowave` files (a zip with `project.json` and the audio in `media/`).
 - **Time signatures:** any signature, including compound meters such as 6/8 and 7/8.
 

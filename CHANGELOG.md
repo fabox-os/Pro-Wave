@@ -7,8 +7,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
-✅ **Apple Loops tags in the Loop Browser:** for Apple Loops (`.caf` files), the Loop Browser now reads the tempo, key and category and shows them under the file name, for example "128 BPM · Am · Bass". The search box finds loops by category, subcategory, genre, descriptor, key or tempo as well as by name. The tags are read in the background, so a big folder opens at once. Only the new CAF-based loops are read; loops in the older AIFF-based format show no tags. This was written from the community notes on the format and tested with files built to match them, not yet with real loops from Apple's library.
-❌ Still to do: stretching a loop to the project's tempo and key when you add it.
+
 
 ## 0.2.1
 

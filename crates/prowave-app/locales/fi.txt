@@ -710,3 +710,4 @@ To record MIDI, press R on an instrument track, then Record and Play. = Äänit�
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = I-painikkeella kuulet ääniraidan tulon. Käytä kuulokkeita kierron välttämiseksi.
 With Count-in on, recording starts after one bar of clicks. = Kun sisäänlaskenta on päällä, äänitys alkaa yhden tahdin klikkien jälkeen.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Kaappaa äänitys tekee alueen siitä, mitä juuri soitit MIDI-koskettimilla.
+

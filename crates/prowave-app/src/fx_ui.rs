@@ -5,14 +5,18 @@
 use crate::automation;
 use crate::i18n::{tr, trf};
 use crate::mixer::Meters;
-use crate::model::{AutoTarget, Project};
+use crate::model::{AutoTarget, Insert, Project, Track};
 use crate::UiState;
-use egui::{pos2, vec2, Align2, Color32, FontId, Sense, Shape, Stroke, StrokeKind, Ui};
-use prowave_engine::FxKind;
+use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Shape, Stroke, StrokeKind, Ui};
+use prowave_engine::{FxKind, ParamInfo, AMP_CABS, AMP_MODELS};
 
 /// Sample rate the curve of the EQs is drawn for.
 const CURVE_RATE: f32 = 48_000.0;
 const CURVE_H: f32 = 110.0;
+
+/// Width and height of the Amp Designer's faceplate.
+const AMP_W: f32 = 470.0;
+const AMP_H: f32 = 146.0;
 
 /// A slider the user moved: parameter number, new value, and whether the gesture ended.
 struct Edit {
@@ -56,7 +60,13 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
                 FxKind::Compressor | FxKind::Gate | FxKind::Limiter => {
                     reduction_bar(ui, reduction, edited.bypass)
                 }
+                FxKind::Amp => {
+                    amp_faceplate(ui, &mut edited, track, slot, beat, &mut edits);
+                }
                 _ => {}
+            }
+            if edited.kind == FxKind::Amp {
+                return;
             }
             egui::Grid::new("fx_params")
                 .num_columns(2)
@@ -129,6 +139,247 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
     if !open {
         s.mixer.fx_window = None;
     }
+}
+
+/// What a control of the amplifier shows at `beat`: its lane's value while the strip plays
+/// one, else the setting the user made.
+fn shown(insert: &Insert, track: &Track, slot: usize, param: usize, beat: f64) -> f32 {
+    let info = &insert.kind.params()[param];
+    let target = AutoTarget::Fx {
+        slot: slot as u8,
+        param: param as u8,
+    };
+    track
+        .auto
+        .played(target, beat)
+        .map(|n| info.from_norm(n))
+        .unwrap_or(insert.params[param])
+}
+
+/// A setting under a knob, in its own units.
+fn knob_text(info: &ParamInfo, v: f32) -> String {
+    if info.unit == "dB" {
+        format!("{v:+.1} dB")
+    } else if info.unit.is_empty() && info.min >= 0.0 && info.max <= 10.0 {
+        format!("{v:.1}")
+    } else if info.unit.is_empty() {
+        format!("{:.0} %", v * 100.0)
+    } else {
+        format!("{v:.1} {}", info.unit)
+    }
+}
+
+/// The Amp Designer's window: the faceplate with its six knobs, the amplifier and cabinet
+/// choices and the microphone position. All of it is automatable, like the sliders of the
+/// other effects.
+fn amp_faceplate(
+    ui: &mut Ui,
+    insert: &mut Insert,
+    track: &Track,
+    slot: usize,
+    beat: f64,
+    edits: &mut Vec<Edit>,
+) {
+    let model = shown(insert, track, slot, 0, beat).round().clamp(0.0, 4.0) as usize;
+    let cab = shown(insert, track, slot, 7, beat).round().clamp(0.0, 3.0) as usize;
+
+    // The amplifier itself: dark tolex, a cream piping and a speaker grille on the right.
+    let (rect, _) = ui.allocate_exact_size(vec2(AMP_W, AMP_H), Sense::hover());
+    let g = ui.painter_at(rect);
+    g.rect_filled(rect, 7.0, Color32::from_rgb(0x23, 0x21, 0x1e));
+    g.rect_stroke(
+        rect,
+        7.0,
+        Stroke::new(1.0, Color32::from_gray(0x0c)),
+        StrokeKind::Inside,
+    );
+    g.rect_stroke(
+        rect.shrink(4.0),
+        5.0,
+        Stroke::new(1.0, Color32::from_rgb(0x6d, 0x5f, 0x43)),
+        StrokeKind::Inside,
+    );
+    let cream = Color32::from_rgb(0xf1, 0xe7, 0xcd);
+    let dim = Color32::from_rgb(0x9c, 0x8f, 0x74);
+    g.text(
+        pos2(rect.left() + 18.0, rect.top() + 17.0),
+        Align2::LEFT_CENTER,
+        "PRO WAVE",
+        FontId::proportional(10.0),
+        Color32::from_rgb(0xc8, 0xb6, 0x8c),
+    );
+    g.text(
+        pos2(rect.left() + 18.0, rect.top() + 39.0),
+        Align2::LEFT_CENTER,
+        AMP_MODELS[model],
+        FontId::proportional(19.0),
+        cream,
+    );
+    g.text(
+        pos2(rect.left() + 18.0, rect.top() + 57.0),
+        Align2::LEFT_CENTER,
+        AMP_CABS[cab],
+        FontId::proportional(10.5),
+        dim,
+    );
+
+    let grille = Rect::from_min_max(
+        pos2(rect.right() - 130.0, rect.top() + 12.0),
+        pos2(rect.right() - 12.0, rect.bottom() - 12.0),
+    );
+    let cloth = g.with_clip_rect(grille);
+    cloth.rect_filled(grille, 4.0, Color32::from_rgb(0x3a, 0x32, 0x25));
+    let mut x = grille.left() - grille.height();
+    while x < grille.right() {
+        cloth.line_segment(
+            [
+                pos2(x, grille.bottom()),
+                pos2(x + grille.height(), grille.top()),
+            ],
+            Stroke::new(1.0, Color32::from_rgb(0x47, 0x3d, 0x2d)),
+        );
+        x += 5.0;
+    }
+    let c = grille.center();
+    g.circle_filled(c, 40.0, Color32::from_rgb(0x1b, 0x18, 0x13));
+    g.circle_stroke(
+        c,
+        40.0,
+        Stroke::new(2.0, Color32::from_rgb(0x5c, 0x50, 0x3a)),
+    );
+    g.circle_stroke(
+        c,
+        27.0,
+        Stroke::new(1.0, Color32::from_rgb(0x35, 0x2f, 0x24)),
+    );
+    g.circle_filled(c, 11.0, Color32::from_rgb(0x2a, 0x25, 0x1d));
+
+    // The six knobs: Gain, Bass, Mid, Treble, Presence, Master.
+    const KNOBS: [(usize, &str); 6] = [
+        (1, "Gain"),
+        (2, "Bass"),
+        (3, "Mid"),
+        (4, "Treble"),
+        (5, "Presence"),
+        (6, "Master"),
+    ];
+    for (i, (param, label)) in KNOBS.iter().enumerate() {
+        let info = &insert.kind.params()[*param];
+        let target = AutoTarget::Fx {
+            slot: slot as u8,
+            param: *param as u8,
+        };
+        let played = track.auto.played(target, beat);
+        let v = shown(insert, track, slot, *param, beat);
+        let kc = pos2(rect.left() + 42.0 + i as f32 * 54.0, rect.top() + 104.0);
+        g.text(
+            pos2(kc.x, rect.top() + 76.0),
+            Align2::CENTER_CENTER,
+            *label,
+            FontId::proportional(9.5),
+            dim,
+        );
+        g.text(
+            pos2(kc.x, rect.top() + 130.0),
+            Align2::CENTER_CENTER,
+            knob_text(info, v),
+            FontId::proportional(9.5),
+            cream,
+        );
+        crate::widgets::draw_knob(&g, kc, 13.0, info.to_norm(v) * 2.0 - 1.0);
+        if played.is_none() && automation::editable(track, target) {
+            let r = Rect::from_center_size(kc, vec2(32.0, 32.0));
+            let resp = ui.interact(
+                r,
+                ui.scope_id().with(("amp_knob", slot, param)),
+                Sense::click_and_drag(),
+            );
+            if resp.dragged() {
+                let n = info.to_norm(v) - resp.drag_delta().y * 0.006;
+                edits.push(Edit {
+                    param: *param,
+                    value: info.from_norm(n),
+                    ended: false,
+                });
+            }
+            if resp.drag_stopped() {
+                edits.push(Edit {
+                    param: *param,
+                    value: v,
+                    ended: true,
+                });
+            }
+            if resp.double_clicked() {
+                edits.push(Edit {
+                    param: *param,
+                    value: info.default,
+                    ended: true,
+                });
+            }
+        }
+    }
+
+    // The amplifier and cabinet choices, and where the microphone stands.
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let choices = |ui: &mut Ui,
+                       param: usize,
+                       label: &str,
+                       names: &[&'static str],
+                       current: usize,
+                       edits: &mut Vec<Edit>| {
+            ui.label(label);
+            let target = AutoTarget::Fx {
+                slot: slot as u8,
+                param: param as u8,
+            };
+            ui.add_enabled_ui(automation::editable(track, target), |ui| {
+                egui::ComboBox::from_id_salt(("amp_choice", slot, param))
+                    .width(140.0)
+                    .selected_text(names[current])
+                    .show_ui(ui, |ui| {
+                        for (i, name) in names.iter().enumerate() {
+                            if ui.selectable_label(i == current, *name).clicked() && i != current {
+                                edits.push(Edit {
+                                    param,
+                                    value: i as f32,
+                                    ended: true,
+                                });
+                            }
+                        }
+                    });
+            });
+        };
+        choices(ui, 0, tr("Amp"), &AMP_MODELS, model, edits);
+        ui.add_space(10.0);
+        choices(ui, 7, tr("Cabinet"), &AMP_CABS, cab, edits);
+        ui.add_space(10.0);
+        ui.label(tr("Mic"));
+        let target = AutoTarget::Fx {
+            slot: slot as u8,
+            param: 8,
+        };
+        let mut mic = shown(insert, track, slot, 8, beat);
+        let resp = ui.add_enabled(
+            automation::editable(track, target),
+            egui::Slider::new(&mut mic, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0} %", v * 100.0)),
+        );
+        if resp.changed() {
+            edits.push(Edit {
+                param: 8,
+                value: mic,
+                ended: !resp.dragged(),
+            });
+        } else if resp.drag_stopped() {
+            edits.push(Edit {
+                param: 8,
+                value: mic,
+                ended: true,
+            });
+        }
+        resp.on_hover_text(tr("From the edge of the cone to its centre"));
+    });
 }
 
 /// The EQ's gain over the frequencies 20 Hz to 20 kHz, ±18 dB.
@@ -235,6 +486,33 @@ mod tests {
         p.tracks[0].inserts.clear();
         h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
         assert_eq!(s.mixer.fx_window, None);
+    }
+
+    #[test]
+    fn the_amp_designer_window_draws_and_locks_its_automated_knobs() {
+        use crate::model::AutoMode;
+        let mut p = Project::empty();
+        p.tracks[0].inserts = vec![Insert::new(FxKind::Amp)];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(900.0, 760.0);
+        for _ in 0..4 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        // Looking at the faceplate changes nothing.
+        assert_eq!(s.mixer.fx_window, Some((0, 0)));
+        assert_eq!(p.tracks[0].inserts[0], Insert::new(FxKind::Amp));
+        // A played Gain lane locks the knob in Read mode, as the sliders are locked.
+        let gain = AutoTarget::Fx { slot: 0, param: 1 };
+        p.tracks[0].auto.mode = AutoMode::Read;
+        p.tracks[0].auto.set_point(gain, 0.0, 0.25);
+        assert!(!automation::editable(&p.tracks[0], gain));
+        for _ in 0..4 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(p.tracks[0].inserts[0].params[1], 12.0);
+        assert_eq!(p.tracks[0].auto.lane(gain).len(), 1);
     }
 
     #[test]

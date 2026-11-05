@@ -45,6 +45,7 @@ mod scripter;
 mod side_panes;
 mod signature_track;
 mod smart_tempo;
+mod soundfonts;
 mod start_screen;
 mod step_editor;
 mod sync_menu;

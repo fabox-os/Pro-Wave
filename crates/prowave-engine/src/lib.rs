@@ -24,6 +24,7 @@ mod monitor;
 mod mtc;
 mod output;
 mod routing;
+mod soundfont;
 mod synth;
 mod tempo_map;
 mod triple;
@@ -47,7 +48,8 @@ pub use crate::flex::{
     PitchShift, WarpPoint, MAX_POINTS as MAX_FLEX_POINTS,
 };
 pub use crate::fx::{
-    eq_response_db, response_db, Chain, Fx, FxKind, ParamInfo, Pdc, MAX_FX_PARAMS, MAX_INSERTS,
+    eq_response_db, response_db, Chain, Fx, FxKind, ParamInfo, Pdc, AMP_CABS, AMP_MODELS,
+    MAX_FX_PARAMS, MAX_INSERTS,
 };
 pub use crate::monitor::{InputFeed, MonitorTrack, MAX_MONITORS};
 pub use crate::mtc::{
@@ -59,6 +61,7 @@ pub use crate::routing::{
     curve_shape, lane_value, send_gain, AutoLane, AutoPoint, AutoTarget, Route, SendSpec,
     MAX_AUTO_POINTS, MAX_BUSES, MAX_SENDS,
 };
+pub use crate::soundfont::{PresetInfo, SfPlayer, SoundFontBank, MAX_SOUNDFONT_BYTES};
 pub use crate::synth::{Kit, SynthPatch, Wave};
 pub use crate::tempo_map::{
     MusicalPosition, SignatureEvent, Smpte, SmpteRate, TempoCurve, TempoEvent, TempoMap, MAX_BPM,

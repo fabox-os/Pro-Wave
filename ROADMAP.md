@@ -415,7 +415,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [ ] Alchemy-Lite: 2 sources (VA + Sampler), Morph pad, MSEG, Arp, Granular basic (for v1.0)
 - [ ] Ultrabeat: 25 voices drum synth, built-in step sequencer
 - [ ] Studio Strings/Horns: Articulation ID system (key switch, channel, velocity)
-- [ ] Guitar and bass amp emulation (tester request, 2026-10-30): next after audio recording
+- [x] Guitar and bass amp emulation (tester request, 2026-10-30; done 2026-11-03): *Amp Designer* in the Audio FX slots. Five amplifier models (Clean Combo, Tweed, British Crunch, Plexi Lead, Bass Amp), four valve stages with asymmetric soft clipping at twice the sample rate, a tone stack (Gain, Bass, Mid, Treble, Presence, Master), three speaker cabinets (1x12 Combo, 4x12 British, 4x10 Bass) or none, and a microphone position from the edge of the cone to its centre. Every setting is automatable; a *Guitar Amp* set of Library patches loads it. Pending: a pedal board, impulse-response cabinets, and listening on real guitar recordings.
 - [ ] FX full suite: Space Designer (convolution reverb with IR loading, envelope, filter, length), ChromaVerb (14 models), Delay Designer (visual tap editor, 26 taps, pitch/filter per tap), Tape Delay, Echo, Chorus, Ensemble, Flanger, Phaser, Tremolo, AutoFilter, Ringshifter, Distortion II, Bitcrusher, Overdrive, Pedalboard (35 pedals), Amp Designer (amps + cabs + mics), Match EQ, Multipressor, Exciter, SubBass, Voice Transformer, etc.
 - [ ] Mastering Assistant: rule-based chain (EQ -> Comp -> Limiter) + LUFS targeting -14 LUFS, analyze using `ebur128` crate
 - **DoD:** A/B test Channel EQ curve vs Logic (within 0.5dB), Space Designer IR load
