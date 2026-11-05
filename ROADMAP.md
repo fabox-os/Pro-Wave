@@ -436,6 +436,10 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [ ] Loop Browser: Apple Loops metadata parsing (key, tempo, style), drag-drop with auto tempo/key adaptation, All Files Browser
   - Started (2026-10-30): Loop Browser and All Files panes list a folder and add a file on
     double-click. No Apple Loops tags or tempo matching yet.
+  - Done (2026-11-05): the Loop Browser reads the tags of CAF Apple Loops (category, genre, key,
+    beat count, tempo from the beat count and duration) in the background, shows them under the
+    file name and searches them. Tested with files built to match the format notes, not with real
+    Apple Loops. Still missing: AIFF-based loops, drag-drop with auto tempo/key adaptation.
   - Done (2026-10-31): ALAC and AAC decoding are enabled (with Ogg Vorbis, M4A/MP4 and ADPCM),
     so the audio inside Apple Loops should open. Tried only with test files, not with real
     Apple Loops.
