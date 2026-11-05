@@ -711,3 +711,13 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Med inräkning på börjar inspelningen efter en takt med klick.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Fånga inspelning gör det du just spelade på ett MIDI-klaviatur till en region.
 
+Amp = Förstärkare
+Cabinet = Låda
+Mic = Mikrofon
+From the edge of the cone to its centre = Från konens kant till dess mitt
+missing = saknas
+SoundFont: = SoundFont:
+None = Ingen
+Choose SoundFont… = Välj SoundFont…
+Remove SoundFont = Ta bort SoundFont
+Guitar Amp = Gitarrförstärkare

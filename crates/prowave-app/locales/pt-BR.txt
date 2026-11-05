@@ -711,3 +711,13 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Com a contagem ligada, a gravação começa depois de um compasso de cliques.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Capturar gravação transforma em região o que você acabou de tocar em um teclado MIDI.
 
+Amp = Amplificador
+Cabinet = Gabinete
+Mic = Microfone
+From the edge of the cone to its centre = Da borda do cone ao seu centro
+missing = ausente
+SoundFont: = SoundFont:
+None = Nenhum
+Choose SoundFont… = Escolher SoundFont…
+Remove SoundFont = Remover SoundFont
+Guitar Amp = Amplificador de guitarra

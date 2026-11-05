@@ -711,3 +711,13 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = カウントインがオンのとき、録音は 1 小節のクリックの後に始まります。
 Capture Recording turns what you just played on a MIDI keyboard into a region. = 録音をキャプチャは、MIDI キーボードで弾いたばかりの演奏をリージョンにします。
 
+Amp = アンプ
+Cabinet = キャビネット
+Mic = マイク
+From the edge of the cone to its centre = コーンの端から中心まで
+missing = 見つかりません
+SoundFont: = SoundFont：
+None = なし
+Choose SoundFont… = SoundFontを選択…
+Remove SoundFont = SoundFontを削除
+Guitar Amp = ギターアンプ

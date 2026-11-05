@@ -711,3 +711,13 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Kapag naka-on ang Count-in, magsisimula ang recording pagkatapos ng isang bar ng click.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Ginagawang region ng Capture Recording ang kakatugtog mo lang sa MIDI keyboard.
 
+Amp = Amp
+Cabinet = Kabinet
+Mic = Mic
+From the edge of the cone to its centre = Mula sa gilid ng cone hanggang sa gitna nito
+missing = nawawala
+SoundFont: = SoundFont:
+None = Wala
+Choose SoundFont… = Pumili ng SoundFont…
+Remove SoundFont = Alisin ang SoundFont
+Guitar Amp = Amp ng Gitara

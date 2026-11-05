@@ -711,3 +711,13 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = 打开预备拍后，录音会在一小节的节拍声后开始。
 Capture Recording turns what you just played on a MIDI keyboard into a region. = 捕捉录音会把你刚在 MIDI 键盘上弹奏的内容变成一个片段。
 
+Amp = 放大器
+Cabinet = 箱体
+Mic = 麦克风
+From the edge of the cone to its centre = 从锥盆边缘到中心
+missing = 缺失
+SoundFont: = SoundFont：
+None = 无
+Choose SoundFont… = 选择 SoundFont…
+Remove SoundFont = 移除 SoundFont
+Guitar Amp = 吉他放大器

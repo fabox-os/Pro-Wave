@@ -711,3 +711,13 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Count-in चालू होने पर रिकॉर्डिंग एक बार की क्लिक के बाद शुरू होती है।
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Capture Recording आपने MIDI कीबोर्ड पर अभी जो बजाया उसे रीजन बना देता है।
 
+Amp = एम्प
+Cabinet = कैबिनेट
+Mic = माइक
+From the edge of the cone to its centre = कोन के किनारे से उसके केंद्र तक
+missing = गायब
+SoundFont: = SoundFont:
+None = कोई नहीं
+Choose SoundFont… = SoundFont चुनें…
+Remove SoundFont = SoundFont हटाएँ
+Guitar Amp = गिटार एम्प
