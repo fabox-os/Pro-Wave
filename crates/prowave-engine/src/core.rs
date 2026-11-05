@@ -1794,6 +1794,7 @@ impl EngineCore {
 
     /// Render interleaved stereo (`out.len() == frames * 2`).
     pub fn process(&mut self, out: &mut [f32]) {
+        flush_denormals();
         self.drain_commands();
         let frame_secs = 1.0 / self.sr as f64;
         let (mut pk_l, mut pk_r) = (0f32, 0f32);
@@ -2071,9 +2072,37 @@ impl EngineCore {
     }
 }
 
+/// Treats the smallest floating-point numbers as zero on this thread. A decaying reverb or filter
+/// tail would otherwise reach them, where every operation can take many times as long, and nobody
+/// can hear them. Other processors keep their usual behaviour.
+#[inline]
+fn flush_denormals() {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: only sets the flush-to-zero and denormals-are-zero bits of this thread's control word.
+    #[allow(deprecated)]
+    unsafe {
+        use std::arch::x86_64::{_mm_getcsr, _mm_setcsr};
+        _mm_setcsr(_mm_getcsr() | 0x8040);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn denormals_become_zero_on_the_audio_thread() {
+        use std::hint::black_box;
+        // Its own thread: the setting belongs to the thread and stays on it.
+        let thread = std::thread::spawn(|| {
+            let tiny = black_box(1e-40f32);
+            assert!(tiny * black_box(1.0) != 0.0, "a denormal before");
+            flush_denormals();
+            assert_eq!(tiny * black_box(1.0), 0.0, "zero after");
+        });
+        assert!(thread.join().is_ok());
+    }
 
     fn rig() -> (EngineCore, Producer<Command>, StateReader) {
         let (tx, rx) = rtrb::RingBuffer::new(64);
