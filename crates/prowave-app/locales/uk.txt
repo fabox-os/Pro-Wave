@@ -710,9 +710,4 @@ To record MIDI, press R on an instrument track, then Record and Play. = Щоб �
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = Кнопка I дає змогу чути вхід аудіодоріжки. Щоб уникнути зворотного зв'язку, використовуйте навушники.
 With Count-in on, recording starts after one bar of clicks. = Якщо відлік увімкнено, запис починається після одного такту клацань.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Захопити запис перетворює на регіон те, що ви щойно зіграли на MIDI-клавіатурі.
-# Amp Designer
-Amp = Підсилювач
-Cabinet = Колонка
-Mic = Мікрофон
-From the edge of the cone to its centre = Від краю конуса до його центра
-Guitar Amp = Гітарний підсилювач
+

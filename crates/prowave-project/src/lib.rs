@@ -265,6 +265,10 @@ pub struct TrackDoc {
     /// External MIDI tracks: the MIDI output port (by name) and the channel, 1-16.
     pub midi_port: Option<String>,
     pub midi_channel: u8,
+    /// SoundFont instrument: the `.sf2` file (its path) and the preset's bank and program.
+    pub soundfont: Option<String>,
+    pub soundfont_bank: u16,
+    pub soundfont_program: u8,
     /// Audio tracks: the first input channel they record (0 is Input 1), and whether they
     /// record it and the next one as a stereo pair.
     pub input: u16,
@@ -386,6 +390,9 @@ impl Default for TrackDoc {
             vca: None,
             midi_port: None,
             midi_channel: 1,
+            soundfont: None,
+            soundfont_bank: 0,
+            soundfont_program: 0,
             input: 0,
             input_stereo: false,
             output: 0,

@@ -8,7 +8,7 @@
 //! yet are shown dimmed and do nothing.
 use crate::i18n::tr;
 use crate::mixer::{channel_strip, fx_rows_for, rows, send_rows_for, Meters, NameStyle, StripKey};
-use crate::model::{Project, TrackKind, MAX_REGION_GAIN, MIN_REGION_GAIN};
+use crate::model::{Project, SoundFontUse, TrackKind, MAX_REGION_GAIN, MIN_REGION_GAIN};
 use crate::track_icons::{draw_icon, track_icon};
 use crate::widgets::{stroke, BTN_BG, TEXT, TEXT_DIM};
 use crate::UiState;
@@ -33,6 +33,26 @@ pub(crate) const FADE_CURVES: [(&str, FadeCurve); 3] = [
     ("Linear", FadeCurve::Linear),
     ("S-Curve", FadeCurve::SCurve),
 ];
+
+/// A SoundFont setting in the inspector: the preset and the file name, or the file name and
+/// "missing" when the file is gone.
+fn soundfont_label(sf: &SoundFontUse) -> String {
+    let path = std::path::Path::new(&sf.path);
+    let file = path
+        .file_name()
+        .map_or_else(|| sf.path.clone(), |n| n.to_string_lossy().into_owned());
+    let preset = crate::soundfonts::loaded(&sf.path).and_then(|bank| {
+        bank.presets()
+            .iter()
+            .find(|pr| pr.bank == sf.bank && pr.program == sf.program)
+            .map(|pr| pr.name.clone())
+    });
+    match preset {
+        Some(name) => format!("{name} ({file})"),
+        None if !path.exists() => format!("{file} · {}", tr("missing")),
+        None => file,
+    }
+}
 
 fn gain_text(db: f32) -> String {
     if db == 0.0 {
@@ -684,6 +704,73 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                 }
                 y += ROW_H;
             }
+            if !external {
+                // The SoundFont instrument this track plays instead of its synth patch.
+                label(&g, left, y, tr("SoundFont:"), true);
+                let current = p.tracks[ti].soundfont.clone();
+                let shown = match &current {
+                    None => tr("None").to_string(),
+                    Some(sf) => soundfont_label(sf),
+                };
+                let rect = Rect::from_min_size(pos2(vx, y + 2.0), vec2(vw, ROW_H - 4.0));
+                if let Some(resp) = popup(ui, &g, rect, "soundfont", &shown, true) {
+                    egui::Popup::menu(&resp).show(|ui| {
+                        if ui.button(tr("Choose SoundFont…")).clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("SoundFont", &["sf2", "SF2"])
+                                .pick_file()
+                            {
+                                let path = path.to_string_lossy().into_owned();
+                                // Read the file again, even if it was loaded before.
+                                crate::soundfonts::forget(&path);
+                                let first = match crate::soundfonts::load(&path) {
+                                    Ok(bank) => bank
+                                        .presets()
+                                        .first()
+                                        .map_or((0, 0), |pr| (pr.bank, pr.program)),
+                                    Err(e) => {
+                                        tracing::warn!("{e}");
+                                        (0, 0)
+                                    }
+                                };
+                                p.tracks[ti].soundfont = Some(SoundFontUse {
+                                    path,
+                                    bank: first.0,
+                                    program: first.1,
+                                });
+                            }
+                            ui.close();
+                        }
+                        if let Some(sf) = current.as_ref() {
+                            if let Some(bank) = crate::soundfonts::loaded(&sf.path) {
+                                ui.separator();
+                                egui::ScrollArea::vertical()
+                                    .max_height(320.0)
+                                    .show(ui, |ui| {
+                                        for preset in bank.presets() {
+                                            let picked = preset.bank == sf.bank
+                                                && preset.program == sf.program;
+                                            if ui.selectable_label(picked, &preset.name).clicked() {
+                                                p.tracks[ti].soundfont = Some(SoundFontUse {
+                                                    path: sf.path.clone(),
+                                                    bank: preset.bank,
+                                                    program: preset.program,
+                                                });
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                            }
+                            ui.separator();
+                            if ui.button(tr("Remove SoundFont")).clicked() {
+                                p.tracks[ti].soundfont = None;
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+                y += ROW_H;
+            }
             for (t, v) in [
                 (tr("MIDI In Port:"), tr("All")),
                 (tr("MIDI In Channel:"), tr("All")),
@@ -884,5 +971,40 @@ mod tests {
         assert_eq!(gain_text(2.0), "+2.0 dB");
         assert_eq!(fade_text(0.0, 120.0), "0");
         assert_eq!(fade_text(1.0, 120.0), "500 ms", "a beat at 120 bpm");
+    }
+
+    #[test]
+    fn a_soundfont_setting_names_its_file_and_says_when_it_is_missing() {
+        let sf = SoundFontUse {
+            path: "/nonexistent/GeneralMIDI.sf2".into(),
+            bank: 0,
+            program: 0,
+        };
+        assert!(soundfont_label(&sf).starts_with("GeneralMIDI.sf2"));
+    }
+
+    #[test]
+    fn a_soundfont_track_draws_and_keeps_its_setting() {
+        let mut p = Project::empty();
+        p.tracks.clear();
+        let mut t = crate::model::Track::new("Organ", TrackKind::Instrument);
+        t.soundfont = Some(SoundFontUse {
+            path: "/nonexistent/GeneralMIDI.sf2".into(),
+            bank: 0,
+            program: 19,
+        });
+        p.tracks.push(t);
+        p.selected_track = 0;
+        let mut s = UiState::new();
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(360.0, 900.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        assert_eq!(
+            p.tracks[0].soundfont.as_ref().map(|s| s.program),
+            Some(19),
+            "drawing the row changes nothing"
+        );
     }
 }

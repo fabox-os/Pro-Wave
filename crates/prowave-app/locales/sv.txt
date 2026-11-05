@@ -710,9 +710,4 @@ To record MIDI, press R on an instrument track, then Record and Play. = För att
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = Med I-knappen hör du ett ljudspårs ingång. Använd hörlurar för att undvika rundgång.
 With Count-in on, recording starts after one bar of clicks. = Med inräkning på börjar inspelningen efter en takt med klick.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Fånga inspelning gör det du just spelade på ett MIDI-klaviatur till en region.
-# Amp Designer
-Amp = Förstärkare
-Cabinet = Högtalarlåda
-Mic = Mikrofon
-From the edge of the cone to its centre = Från konens kant till dess mitt
-Guitar Amp = Gitarrförstärkare
+

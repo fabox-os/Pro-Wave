@@ -710,9 +710,4 @@ To record MIDI, press R on an instrument track, then Record and Play. = MIDI を
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = I ボタンでオーディオトラックの入力を聴けます。ハウリングを防ぐためヘッドホンを使ってください。
 With Count-in on, recording starts after one bar of clicks. = カウントインがオンのとき、録音は 1 小節のクリックの後に始まります。
 Capture Recording turns what you just played on a MIDI keyboard into a region. = 録音をキャプチャは、MIDI キーボードで弾いたばかりの演奏をリージョンにします。
-# Amp Designer
-Amp = アンプ
-Cabinet = キャビネット
-Mic = マイク
-From the edge of the cone to its centre = コーンの端から中心まで
-Guitar Amp = ギターアンプ
+
