@@ -376,6 +376,9 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             vca: t.vca,
             midi_port: t.midi_port.clone(),
             midi_channel: t.midi_channel,
+            soundfont: t.soundfont.as_ref().map(|s| s.path.clone()),
+            soundfont_bank: t.soundfont.as_ref().map_or(0, |s| s.bank),
+            soundfont_program: t.soundfont.as_ref().map_or(0, |s| s.program),
             input: match t.input {
                 InputSource::Mono(c) | InputSource::Stereo(c) => c,
             },
@@ -742,6 +745,7 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             vca: t.vca,
             midi_port: port_name(&t.midi_port),
             midi_channel: t.midi_channel.clamp(1, 16),
+            soundfont: soundfont_of(t),
             input: input_source(t.input, t.input_stereo),
             output: if usize::from(t.output) <= prowave_engine::MAX_BUSES {
                 t.output
@@ -988,6 +992,16 @@ pub fn valid_smpte_start(start: [u8; 4], rate: SmpteRate) -> [u8; 4] {
 }
 
 /// A MIDI port name as stored: not too long, and not empty.
+/// The SoundFont a saved track plays: its file path (empty means none) and the preset.
+fn soundfont_of(t: &TrackDoc) -> Option<crate::model::SoundFontUse> {
+    let path = t.soundfont.as_deref().filter(|p| !p.trim().is_empty())?;
+    Some(crate::model::SoundFontUse {
+        path: path.to_string(),
+        bank: t.soundfont_bank.min(128),
+        program: t.soundfont_program.min(127),
+    })
+}
+
 fn port_name(name: &Option<String>) -> Option<String> {
     name.as_ref()
         .map(|n| n.chars().take(128).collect::<String>())
@@ -1154,6 +1168,40 @@ pub(crate) mod tests {
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         let top = prowave_engine::MAX_INPUT_CHANNELS as u16 - 2;
         assert_eq!(r.tracks[1].input, InputSource::Stereo(top));
+    }
+
+    #[test]
+    fn a_soundfont_instrument_keeps_its_file_and_preset() {
+        use crate::model::SoundFontUse;
+        let mut p = Project::empty();
+        p.tracks.clear();
+        let mut t = Track::new("Organ", TrackKind::Instrument);
+        t.soundfont = Some(SoundFontUse {
+            path: "/sf/GM.sf2".into(),
+            bank: 0,
+            program: 19,
+        });
+        p.tracks.push(t);
+        p.tracks.push(Track::new("Drums", TrackKind::Instrument));
+        let (mut doc, _) = to_doc(&p);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(
+            q.tracks[0].soundfont,
+            Some(SoundFontUse {
+                path: "/sf/GM.sf2".into(),
+                bank: 0,
+                program: 19
+            })
+        );
+        assert_eq!(q.tracks[1].soundfont, None);
+        // An empty path is no SoundFont, and a hand-edited program cannot leave the MIDI range.
+        doc.tracks[0].soundfont = Some("  ".into());
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(r.tracks[0].soundfont, None);
+        doc.tracks[0].soundfont = Some("/sf/GM.sf2".into());
+        doc.tracks[0].soundfont_program = 200;
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(r.tracks[0].soundfont.as_ref().map(|s| s.program), Some(127));
     }
 
     #[test]

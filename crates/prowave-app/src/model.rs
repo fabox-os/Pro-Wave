@@ -594,6 +594,18 @@ pub struct Track {
     pub midi_channel: u8,
     /// MIDI FX: effects that change the notes the track plays (see `midi_fx.rs`).
     pub midi_fx: Vec<crate::midi_fx::FxSlot>,
+    /// A SoundFont (`.sf2`) instrument the track plays instead of its synth patch.
+    pub soundfont: Option<SoundFontUse>,
+}
+
+/// A SoundFont instrument on a track: the `.sf2` file and the preset played from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoundFontUse {
+    /// The file's path, as the user picked it.
+    pub path: String,
+    /// The preset's bank (128 for drum kits) and program number.
+    pub bank: u16,
+    pub program: u8,
 }
 
 impl Track {
@@ -639,6 +651,7 @@ impl Track {
             folded: false,
             vca: None,
             midi_port: None,
+            soundfont: None,
             midi_channel: 1,
             midi_fx: Vec::new(),
         }
@@ -787,6 +800,7 @@ impl Project {
             folded: false,
             vca: None,
             midi_port: None,
+            soundfont: None,
             midi_channel: 1,
             midi_fx: Vec::new(),
         }];
@@ -846,6 +860,7 @@ impl Project {
             folded: false,
             vca: None,
             midi_port: None,
+            soundfont: None,
             midi_channel: 1,
             midi_fx: Vec::new(),
         };

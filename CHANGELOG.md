@@ -3,6 +3,12 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **SoundFont instruments (`.sf2`):** an instrument track can now play real sampled sounds from a SoundFont file, such as a General MIDI bank, with its drum kits. Select the track, open the **SoundFont** row in the Inspector, choose a `.sf2` file and then a preset. The choice is saved in the project. The sound is made by a pure Rust synthesizer inside Pro Wave, so nothing else has to be installed. Pro Wave does not ship a SoundFont: use one you have the right to use (for example GeneralUser GS or FluidR3 GM, whose licenses you should read first). Notes start within 0.33 ms of their time, and each track plays up to 64 notes at once. A file that is missing or damaged is logged and the track plays its synth patch.
+
 ## 0.2.1
 
 ### All systems (Windows, macOS, Linux)

@@ -1,11 +1,26 @@
 //! Bridges the UI project model to `prowave-engine` using only `Command`s (never direct mutation).
 use crate::model::TrackKind;
-use crate::model::{Insert, Project, Region, TempoPoint, Track};
+use crate::model::{Insert, Project, Region, SoundFontUse, TempoPoint, Track};
 use crate::patches::synth_patch;
 use prowave_engine::{
     AutoLane, AutoTarget, Chain, Command, ControlEvent, Engine, Fx, InputSource, MonitorTrack,
-    NoteEvent, Pdc, Route, SendSpec, Song, SynthPatch, TrackMix, MAX_MONITORS, MAX_TRACKS,
+    NoteEvent, Pdc, Route, SendSpec, SfPlayer, Song, SynthPatch, TrackMix, MAX_MONITORS,
+    MAX_TRACKS,
 };
+
+/// The player for a track's SoundFont preset. The file's first preset plays if it has none
+/// with the saved bank and program.
+fn soundfont_player(sf: &SoundFontUse, sample_rate: f32) -> Result<Box<SfPlayer>, String> {
+    let bank = crate::soundfonts::load(&sf.path)?;
+    let preset = bank
+        .presets()
+        .iter()
+        .find(|p| p.bank == sf.bank && p.program == sf.program)
+        .or(bank.presets().first())
+        .cloned()
+        .ok_or_else(|| format!("{}: the SoundFont has no presets", sf.path))?;
+    SfPlayer::new(&bank, &preset, sample_rate).map(Box::new)
+}
 
 #[derive(Clone, Copy, PartialEq)]
 struct Mix {
@@ -32,6 +47,8 @@ pub struct EngineSync {
     mixes: Vec<Mix>,
     /// Last synth patch sent for each track (re-sent whenever the Library changes it).
     patches: Vec<SynthPatch>,
+    /// The SoundFont each track was last given (`None`: its synth patch), by track.
+    soundfonts: Vec<Option<SoundFontUse>>,
     /// Which tracks the engine was told are external, by track.
     externals: Vec<bool>,
     /// The controller changes the engine has.
@@ -465,6 +482,7 @@ impl EngineSync {
             position: None,
             mixes: Vec::new(),
             patches: Vec::new(),
+            soundfonts: Vec::new(),
             externals: Vec::new(),
             controls: Vec::new(),
             mtc: None,
@@ -606,6 +624,43 @@ impl EngineSync {
             } else {
                 self.patches.push(patch);
             }
+        }
+        // SoundFont instruments: a track's player is made again whenever its file or preset
+        // changes. A file that cannot be played is logged and the track plays its synth patch.
+        let sample_rate = self.engine.sample_rate() as f32;
+        for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
+            let want = if t.kind == TrackKind::ExternalMidi {
+                None
+            } else {
+                t.soundfont.as_ref()
+            };
+            let unchanged = match self.soundfonts.get(i) {
+                Some(sent) => sent.as_ref() == want,
+                None => want.is_none(),
+            };
+            if unchanged {
+                continue;
+            }
+            let player = match want {
+                Some(sf) => match soundfont_player(sf, sample_rate) {
+                    Ok(player) => Some(player),
+                    Err(e) => {
+                        tracing::warn!("SoundFont of track {}: {e}", t.name);
+                        None
+                    }
+                },
+                None => None,
+            };
+            if !self.send(Command::SetTrackSoundFont {
+                track: i as u16,
+                player,
+            }) {
+                break;
+            }
+            if self.soundfonts.len() <= i {
+                self.soundfonts.resize(i + 1, None);
+            }
+            self.soundfonts[i] = want.cloned();
         }
         // External MIDI tracks: their notes go out as MIDI instead of sounding here.
         for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
@@ -833,6 +888,7 @@ mod tests {
             folded: false,
             vca: None,
             midi_port: None,
+            soundfont: None,
             midi_channel: 1,
             midi_fx: Vec::new(),
         }
@@ -1259,5 +1315,29 @@ mod tests {
         p.tracks[1].output = 3;
         assert_eq!(route_of(&p, 0).output, 3);
         assert_eq!(route_of(&p, 1).output, 0);
+    }
+
+    #[test]
+    fn a_soundfont_that_cannot_be_read_gives_no_player() {
+        let sf = SoundFontUse {
+            path: "/nonexistent/prowave-missing.sf2".into(),
+            bank: 0,
+            program: 0,
+        };
+        assert!(soundfont_player(&sf, 48_000.0).is_err());
+    }
+
+    /// The General MIDI SoundFont named by `PROWAVE_TEST_SF2`, if set (it is not in the repo).
+    #[test]
+    fn a_soundfont_file_gives_a_player_for_its_preset() {
+        let Ok(path) = std::env::var("PROWAVE_TEST_SF2") else {
+            return;
+        };
+        let sf = SoundFontUse {
+            path,
+            bank: 0,
+            program: 0,
+        };
+        assert!(soundfont_player(&sf, 48_000.0).is_ok());
     }
 }
