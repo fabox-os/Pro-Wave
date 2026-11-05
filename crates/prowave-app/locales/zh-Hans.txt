@@ -710,8 +710,4 @@ To record MIDI, press R on an instrument track, then Record and Play. = 录制 M
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = 按 I 按钮可以听到音频轨道的输入。请使用耳机以避免啸叫。
 With Count-in on, recording starts after one bar of clicks. = 打开预备拍后，录音会在一小节的节拍声后开始。
 Capture Recording turns what you just played on a MIDI keyboard into a region. = 捕捉录音会把你刚在 MIDI 键盘上弹奏的内容变成一个片段。
-None = 无
-SoundFont: = SoundFont：
-Choose SoundFont… = 选择 SoundFont…
-Remove SoundFont = 移除 SoundFont
-missing = 缺失
+

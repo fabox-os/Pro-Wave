@@ -710,8 +710,4 @@ To record MIDI, press R on an instrument track, then Record and Play. = Para mag
 The I button lets you hear an audio track's input. Use headphones to avoid feedback. = Sa I button, maririnig mo ang input ng audio track. Gumamit ng headphones para maiwasan ang feedback.
 With Count-in on, recording starts after one bar of clicks. = Kapag naka-on ang Count-in, magsisimula ang recording pagkatapos ng isang bar ng click.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Ginagawang region ng Capture Recording ang kakatugtog mo lang sa MIDI keyboard.
-None = Wala
-SoundFont: = SoundFont:
-Choose SoundFont… = Pumili ng SoundFont…
-Remove SoundFont = Alisin ang SoundFont
-missing = nawawala
+
