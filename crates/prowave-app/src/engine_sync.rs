@@ -669,12 +669,21 @@ impl EngineSync {
                 continue;
             }
             let player = match want {
-                Some(sf) => match soundfont_player(sf, sample_rate) {
-                    Ok(player) => Some(player),
-                    Err(e) => {
+                Some(sf) => match crate::soundfonts::request(&sf.path, || {}) {
+                    // Still being read in the background: the track keeps its synth patch and
+                    // is looked at again next time.
+                    crate::soundfonts::Status::Loading => continue,
+                    crate::soundfonts::Status::Failed(e) => {
                         tracing::warn!("SoundFont of track {}: {e}", t.name);
                         None
                     }
+                    crate::soundfonts::Status::Ready => match soundfont_player(sf, sample_rate) {
+                        Ok(player) => Some(player),
+                        Err(e) => {
+                            tracing::warn!("SoundFont of track {}: {e}", t.name);
+                            None
+                        }
+                    },
                 },
                 None => None,
             };

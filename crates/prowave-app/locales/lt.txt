@@ -757,3 +757,7 @@ None = Nėra
 Choose SoundFont… = Pasirinkti SoundFont…
 Remove SoundFont = Pašalinti SoundFont
 Guitar Amp = Gitaros stiprintuvas
+Loading… = Įkeliama…
+Loading… {}% · about {} left = Įkeliama… {}% · liko apie {}
+{} min {} s = {} min. {} s
+{} s = {} s

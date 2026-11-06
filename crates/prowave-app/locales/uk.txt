@@ -757,3 +757,7 @@ None = Немає
 Choose SoundFont… = Вибрати SoundFont…
 Remove SoundFont = Видалити SoundFont
 Guitar Amp = Гітарний підсилювач
+Loading… = Завантаження…
+Loading… {}% · about {} left = Завантаження… {}% · залишилось близько {}
+{} min {} s = {} хв {} с
+{} s = {} с

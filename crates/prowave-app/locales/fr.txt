@@ -757,3 +757,7 @@ None = Aucun
 Choose SoundFont… = Choisir une SoundFont…
 Remove SoundFont = Supprimer la SoundFont
 Guitar Amp = Ampli guitare
+Loading… = Chargement…
+Loading… {}% · about {} left = Chargement… {}% · environ {} restantes
+{} min {} s = {} min {} s
+{} s = {} s

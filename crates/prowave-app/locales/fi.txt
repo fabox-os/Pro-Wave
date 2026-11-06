@@ -757,3 +757,7 @@ None = Ei mitään
 Choose SoundFont… = Valitse SoundFont…
 Remove SoundFont = Poista SoundFont
 Guitar Amp = Kitaravahvistin
+Loading… = Ladataan…
+Loading… {}% · about {} left = Ladataan… {}% · noin {} jäljellä
+{} min {} s = {} min {} s
+{} s = {} s

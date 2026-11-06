@@ -757,3 +757,7 @@ None = कोई नहीं
 Choose SoundFont… = SoundFont चुनें…
 Remove SoundFont = SoundFont हटाएँ
 Guitar Amp = गिटार एम्प
+Loading… = लोड हो रहा है…
+Loading… {}% · about {} left = लोड हो रहा है… {}% · लगभग {} बाकी
+{} min {} s = {} मिनट {} सेकंड
+{} s = {} सेकंड

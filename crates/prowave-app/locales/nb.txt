@@ -757,3 +757,7 @@ None = Ingen
 Choose SoundFont… = Velg SoundFont…
 Remove SoundFont = Fjern SoundFont
 Guitar Amp = Gitarforsterker
+Loading… = Laster…
+Loading… {}% · about {} left = Laster… {}% · omtrent {} igjen
+{} min {} s = {} min {} s
+{} s = {} s

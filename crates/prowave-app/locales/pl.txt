@@ -757,3 +757,7 @@ None = Brak
 Choose SoundFont… = Wybierz SoundFont…
 Remove SoundFont = Usuń SoundFont
 Guitar Amp = Wzmacniacz gitarowy
+Loading… = Wczytywanie…
+Loading… {}% · about {} left = Wczytywanie… {}% · jeszcze około {}
+{} min {} s = {} min {} s
+{} s = {} s

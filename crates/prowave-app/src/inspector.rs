@@ -755,7 +755,20 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                     Some(sf) => soundfont_label(sf),
                 };
                 let rect = Rect::from_min_size(pos2(vx, y + 2.0), vec2(vw, ROW_H - 4.0));
-                if let Some(resp) = popup(ui, &g, rect, "soundfont", &shown, true) {
+                let reading = current
+                    .as_ref()
+                    .and_then(|sf| crate::soundfonts::progress(&sf.path));
+                if let Some(pr) = reading {
+                    // The file is being read in the background: a bar shows how far it is.
+                    ui.put(
+                        rect,
+                        egui::ProgressBar::new(pr.fraction)
+                            .text(crate::soundfonts::progress_text(&pr))
+                            .desired_width(rect.width()),
+                    );
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(50));
+                } else if let Some(resp) = popup(ui, &g, rect, "soundfont", &shown, true) {
                     egui::Popup::menu(&resp).show(|ui| {
                         if ui.button(tr("Choose SoundFont…")).clicked() {
                             if let Some(path) = rfd::FileDialog::new()
@@ -763,22 +776,18 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                                 .pick_file()
                             {
                                 let path = path.to_string_lossy().into_owned();
-                                // Read the file again, even if it was loaded before.
+                                // Read the file again, even if it was loaded before, without
+                                // holding up the window; the first preset plays until a
+                                // preset is picked.
                                 crate::soundfonts::forget(&path);
-                                let first = match crate::soundfonts::load(&path) {
-                                    Ok(bank) => bank
-                                        .presets()
-                                        .first()
-                                        .map_or((0, 0), |pr| (pr.bank, pr.program)),
-                                    Err(e) => {
-                                        tracing::warn!("{e}");
-                                        (0, 0)
-                                    }
-                                };
+                                let repaint = ui.ctx().clone();
+                                crate::soundfonts::request(&path, move || {
+                                    repaint.request_repaint()
+                                });
                                 p.tracks[ti].soundfont = Some(SoundFontUse {
                                     path,
-                                    bank: first.0,
-                                    program: first.1,
+                                    bank: 0,
+                                    program: 0,
                                 });
                             }
                             ui.close();

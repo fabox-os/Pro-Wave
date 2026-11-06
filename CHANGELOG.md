@@ -3,6 +3,12 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **SoundFont instruments load without freezing the window:** choosing a `.sf2` file (or opening a project that uses one) now reads it in the background. The Inspector's SoundFont row shows a progress bar with the percent read and the time left, and the track keeps its synth sound until the file is ready. The file is also read straight into the instrument instead of being held twice in memory, which is faster and halves the memory used while loading.
+
 ## 0.2.2
 
 Tested on Ubuntu 26.04.1 LTS (x86-64, kernel 7.0.0-42): the full project check (formatting,

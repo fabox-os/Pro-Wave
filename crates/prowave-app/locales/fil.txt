@@ -757,3 +757,7 @@ None = Wala
 Choose SoundFont… = Pumili ng SoundFont…
 Remove SoundFont = Alisin ang SoundFont
 Guitar Amp = Amp ng Gitara
+Loading… = Naglo-load…
+Loading… {}% · about {} left = Naglo-load… {}% · mga {} na lang
+{} min {} s = {} min {} s
+{} s = {} s

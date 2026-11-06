@@ -757,3 +757,7 @@ None = Tidak Ada
 Choose SoundFont… = Pilih SoundFont…
 Remove SoundFont = Hapus SoundFont
 Guitar Amp = Amp Gitar
+Loading… = Memuat…
+Loading… {}% · about {} left = Memuat… {}% · sekitar {} lagi
+{} min {} s = {} mnt {} dtk
+{} s = {} dtk

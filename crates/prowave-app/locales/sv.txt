@@ -757,3 +757,7 @@ None = Ingen
 Choose SoundFont… = Välj SoundFont…
 Remove SoundFont = Ta bort SoundFont
 Guitar Amp = Gitarrförstärkare
+Loading… = Läser in…
+Loading… {}% · about {} left = Läser in… {}% · cirka {} kvar
+{} min {} s = {} min {} s
+{} s = {} s

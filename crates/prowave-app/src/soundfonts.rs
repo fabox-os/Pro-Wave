@@ -188,6 +188,28 @@ pub fn progress(path: &str) -> Option<Progress> {
     ))
 }
 
+/// Whether any SoundFont is being read (the screen keeps updating while one is).
+pub fn any_loading() -> bool {
+    jobs().lock().is_ok_and(|j| !j.reading.is_empty())
+}
+
+/// The text of a progress bar: "Loading… 42% · about 3 s left", or just "Loading…" until the
+/// time left can be told.
+pub fn progress_text(p: &Progress) -> String {
+    use crate::i18n::{tr, trf};
+    let Some(left) = p.remaining else {
+        return tr("Loading…").to_string();
+    };
+    let percent = (p.fraction * 100.0).round() as u32;
+    let secs = left.as_secs_f64().ceil() as u64;
+    let time = if secs >= 60 {
+        trf("{} min {} s", &[&(secs / 60), &(secs % 60)])
+    } else {
+        trf("{} s", &[&secs.max(1)])
+    };
+    trf("Loading… {}% · about {} left", &[&percent, &time])
+}
+
 /// The SoundFont at `path`, read and parsed on first use, waiting for it. Errors (a missing or
 /// unreadable file, a file that is not a SoundFont, or one larger than [`MAX_SOUNDFONT_BYTES`])
 /// are returned, not cached, so a fixed file is picked up the next time. The program uses
@@ -275,6 +297,16 @@ mod tests {
         let p = estimate(100, 100, Duration::from_secs(8));
         assert_eq!(p.remaining, Some(Duration::ZERO));
         assert_eq!(estimate(5, 0, Duration::from_secs(1)).fraction, 0.0);
+    }
+
+    #[test]
+    fn the_progress_text_shows_percent_and_time_left() {
+        let early = estimate(0, 100, Duration::from_millis(50));
+        assert_eq!(progress_text(&early), "Loading…");
+        let mid = estimate(25, 100, Duration::from_secs(2));
+        assert_eq!(progress_text(&mid), "Loading… 25% · about 6 s left");
+        let slow = estimate(10, 100, Duration::from_secs(20));
+        assert_eq!(progress_text(&slow), "Loading… 10% · about 3 min 0 s left");
     }
 
     #[test]

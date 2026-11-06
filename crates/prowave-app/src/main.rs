@@ -620,6 +620,10 @@ impl eframe::App for App {
             if sync.needs_retry() {
                 ctx.request_repaint();
             }
+            // A SoundFont is being read: keep the progress bar and the sync going.
+            if soundfonts::any_loading() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
             let load = sync.take_dsp_load();
             self.ui.cpu_load = load.max(self.ui.cpu_load - dt as f32 * 0.8);
             if sync.underruns() > 0 {

@@ -757,3 +757,7 @@ None = 无
 Choose SoundFont… = 选择 SoundFont…
 Remove SoundFont = 移除 SoundFont
 Guitar Amp = 吉他放大器
+Loading… = 正在加载…
+Loading… {}% · about {} left = 正在加载… {}% · 约剩 {}
+{} min {} s = {}分{}秒
+{} s = {}秒
