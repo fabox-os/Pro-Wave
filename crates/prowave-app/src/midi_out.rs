@@ -815,6 +815,7 @@ mod tests {
     /// Sends through a real ALSA port: a virtual input that midir creates here, which the sender
     /// then opens by name like any keyboard. Skipped (with a note) where the system has no MIDI
     /// sequencer.
+    #[cfg(target_os = "linux")]
     #[test]
     fn bytes_reach_a_real_midi_port() {
         let Ok(input) = midir::MidiInput::new("prowave-test-sink") else {
