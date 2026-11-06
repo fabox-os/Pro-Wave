@@ -36,23 +36,46 @@ fn pick_port(names: &[String], preferred: Option<&str>, avoided: Option<&str>) -
         })
 }
 
-/// The note message in a raw MIDI message, if it is one (Note On with velocity 0 is a Note
-/// Off). Channel and everything else are ignored.
+/// The note, sustain pedal, pitch bend or channel pressure in a raw MIDI message, if it is one
+/// (Note On with velocity 0 is a Note Off). The channel is ignored; other messages are too.
 pub fn parse(msg: &[u8]) -> Option<LiveNote> {
-    let [status, pitch, vel, ..] = *msg else {
-        return None;
-    };
-    if pitch > 127 {
-        return None;
-    }
+    let status = *msg.first()?;
     match status & 0xf0 {
-        0xb0 if pitch == crate::recorder::SUSTAIN => Some(LiveNote::Sustain { val: vel.min(127) }),
-        0x90 if vel > 0 => Some(LiveNote::On {
-            pitch,
-            vel: vel.min(127),
-        }),
-        0x90 | 0x80 => Some(LiveNote::Off { pitch }),
-        _ => None,
+        // Pitch bend: two data bytes, the least significant 7 bits first.
+        0xe0 => {
+            let [_, lsb, msb, ..] = *msg else {
+                return None;
+            };
+            (lsb <= 127 && msb <= 127).then_some(LiveNote::Bend {
+                val: u16::from(lsb) | (u16::from(msb) << 7),
+            })
+        }
+        // Channel pressure: one data byte.
+        0xd0 => {
+            let [_, val, ..] = *msg else {
+                return None;
+            };
+            (val <= 127).then_some(LiveNote::Pressure { val })
+        }
+        _ => {
+            let [_, pitch, vel, ..] = *msg else {
+                return None;
+            };
+            if pitch > 127 {
+                return None;
+            }
+            match status & 0xf0 {
+                0xb0 if pitch == crate::recorder::SUSTAIN => {
+                    Some(LiveNote::Sustain { val: vel.min(127) })
+                }
+                0x90 if vel > 0 => Some(LiveNote::On {
+                    pitch,
+                    vel: vel.min(127),
+                }),
+                0x90 | 0x80 => Some(LiveNote::Off { pitch }),
+                _ => None,
+            }
+        }
     }
 }
 
@@ -186,9 +209,26 @@ mod tests {
     }
 
     #[test]
+    fn pitch_bend_and_channel_pressure_are_live_events() {
+        assert_eq!(
+            parse(&[0xe0, 0, 64]),
+            Some(LiveNote::Bend { val: 8192 }),
+            "centre"
+        );
+        assert_eq!(
+            parse(&[0xe3, 0x7f, 0x7f]),
+            Some(LiveNote::Bend { val: 16383 })
+        );
+        assert_eq!(parse(&[0xe0, 0, 0]), Some(LiveNote::Bend { val: 0 }));
+        assert_eq!(parse(&[0xd0, 90]), Some(LiveNote::Pressure { val: 90 }));
+        assert_eq!(parse(&[0xd1, 127]), Some(LiveNote::Pressure { val: 127 }));
+        assert_eq!(parse(&[0xe0, 0]), None, "cut short");
+        assert_eq!(parse(&[0xd0]), None, "cut short");
+    }
+
+    #[test]
     fn other_messages_are_ignored() {
         assert_eq!(parse(&[0xb0, 1, 127]), None, "modulation");
-        assert_eq!(parse(&[0xe0, 0, 64]), None, "pitch bend");
         assert_eq!(parse(&[0xf8]), None, "clock");
         assert_eq!(parse(&[0x90, 60]), None, "cut short");
         assert_eq!(parse(&[0x90, 200, 100]), None, "pitch out of range");

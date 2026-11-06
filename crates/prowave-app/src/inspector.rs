@@ -703,6 +703,48 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                     p.tracks[ti].midi_channel = v as u8;
                 }
                 y += ROW_H;
+                // The sound sent when the track is routed: a program, and a bank (both optional;
+                // the top of each range is Off).
+                label(&g, left, y, tr("MIDI Program:"), true);
+                let program = p.tracks[ti].midi_program.map_or(128, i32::from);
+                if let Some(v) = drag_value(
+                    ui,
+                    &g,
+                    Rect::from_min_size(pos2(vx, y + 2.0), vec2(vw, ROW_H - 4.0)),
+                    "midi_out_program",
+                    program,
+                    (0, 128),
+                    128,
+                    if program == 128 {
+                        tr("Off").to_string()
+                    } else {
+                        program.to_string()
+                    },
+                    true,
+                ) {
+                    p.tracks[ti].midi_program = (v < 128).then_some(v as u8);
+                }
+                y += ROW_H;
+                label(&g, left, y, tr("MIDI Bank:"), true);
+                let bank = p.tracks[ti].midi_bank.map_or(16384, i32::from);
+                if let Some(v) = drag_value(
+                    ui,
+                    &g,
+                    Rect::from_min_size(pos2(vx, y + 2.0), vec2(vw, ROW_H - 4.0)),
+                    "midi_out_bank",
+                    bank,
+                    (0, 16384),
+                    16384,
+                    if bank == 16384 {
+                        tr("Off").to_string()
+                    } else {
+                        bank.to_string()
+                    },
+                    true,
+                ) {
+                    p.tracks[ti].midi_bank = (v < 16384).then_some(v as u16);
+                }
+                y += ROW_H;
             }
             if !external {
                 // The SoundFont instrument this track plays instead of its synth patch.

@@ -338,7 +338,7 @@ mod mac {
                 }
             }
             for (label, item, shown, was_enabled) in &mut self.checks {
-                let now = menus::checked(label, s);
+                let now = menus::checked(label, p, s);
                 if now != *shown {
                     item.set_checked(now);
                     *shown = now;

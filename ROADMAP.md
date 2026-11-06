@@ -300,6 +300,72 @@ reverse (`ClipEdit`), `peak_of`, tempo ramps, SMPTE, optional `asio` feature, th
 streaming check, input hardening. Review fixes: SMPTE labels one frame early at frame-exact
 positions (fixed, tested), prefetch size now follows the number of clips.
 
+✅ Done 2026-11-06 (in three PRs, see the changelog): Edit > Cut, Copy, Paste and Split at Playhead
+   on the selected region (`region_edit.rs`; the menu bar and the Tracks area's Edit menu). Paste puts
+   a copy on the selected track at the playhead (audio regions only on audio tracks); Split cuts a MIDI
+   region at the playhead and shortens a note that crosses the cut. Not done: splitting audio, Pattern
+   and Drummer regions. Select All and Join were added in 2026-11-06 (see below).
+✅ Done 2026-11-06: Project Settings window (`project_settings.rs`; File > Project Settings, one tab
+   per group, saved in `.prowave`): General (project name), Synchronization (frame rate, start time,
+   MIDI Time Code ports), Metronome (click volume and accent; engine `SetClick`), Recording (1-4 bars
+   of count-in), Tuning (A4 427-453 Hz for software instruments; engine `SetTuning`), Audio (output
+   device and sample rate, read only), MIDI (which input plays live notes). Not done: choosing the
+   audio output device and buffer size, MIDI output ports, tuning for audio regions, Logic's other
+   General options.
+
+✅ Done 2026-11-06: Track menu. Rename Track, Assign Track Color (16 swatches), Assign Track Icon (15
+   icons or Automatic), and Configure Track Header (hide the number, icon, name, M S R I buttons,
+   volume slider or pan knob), all in `track_dialogs.rs`; Show Master Track adds a Master strip under
+   the tracks with the master fader (no automation lane yet). Icons, colours, names, the master strip
+   and hidden header parts are saved in `.prowave`. Not done: Show Chord Track and Show Arrangement
+   Track (new data models).
+
+✅ Done 2026-11-06: multi-region selection. Edit > Select All selects every region; Shift or Command
+   click adds or removes a region; dragging a selected region moves the whole selection; Delete, Copy,
+   Cut, Paste, Repeat, Split and Set Locators by Regions act on all of it. Join (menu bar and Tracks
+   area) merges the selected MIDI regions of one track into one region, keeping every note where it
+   was. `region_edit.rs`, `tracks_area.rs` (`TracksView::extra`). Not done: Join or Split on audio,
+   Pattern, Drummer and take-folder regions; Bounce and Join.
+
+✅ Done 2026-11-06: Tracks area Functions menu. Move to Playhead (the earliest selected region goes to
+   the playhead, the others keep their distances), Quantize (the notes of selected MIDI regions go to
+   the region's Quantize grid, 1/16 when Off; destructive), and Folder (the selected track goes into a
+   track stack, as Track > Create Track Stack; this is our reading of Logic's "Folder"). Not done:
+   Bounce in Place (needs offline rendering) and Convert to New Sampler Track (needs a sampler track).
+
+✅ Done 2026-11-06: MIDI outputs. The sender (`midi_out.rs`) now works on a `Sink` trait, so its logic is tested with recording ports and a real ALSA virtual port (midir creates it; the notes and the clock arrive). Fixes: a note that was sounding when its track was moved to another port or channel is now released on the port it started on (before, it stayed on). New: each external track sends a Bank Select and a Program Change when it is routed (Inspector: MIDI Program and MIDI Bank, Off at the top of each range); MIDI Clock (Timing Clock 24 per beat, Start, Continue, Stop, Song Position) to the port chosen under Synchronization > Send MIDI Clock, made on the audio clock (`clock.rs`, the engine); Project Settings > MIDI > Send MIDI Panic (All Sound Off and All Notes Off on all 16 channels of every output in use). Saved in `.prowave` (`midi_program`, `midi_bank`, `midi_clock_out`). Not done (the last two were done later, see the next entries): pitch bend, channel aftertouch and SysEx; following MIDI clock from an input; a seek while stopped sends nothing, and a seek while playing sends a Song Position; no test on a real hardware synth.
+
+✅ Done 2026-11-06: pitch bend, channel pressure and SysEx in regions. A region's events
+   (`Control`, value now 0-16383) take reserved kinds above 127: PITCH_BEND (128), CHANNEL_PRESSURE
+   (129) and SYSEX_BYTE (130; one event per byte of a message, from F0 to F7, all at one start).
+   Played live: pitch bend and channel pressure are recorded (the recorder and Capture Recording);
+   MIDI files: they are imported and exported, and SysEx is read and written (a message the file
+   leaves without F7 is completed; SysEx is kept with the first track of its MIDI track that has
+   notes). External MIDI tracks send all three (`midi_out.rs`: 14-bit bend, a whole SysEx message at
+   its F7). Tests: MIDI file round trips, live parsing, the sender with recording ports, engine
+   events on time, and bytes through a real ALSA virtual port. Not done: entering SysEx by hand (only
+   files and the live input supply it), SysEx and bend on the internal instruments, and poly
+   aftertouch (not parsed).
+
+✅ Done 2026-11-06: following MIDI clock from an input. Synchronization > Follow MIDI Clock picks an input
+   port (`clock_in.rs`, midir). `clock_follow.rs` reads the Timing Clock (the tempo is the average of
+   the last two beats, reported every quarter note and rounded to a tenth), Start (play from the
+   beginning), Continue, Stop, and Song Position (the playhead jumps). The app applies them every frame.
+   Saved in `.prowave` (`midi_clock_in`). Tests: the follower with exact timings (120 BPM comes back as
+   120), the mapping to the project, and clock bytes read through a real ALSA virtual port. Not done:
+   the tempo does not follow a clock that is not steady (it averages, so a sudden change takes two
+   beats); the transport's own Play and Stop buttons still work next to it; a clock output on the same
+   device would echo back; and testing with a real hardware clock source (not possible in this sandbox).
+
+✅ Done 2026-11-06: event list fixes and SysEx entry. The list shows pitch bend with its full 14-bit
+   value, channel pressure as Aftertouch, and each System Exclusive message as one row with its
+   bytes in hex (it used to show a bend clamped to one byte and every SysEx byte as its own row).
+   Event list > SysEx… types a message in hex (`sysex.rs`) and puts it in the selected MIDI region at
+   the playhead (or the region under the playhead). Fixes: a followed clock port that is missing is
+   looked for every three seconds, not on every frame; and clearing the followed port no longer keeps
+   its name for the next choice. Not done: SysEx for audio, Pattern and Drummer regions; the list's
+   other columns for SysEx (the Length column is empty).
+
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.
@@ -334,7 +400,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 - [x] Pattern and Drummer regions (2026-10-21): Track > New Pattern Region / New Drummer Region, or double-click an empty stretch of a Drummer track. A Pattern region loops a grid of steps (1-64 steps, 1/4 to 1/32 and triplets, swing, gate, up to 16 rows, velocity per step) edited in the bottom panel's Step Sequencer tab. A Drummer region plays Rock, Pop, Funk, Jazz, Hip Hop or Electronic with a Complexity/Loudness pad, swing, fills, kit pieces on or off and variations; it follows any signature. Both make ordinary notes (the same settings give the same notes), remade when the region's length or the bars under it change; Convert to MIDI Region makes them editable in the Piano Roll. Not done: per-step Chance, Tie, Repeat and loop direction, the Drummer following a Groove Track, and per-bar Drummer edits. The Drummer is algorithmic and was judged by its printed grids and tests, not by ear.
 - [x] Track types: Audio, Instrument, Aux, Master, VCA, Folder/Summing Stacks, External MIDI
   - VCA (2026-10-21): Track > New VCA Track. A VCA track is a fader with Mute and Solo (purple strip in the Mixer, filter Master/VCA); a track's Group slot picks the VCA that moves it. The engine gets each track's level plus its VCA's, and Mute/Solo from the track or its VCA (`Project::track_mix_of`). Assignments follow tracks that are inserted or deleted; saved in `.prowave` (`vca`).
-  - External MIDI (2026-10-21): Track > New External MIDI Track. The track's regions send Note On/Off to a MIDI output port and channel chosen in the Inspector (`midir`, own sending thread, `MidiOutEvent` queue from the audio thread); the engine makes no sound for it, stopping or seeking releases held notes, and live keyboard notes go out too. Saved in `.prowave` (`midi_port`, `midi_channel`). Notes are sent when the thread sees them (about 1 ms after the audio block), not at their exact sample. Not tried with a real synthesizer yet. Not done: MIDI clock, program change, controllers (the sustain pedal is not sent).
+  - External MIDI (2026-10-21): Track > New External MIDI Track. The track's regions send Note On/Off to a MIDI output port and channel chosen in the Inspector (`midir`, own sending thread, `MidiOutEvent` queue from the audio thread); the engine makes no sound for it, stopping or seeking releases held notes, and live keyboard notes go out too. Saved in `.prowave` (`midi_port`, `midi_channel`). Notes are sent when the thread sees them (about 1 ms after the audio block), not at their exact sample. Not tried with a real synthesizer yet. Controllers from the regions (the sustain pedal included) are sent; program and bank: see the MIDI outputs entry below.
 - [x] Region system: Audio regions (backed by `symphonia` decoder wav/aiff/caf/mp3/flac), MIDI regions, Pattern regions, Drummer regions
   - Done (2026-10-21): MP3 and CAF decode like the other formats (an MP3 without a length in its header is measured by decoding it once); drag them onto the window. Tests use small files in `crates/prowave-engine/tests/fixtures`. Pattern and Drummer regions: see below.
 - [x] Non-destructive editing: clip gain, fade in/out with curves (equal-power, linear, S-curve), crossfade, Reverse, Normalize (non-destructive)
@@ -486,14 +552,12 @@ click never silently does nothing. The controls that looked active and did nothi
 on 2026-10-30: Count-in, Capture Recording, Quick Help, Toolbar, Note Pad, Loop Browser, All
 Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Output slots.
 
-- File: Close, Save as Template, Alternatives, Project Management, Project Settings, Page Setup,
+- File: Close, Save as Template, Alternatives, Project Management, Page Setup,
   Print, Movie, Import Audio File and Other Projects (dragging audio in works), Export of audio
   and MusicXML (Selection as MIDI File works), Bounce, Share, Show in File Manager, Open in
   Sound Library Manager, Project Alternatives
-- Edit: Undo History, Cut, Copy, Paste, Paste Replace, Select All, Split at Playhead, Join,
-  Bounce and Join
-- Track: Rename Track, Show Master / Chord / Arrangement Track, Assign Track Color / Icon,
-  Configure Track Header
+- Edit: Undo History, Paste Replace, Bounce and Join
+- Track: Show Chord / Arrangement Track (both need new data: chord events and sections)
 - Navigate: Go to Position
 - Record: Record / Record Repeat, Record Toggle, Record Enable, New Take,
   Delete Take, Bounce In Place, Record Project Settings, Project Settings
@@ -505,9 +569,9 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
   Bring All to Front
 - Help: Key Commands, About Pro Wave
-- Tracks area: Edit (Cut, Copy, Paste, Select All, Split, Join), Functions (Folder, Quantize,
-  Bounce in Place, Convert to New Sampler Track, Move to Playhead), View (Show Global Tracks,
-  Configure Track Header), every tool except Pointer and Fade, waveform zoom buttons
+- Tracks area: Edit (Bounce and Join is not done), Functions (Bounce in Place, Convert to New
+  Sampler Track), View (Show Global Tracks,
+  every tool except Pointer and Fade, waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo
 - Mixer: Select Audio Channel Strips, Create New Output Channel Strip, Show Signal Flow
 - Inspector: Channel, Freeze Mode, Q-Reference, Flex Mode, MIDI In Port and Channel, and the

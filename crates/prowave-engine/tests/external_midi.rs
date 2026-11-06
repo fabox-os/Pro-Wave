@@ -77,6 +77,7 @@ fn timeline_notes_go_out_as_note_on_and_off() {
             pitch: 60,
             vel: 90,
             controller: false,
+            value: 0,
         }]
     );
     run(&mut r, RATE as usize / 2);
@@ -88,6 +89,7 @@ fn timeline_notes_go_out_as_note_on_and_off() {
             pitch: 60,
             vel: 0,
             controller: false,
+            value: 0,
         }]
     );
 }
@@ -156,6 +158,7 @@ fn live_notes_go_out_and_are_released_by_note_off() {
             pitch: 72,
             vel: 100,
             controller: false,
+            value: 0,
         }]
     );
     // A seek or the transport does not cut a held key.
@@ -178,6 +181,7 @@ fn live_notes_go_out_and_are_released_by_note_off() {
             pitch: 72,
             vel: 0,
             controller: false,
+            value: 0,
         }]
     );
 }
@@ -201,7 +205,7 @@ fn a_track_that_stops_being_external_releases_its_notes() {
     assert!(!out[0].on);
 }
 
-fn cc(beat: f64, track: u16, number: u8, value: u8) -> ControlEvent {
+fn cc(beat: f64, track: u16, number: u8, value: u16) -> ControlEvent {
     ControlEvent {
         beat,
         track,
@@ -210,13 +214,14 @@ fn cc(beat: f64, track: u16, number: u8, value: u8) -> ControlEvent {
     }
 }
 
-fn controller(track: u16, number: u8, value: u8) -> MidiOutEvent {
+fn controller(track: u16, number: u8, value: u16) -> MidiOutEvent {
     MidiOutEvent {
         track,
         on: false,
         pitch: number,
-        vel: value,
+        vel: value.min(127) as u8,
         controller: true,
+        value,
     }
 }
 
@@ -293,4 +298,34 @@ fn a_song_carries_its_controllers() {
     assert!(r.tx.push(Command::Play).is_ok());
     run(&mut r, RATE as usize / 2);
     assert_eq!(events(&mut r), [controller(1, 7, 10)]);
+}
+
+/// Pitch bend (kind 128) and channel pressure (129) reach the sender with their full value, on
+/// the beat, for an external track only.
+#[test]
+fn pitch_bend_and_pressure_go_out_with_their_full_value() {
+    let mut r = rig(vec![]);
+    assert!(r
+        .tx
+        .push(Command::set_controls(vec![
+            cc(1.0, 1, 128, 16383),
+            cc(1.5, 1, 129, 90),
+            cc(2.0, 0, 128, 4000),
+        ]))
+        .is_ok());
+    assert!(r
+        .tx
+        .push(Command::SetTrackExternal {
+            track: 1,
+            external: true
+        })
+        .is_ok());
+    assert!(r.tx.push(Command::Play).is_ok());
+    run(&mut r, 48_000 * 3);
+    let out = events(&mut r);
+    assert_eq!(
+        out,
+        vec![controller(1, 128, 16383), controller(1, 129, 90)],
+        "track 0 is not external, so its bend stays inside the engine"
+    );
 }
