@@ -773,3 +773,4 @@ IR Offset: = IRオフセット:
 Reverse = リバース
 Hi Spread = ハイ・スプレッド
 X-Over = クロスオーバー
+Space Designer = Space Designer

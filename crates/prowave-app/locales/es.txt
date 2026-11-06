@@ -773,3 +773,4 @@ IR Offset: = Desfase IR:
 Reverse = Invertir
 Hi Spread = Dispersión de agudos
 X-Over = Cruce
+Space Designer = Space Designer

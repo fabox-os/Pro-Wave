@@ -773,3 +773,4 @@ IR Offset: = Зсув IR:
 Reverse = Реверс
 Hi Spread = Розкид високих
 X-Over = Кросовер
+Space Designer = Space Designer

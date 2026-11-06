@@ -773,3 +773,4 @@ IR Offset: = IR-förskjutning:
 Reverse = Omvänd
 Hi Spread = Diskantspridning
 X-Over = Delningsfrekvens
+Space Designer = Space Designer

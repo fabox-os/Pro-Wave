@@ -773,3 +773,4 @@ IR Offset: = Offset IR:
 Reverse = Balik
 Hi Spread = Sebaran nada tinggi
 X-Over = Crossover
+Space Designer = Space Designer

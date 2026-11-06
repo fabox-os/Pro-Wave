@@ -773,3 +773,4 @@ IR Offset: = IR poslinkis:
 Reverse = Atvirkščiai
 Hi Spread = Aukštų sklaida
 X-Over = Skirstymas
+Space Designer = Space Designer

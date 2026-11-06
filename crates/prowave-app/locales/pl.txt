@@ -773,3 +773,4 @@ IR Offset: = Przesunięcie IR:
 Reverse = Odwróć
 Hi Spread = Rozpiętość wysokich
 X-Over = Podział
+Space Designer = Space Designer

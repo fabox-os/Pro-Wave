@@ -773,3 +773,4 @@ IR Offset: = IR-forskyvning:
 Reverse = Reverser
 Hi Spread = Høy-spredning
 X-Over = Delefrekvens
+Space Designer = Space Designer

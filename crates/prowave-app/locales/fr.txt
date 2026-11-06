@@ -773,3 +773,4 @@ IR Offset: = Décalage IR :
 Reverse = Inverser
 Hi Spread = Étalement des aigus
 X-Over = Croisement
+Space Designer = Space Designer

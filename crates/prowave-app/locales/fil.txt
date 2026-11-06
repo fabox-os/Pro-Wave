@@ -773,3 +773,4 @@ IR Offset: = IR Offset:
 Reverse = Baligtarin
 Hi Spread = Hi Spread
 X-Over = X-Over
+Space Designer = Space Designer

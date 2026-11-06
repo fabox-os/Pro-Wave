@@ -773,3 +773,4 @@ IR Offset: = Deslocamento IR:
 Reverse = Inverter
 Hi Spread = Abertura de agudos
 X-Over = Crossover
+Space Designer = Space Designer

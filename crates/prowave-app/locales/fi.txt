@@ -773,3 +773,4 @@ IR Offset: = IR-siirtymä:
 Reverse = Käännä
 Hi Spread = Korkeiden levitys
 X-Over = Jakotaajuus
+Space Designer = Space Designer

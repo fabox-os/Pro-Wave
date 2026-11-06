@@ -773,3 +773,4 @@ IR Offset: = IR-Versatz:
 Reverse = Umkehren
 Hi Spread = Hi-Spreizung
 X-Over = Übergang
+Space Designer = Space Designer

@@ -773,3 +773,4 @@ IR Offset: = IR ऑफ़सेट:
 Reverse = उलटें
 Hi Spread = हाई स्प्रेड
 X-Over = क्रॉसओवर
+Space Designer = Space Designer

@@ -773,3 +773,4 @@ IR Offset: = IR偏移:
 Reverse = 反向
 Hi Spread = 高频扩展
 X-Over = 分频点
+Space Designer = Space Designer
