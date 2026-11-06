@@ -1,5 +1,6 @@
 //! Device-independent engine core. `EngineCore::process` is the audio-thread entry point:
 //! no allocation, no locks, no syscalls. Unit-testable without an audio device.
+use crate::clock::{song_position, tick_index, ClockMessage};
 use crate::disk::{Block, ClipShared};
 use crate::fx::{Chain, Pdc, MAX_FX_PARAMS};
 use crate::gain_smoothing::GainRamp;
@@ -47,6 +48,8 @@ pub struct MidiOutEvent {
     pub vel: u8,
     /// A controller change (such as the sustain pedal) instead of a note.
     pub controller: bool,
+    /// For a controller: its value in full (0-16383 for pitch bend, see `Control`); 0 for notes.
+    pub value: u16,
 }
 
 /// A controller change on a track's timeline (beats are 0-based quarter notes). Only tracks
@@ -56,7 +59,8 @@ pub struct ControlEvent {
     pub beat: f64,
     pub track: u16,
     pub number: u8,
-    pub value: u8,
+    /// 0-127 for a controller, 0-16383 for pitch bend.
+    pub value: u16,
 }
 
 /// A note sent to an external instrument that has not been released yet.
@@ -350,6 +354,18 @@ pub enum Command {
     SetTempoMap(Box<TempoMap>),
     SetMetronome {
         on: bool,
+    },
+    /// Metronome settings (Logic: Project Settings > Metronome): the click's level in dB
+    /// (clamped to -60..0) and whether the first beat of each bar has the higher accent click.
+    /// Non-finite levels are ignored.
+    SetClick {
+        gain_db: f32,
+        accent: bool,
+    },
+    /// Reference pitch of software instruments: the frequency of A4 in Hz (Logic: Project
+    /// Settings > Tuning), clamped to 427..453 like Logic's. Non-finite values are ignored.
+    SetTuning {
+        a4_hz: f32,
     },
     /// Master fader (Logic: Stereo Out level), clamped to 0..2 linear. Changes ramp over
     /// 5 ms during playback/audition; silent stopped setup is immediate. Non-finite values
@@ -670,6 +686,7 @@ pub(crate) struct Readers {
     pub state: Option<StateReader>,
     pub midi: Option<Consumer<MidiOutEvent>>,
     pub mtc: Option<Consumer<MtcMessage>>,
+    pub clock: Option<Consumer<ClockMessage>>,
 }
 
 pub struct EngineCore {
@@ -697,6 +714,10 @@ pub struct EngineCore {
     click_remaining: u32,
     click_phase: f32,
     click_freq: f32,
+    click_gain: f32,
+    click_accent: bool,
+    /// Frequency of A4 in Hz.
+    tuning_hz: f32,
     /// A count-in is running: the clicks left, the frames to the next one, the frames
     /// between clicks and how many clicks it has.
     counting: bool,
@@ -760,6 +781,11 @@ pub struct EngineCore {
     mtc_secs: f64,
     mtc_out: Producer<MtcMessage>,
     mtc_out_reader: Option<Consumer<MtcMessage>>,
+    /// MIDI Clock messages (Timing Clock, Start, Stop, Song Position) for the app to send.
+    clock_out: Producer<ClockMessage>,
+    clock_out_reader: Option<Consumer<ClockMessage>>,
+    /// The last Timing Clock index sent (see `clock::tick_index`).
+    clock_tick: i64,
     ext_notes: Vec<ExtNote>,
     test_hz: f32,
     test_gain: f32,
@@ -794,8 +820,14 @@ fn decayed_peak(new: f32, old: f32) -> f32 {
     finite_or_zero(new.max(old * 0.85)).min(16.0)
 }
 
-fn midi_hz(p: u8) -> f32 {
-    440.0 * 2f32.powf((p as f32 - 69.0) / 12.0)
+/// Logic's range for the reference pitch (A4) in Hz.
+pub const MIN_TUNING_HZ: f32 = 427.0;
+pub const MAX_TUNING_HZ: f32 = 453.0;
+/// The click's level before Project Settings > Metronome changes it (linear, about -10.5 dB).
+const DEFAULT_CLICK_GAIN: f32 = 0.3;
+
+fn midi_hz(p: u8, a4_hz: f32) -> f32 {
+    a4_hz * 2f32.powf((p as f32 - 69.0) / 12.0)
 }
 
 impl EngineCore {
@@ -808,6 +840,7 @@ impl EngineCore {
         let (state, reader) = triple_buffer(EngineState::default());
         let (midi_out, midi_out_reader) = rtrb::RingBuffer::new(1024);
         let (mtc_out, mtc_out_reader) = rtrb::RingBuffer::new(256);
+        let (clock_out, clock_out_reader) = rtrb::RingBuffer::new(1024);
         Self {
             sr: sample_rate.max(1) as f32,
             rx,
@@ -831,6 +864,9 @@ impl EngineCore {
             click_remaining: 0,
             click_phase: 0.0,
             click_freq: 1000.0,
+            click_gain: DEFAULT_CLICK_GAIN,
+            click_accent: true,
+            tuning_hz: 440.0,
             counting: false,
             count_left: 0,
             count_wait: 0,
@@ -878,6 +914,9 @@ impl EngineCore {
             mtc_secs: 0.0,
             mtc_out,
             mtc_out_reader: Some(mtc_out_reader),
+            clock_out,
+            clock_out_reader: Some(clock_out_reader),
+            clock_tick: 0,
             ext_notes: Vec::with_capacity(MAX_EXT_NOTES),
             test_hz: 0.0,
             test_gain: 0.0,
@@ -903,12 +942,40 @@ impl EngineCore {
         self.mtc_out_reader.take()
     }
 
+    /// The app's half of the MIDI Clock the engine sends. There is one; it is `None` once taken.
+    pub fn take_clock_reader(&mut self) -> Option<Consumer<ClockMessage>> {
+        self.clock_out_reader.take()
+    }
+
+    fn clock_send(&mut self, m: ClockMessage) {
+        let _ = self.clock_out.push(m);
+    }
+
+    /// Starts the MIDI clock where the playhead is: Start at the beginning of the song, otherwise
+    /// the Song Position and Continue.
+    fn clock_start(&mut self) {
+        if self.beat <= 1e-9 {
+            self.clock_send(ClockMessage::Start);
+        } else {
+            self.clock_send(ClockMessage::SongPosition(song_position(self.beat)));
+            self.clock_send(ClockMessage::Continue);
+        }
+        self.clock_tick = tick_index(self.beat);
+    }
+
+    /// The playhead jumped while the song plays: the device is told where it is now.
+    fn clock_resync(&mut self) {
+        self.clock_send(ClockMessage::SongPosition(song_position(self.beat)));
+        self.clock_tick = tick_index(self.beat);
+    }
+
     /// Every reader the app takes from the core, together.
     pub(crate) fn take_readers(&mut self) -> Readers {
         Readers {
             state: self.take_state_reader(),
             midi: self.take_midi_out_reader(),
             mtc: self.take_mtc_reader(),
+            clock: self.take_clock_reader(),
         }
     }
 
@@ -939,6 +1006,7 @@ impl EngineCore {
             pitch,
             vel,
             controller: false,
+            value: 0,
         });
     }
 
@@ -1006,8 +1074,9 @@ impl EngineCore {
             track: c.track,
             on: false,
             pitch: c.number,
-            vel: c.value,
+            vel: c.value.min(127) as u8,
             controller: true,
+            value: c.value,
         });
     }
 
@@ -1021,6 +1090,7 @@ impl EngineCore {
                     pitch: 64,
                     vel: 0,
                     controller: true,
+                    value: 0,
                 });
             }
         }
@@ -1050,6 +1120,9 @@ impl EngineCore {
     fn seek(&mut self, beat: f64) {
         self.beat = if beat.is_finite() { beat.max(0.0) } else { 0.0 };
         self.kill_voices();
+        if self.playing {
+            self.clock_resync();
+        }
         self.next_note = self
             .song
             .notes
@@ -1267,6 +1340,7 @@ impl EngineCore {
             if self.count_left == 0 {
                 self.counting = false;
                 self.start_beat = self.beat;
+                self.clock_start();
                 self.playing = true;
                 self.mtc_locate();
                 return;
@@ -1385,18 +1459,25 @@ impl EngineCore {
                     self.counting = false;
                     if !self.playing {
                         self.start_beat = self.beat;
+                        self.clock_start();
                     }
                     self.playing = true;
                     self.mtc_locate();
                 }
                 Command::Pause => {
                     self.counting = false;
+                    if self.playing {
+                        self.clock_send(ClockMessage::Stop);
+                    }
                     self.playing = false;
                     self.kill_voices();
                     self.mtc_locate();
                 }
                 Command::Stop => {
                     self.counting = false;
+                    if self.playing {
+                        self.clock_send(ClockMessage::Stop);
+                    }
                     self.playing = false;
                     let b = self.start_beat;
                     self.seek(b);
@@ -1422,6 +1503,17 @@ impl EngineCore {
                     self.mtc_locate();
                 }
                 Command::SetMetronome { on } => self.metronome = on,
+                Command::SetClick { gain_db, accent } => {
+                    if gain_db.is_finite() {
+                        self.click_gain = 10f32.powf(gain_db.clamp(-60.0, 0.0) / 20.0);
+                    }
+                    self.click_accent = accent;
+                }
+                Command::SetTuning { a4_hz } => {
+                    if a4_hz.is_finite() {
+                        self.tuning_hz = a4_hz.clamp(MIN_TUNING_HZ, MAX_TUNING_HZ);
+                    }
+                }
                 Command::SetMasterGain { linear } => {
                     if linear.is_finite() {
                         let samples = self.smoothing_samples();
@@ -1624,7 +1716,7 @@ impl EngineCore {
             .unwrap_or_default();
         let track = n.track.min(MAX_TRACKS as u16 - 1);
         let mut patch = self.track_patch[track as usize];
-        let mut base_hz = midi_hz(n.pitch);
+        let mut base_hz = midi_hz(n.pitch, self.tuning_hz);
         if patch.kit != Kit::None {
             (patch, base_hz) = kit_voice(&patch, n.pitch);
         }
@@ -1991,7 +2083,7 @@ impl EngineCore {
                 self.click_remaining -= 1;
                 self.click_phase += self.click_freq / self.sr;
                 let env = self.click_remaining as f32 / (0.03 * self.sr);
-                let c = (self.click_phase * std::f32::consts::TAU).sin() * env * 0.3;
+                let c = (self.click_phase * std::f32::consts::TAU).sin() * env * self.click_gain;
                 l += c as f64;
                 r += c as f64;
             }
@@ -2031,6 +2123,18 @@ impl EngineCore {
                         }
                     }
                 }
+                // MIDI Clock: a Timing Clock message for every 1/24 of a beat the playhead crosses
+                // (a jump is resynced by `seek`).
+                let now = tick_index(self.beat);
+                let mut sent = 0;
+                while self.clock_tick < now && sent < 24 {
+                    self.clock_tick += 1;
+                    sent += 1;
+                    self.clock_send(ClockMessage::Tick);
+                }
+                if self.clock_tick < now {
+                    self.clock_tick = now;
+                }
                 if self.metronome {
                     let (a, b) = (
                         self.tempo_map.position(prev),
@@ -2039,7 +2143,11 @@ impl EngineCore {
                     if (a.bar, a.beat) != (b.bar, b.beat) {
                         self.click_remaining = (0.03 * self.sr) as u32;
                         self.click_phase = 0.0;
-                        self.click_freq = if b.beat == 0 { 1500.0 } else { 1000.0 };
+                        self.click_freq = if b.beat == 0 && self.click_accent {
+                            1500.0
+                        } else {
+                            1000.0
+                        };
                     }
                 }
             }
@@ -2741,6 +2849,157 @@ mod tests {
         let mut buf = vec![0.0f32; 4_800 * 2];
         e.process(&mut buf);
         assert!(buf.iter().any(|x| x.abs() > 0.05));
+    }
+
+    /// Everything on the MIDI clock queue so far.
+    fn drain_clock(clock: &mut Consumer<ClockMessage>) -> Vec<ClockMessage> {
+        let mut out = Vec::new();
+        while let Ok(m) = clock.pop() {
+            out.push(m);
+        }
+        out
+    }
+
+    #[test]
+    fn midi_clock_starts_at_the_beginning_ticks_24_per_beat_and_stops() {
+        let (mut e, mut tx, _s) = rig();
+        let Some(mut clock) = e.take_clock_reader() else {
+            panic!("the clock reader");
+        };
+        assert!(tx.push(Command::Play).is_ok());
+        // 120 BPM at 48 kHz: one second is two beats, so 48 ticks.
+        let mut buf = vec![0.0f32; 48_000 * 2];
+        e.process(&mut buf);
+        let msgs = drain_clock(&mut clock);
+        assert_eq!(msgs.first(), Some(&ClockMessage::Start));
+        let ticks = msgs.iter().filter(|m| **m == ClockMessage::Tick).count();
+        assert!((47..=49).contains(&ticks), "{ticks} ticks in two beats");
+        assert!(tx.push(Command::Pause).is_ok());
+        e.process(&mut buf[..2]);
+        assert_eq!(drain_clock(&mut clock), vec![ClockMessage::Stop]);
+    }
+
+    #[test]
+    fn midi_clock_from_the_middle_of_the_song_sends_the_position_then_continue() {
+        let (mut e, mut tx, _s) = rig();
+        let Some(mut clock) = e.take_clock_reader() else {
+            panic!("the clock reader");
+        };
+        assert!(tx.push(Command::SetPosition { beat: 4.0 }).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        let msgs = drain_clock(&mut clock);
+        assert_eq!(
+            &msgs[..2],
+            &[ClockMessage::SongPosition(16), ClockMessage::Continue],
+            "bar 2 is sixteenth 16"
+        );
+        // The first tick comes after the first 1/24 of a beat, not before.
+        assert!(msgs.iter().skip(2).all(|m| *m == ClockMessage::Tick));
+    }
+
+    #[test]
+    fn midi_clock_resyncs_when_the_playhead_jumps_while_playing() {
+        let (mut e, mut tx, _s) = rig();
+        let Some(mut clock) = e.take_clock_reader() else {
+            panic!("the clock reader");
+        };
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        drain_clock(&mut clock);
+        assert!(tx.push(Command::SetPosition { beat: 8.0 }).is_ok());
+        e.process(&mut buf);
+        let msgs = drain_clock(&mut clock);
+        assert_eq!(msgs.first(), Some(&ClockMessage::SongPosition(32)));
+        let ticks = msgs.iter().filter(|m| **m == ClockMessage::Tick).count();
+        assert!(ticks <= 2, "no burst of ticks for the jump: {ticks}");
+    }
+
+    /// The loudest sample of one second of the click on a bar's first beat.
+    fn click_peak(commands: Vec<Command>) -> f32 {
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx.push(Command::SetMetronome { on: true }).is_ok());
+        for c in commands {
+            assert!(tx.push(c).is_ok());
+        }
+        assert!(tx.push(Command::SetPosition { beat: 0.99 }).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 4_800 * 2];
+        e.process(&mut buf);
+        buf.iter().fold(0f32, |m, x| m.max(x.abs()))
+    }
+
+    #[test]
+    fn click_volume_follows_the_setting() {
+        let loud = click_peak(vec![]);
+        let quiet = click_peak(vec![Command::SetClick {
+            gain_db: -20.0,
+            accent: true,
+        }]);
+        assert!(loud > 0.05, "{loud}");
+        // The click starts at 0.3 (-10.5 dB), so -20 dB is a third of it.
+        assert!((quiet / loud - 0.1 / 0.3).abs() < 0.03, "{quiet} / {loud}");
+        // A level that is not a number leaves the last one.
+        let kept = click_peak(vec![Command::SetClick {
+            gain_db: f32::NAN,
+            accent: true,
+        }]);
+        assert!((kept / loud - 1.0).abs() < 0.03, "{kept} / {loud}");
+    }
+
+    #[test]
+    fn the_accent_can_be_switched_off() {
+        for (accent, want) in [(true, 1500.0), (false, 1000.0)] {
+            let (mut e, mut tx, _s) = rig();
+            assert!(tx.push(Command::SetMetronome { on: true }).is_ok());
+            assert!(tx
+                .push(Command::SetClick {
+                    gain_db: -10.0,
+                    accent
+                })
+                .is_ok());
+            // Just before the first beat of bar 2.
+            assert!(tx.push(Command::SetPosition { beat: 3.999 }).is_ok());
+            assert!(tx.push(Command::Play).is_ok());
+            let mut buf = vec![0.0f32; 64 * 2];
+            e.process(&mut buf);
+            assert!(e.click_remaining > 0);
+            assert_eq!(e.click_freq, want, "accent {accent}");
+        }
+    }
+
+    /// Zero crossings of the left channel while an A4 note plays for half a second.
+    fn crossings_of_a4(tuning: Option<f32>) -> usize {
+        let (mut e, mut tx, _s) = rig();
+        if let Some(a4_hz) = tuning {
+            assert!(tx.push(Command::SetTuning { a4_hz }).is_ok());
+        }
+        let song = Song::new(vec![note(0.0, 4.0)], vec![TrackMix::default()]);
+        assert!(tx.push(Command::SetSong(Box::new(song))).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 24_000 * 2];
+        e.process(&mut buf);
+        let left: Vec<f32> = buf.iter().step_by(2).copied().collect();
+        left.windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count()
+    }
+
+    #[test]
+    fn tuning_moves_the_pitch_of_an_instrument() {
+        let default = crossings_of_a4(None);
+        assert!(default > 100, "{default}");
+        assert_eq!(crossings_of_a4(Some(440.0)), default);
+        let high = crossings_of_a4(Some(453.0)) as f32;
+        let low = crossings_of_a4(Some(427.0)) as f32;
+        // 453 Hz over 427 Hz is 6.1 % higher.
+        let ratio = high / low;
+        assert!((ratio - 453.0 / 427.0).abs() < 0.02, "ratio {ratio}");
+        // Out of Logic's range it is held at the range's end; not a number is ignored.
+        assert_eq!(crossings_of_a4(Some(1000.0)) as f32, high);
+        assert_eq!(crossings_of_a4(Some(f32::NAN)), default);
     }
 
     #[test]

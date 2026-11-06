@@ -5,7 +5,7 @@
 //! slowly) and the list pages along with it.
 
 use crate::i18n::tr;
-use crate::model::{Project, TrackKind};
+use crate::model::{Project, TrackKind, CHANNEL_PRESSURE, PITCH_BEND, SYSEX_BYTE};
 use crate::widgets::{BLUE, TEXT, TEXT_DIM};
 use crate::UiState;
 use egui::{pos2, vec2, Align2, Color32, FontId, Painter, Rect, Sense, Stroke, Ui};
@@ -51,8 +51,13 @@ struct Event {
     control: bool,
     /// The note's pitch, or the controller's number.
     pitch: u8,
-    /// The note's velocity, or the controller's value.
+    /// The note's velocity.
     vel: u8,
+    /// A controller's value in full (pitch bend is 14 bits); for a System Exclusive message its
+    /// number of bytes.
+    value: u16,
+    /// A System Exclusive message as hex words; empty for the other events.
+    text: String,
     len: f64,
 }
 
@@ -77,15 +82,43 @@ fn events(p: &Project, s: &UiState) -> Vec<Event> {
     for (ri, r) in track.regions.iter().enumerate() {
         let offset = p.region_start_beats(r);
         let dim = selected.is_some_and(|sr| sr != ri);
-        for c in &r.controls {
+        // The bytes of a System Exclusive message are consecutive controls at one start: they are
+        // one row.
+        let mut i = 0;
+        while i < r.controls.len() {
+            let c = r.controls[i];
+            if c.num == SYSEX_BYTE {
+                let mut bytes = Vec::new();
+                while i < r.controls.len()
+                    && r.controls[i].num == SYSEX_BYTE
+                    && r.controls[i].start == c.start
+                {
+                    bytes.push(r.controls[i].val.min(255) as u8);
+                    i += 1;
+                }
+                out.push(Event {
+                    beats: offset + c.start as f64,
+                    dim,
+                    control: true,
+                    pitch: SYSEX_BYTE,
+                    vel: 0,
+                    value: bytes.len() as u16,
+                    text: crate::sysex::text(&bytes),
+                    len: 0.0,
+                });
+                continue;
+            }
             out.push(Event {
                 beats: offset + c.start as f64,
                 dim,
                 control: true,
                 pitch: c.num,
-                vel: c.val,
+                vel: 0,
+                value: c.val,
+                text: String::new(),
                 len: 0.0,
             });
+            i += 1;
         }
         for n in &r.notes {
             out.push(Event {
@@ -94,6 +127,8 @@ fn events(p: &Project, s: &UiState) -> Vec<Event> {
                 control: false,
                 pitch: n.pitch,
                 vel: n.vel,
+                value: 0,
+                text: String::new(),
                 len: n.len as f64,
             });
         }
@@ -166,6 +201,16 @@ fn controller_name(num: u8) -> String {
     }
 }
 
+/// The type of a controller-kind event: a controller, pitch bend, channel pressure or SysEx.
+fn control_type(num: u8) -> String {
+    match num {
+        PITCH_BEND => tr("Pitch Bend").to_string(),
+        CHANNEL_PRESSURE => tr("Aftertouch").to_string(),
+        SYSEX_BYTE => tr("Syst. Exclusive").to_string(),
+        _ => tr("Control").to_string(),
+    }
+}
+
 /// Index of the first event the playhead has not reached yet: the line goes above it.
 fn playhead_row(events: &[Event], position: f64) -> usize {
     events.partition_point(|e| e.beats <= position + 1e-9)
@@ -189,7 +234,64 @@ fn chevron_down(g: &Painter, c: egui::Pos2) {
     g.line_segment([c + vec2(0.0, 1.5), c + vec2(3.0, -1.5)], st);
 }
 
+/// The window that adds a System Exclusive message (typed in hex) to the region at the playhead.
+fn sysex_window(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
+    let Some(mut text) = s.sysex_entry.take() else {
+        return;
+    };
+    let target = crate::sysex::target(p, s.tracks.selected);
+    let mut open = true;
+    let mut done = false;
+    egui::Window::new(tr("Add SysEx"))
+        .id(egui::Id::unique("sysex_entry"))
+        .open(&mut open)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.set_min_width(320.0);
+            ui.label(tr("Bytes in hex, from F0 to F7"));
+            ui.add(
+                egui::TextEdit::multiline(&mut text)
+                    .desired_rows(3)
+                    .desired_width(320.0),
+            );
+            let parsed = crate::sysex::parse(&text);
+            if parsed.is_err() && !text.trim().is_empty() {
+                ui.colored_label(
+                    Color32::from_rgb(0xe0, 0x60, 0x50),
+                    tr("The message must start with F0 and end with F7, in hex"),
+                );
+            }
+            if target.is_none() {
+                ui.label(tr("Select a MIDI region to add the message to"));
+            }
+            ui.horizontal(|ui| {
+                let can = parsed.is_ok() && target.is_some();
+                if ui
+                    .add_enabled(can, egui::Button::new(tr("Insert")))
+                    .clicked()
+                {
+                    if let (Ok(bytes), Some((t, r))) = (&parsed, target) {
+                        if crate::sysex::insert(p, t, r, bytes) {
+                            s.status = Some(crate::i18n::trf(
+                                "Added a SysEx message of {} bytes",
+                                &[&bytes.len()],
+                            ));
+                        }
+                    }
+                    done = true;
+                }
+                if ui.button(tr("Cancel")).clicked() {
+                    done = true;
+                }
+            });
+        });
+    if open && !done {
+        s.sysex_entry = Some(text);
+    }
+}
+
 pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
+    sysex_window(ui.ctx(), p, s);
     let area = ui.max_rect();
     let g = ui.painter_at(area);
     g.rect_filled(area, 0.0, BG);
@@ -313,6 +415,35 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
         FontId::proportional(12.5),
         TEXT,
     );
+    // Add a System Exclusive message at the playhead (see `sysex.rs`).
+    let sysex_btn = Rect::from_center_size(
+        pos2(head.right() - 190.0, head.center().y),
+        vec2(64.0, 18.0),
+    );
+    let sysex_resp = ui.interact(
+        sysex_btn,
+        egui::Id::unique(("event_list", "sysex")),
+        Sense::click(),
+    );
+    if sysex_resp.clicked() {
+        s.sysex_entry.get_or_insert_with(String::new);
+    }
+    g.rect_filled(
+        sysex_btn,
+        3.0,
+        if sysex_resp.hovered() {
+            Color32::from_gray(0x4a)
+        } else {
+            Color32::from_gray(0x33)
+        },
+    );
+    g.text(
+        sysex_btn.center(),
+        Align2::CENTER_CENTER,
+        tr("SysEx…"),
+        FontId::proportional(11.0),
+        TEXT,
+    );
     g.text(
         pos2(head.right() - 110.0, head.center().y),
         Align2::RIGHT_CENTER,
@@ -412,11 +543,22 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
         at(80.0, Align2::RIGHT_CENTER, format!("{bar} {beat} {div}"));
         at(103.0, Align2::RIGHT_CENTER, format!("{tick}"));
         at(173.0, Align2::RIGHT_CENTER, "1".to_string());
-        at(241.0, Align2::RIGHT_CENTER, format!("{}", e.vel));
+        let value = if e.control { e.value } else { u16::from(e.vel) };
+        at(241.0, Align2::RIGHT_CENTER, format!("{value}"));
         if e.control {
-            at(115.0, Align2::LEFT_CENTER, tr("Control").to_string());
-            at(200.0, Align2::CENTER_CENTER, format!("{}", e.pitch));
-            at(250.0, Align2::LEFT_CENTER, controller_name(e.pitch));
+            at(115.0, Align2::LEFT_CENTER, control_type(e.pitch));
+            match e.pitch {
+                SYSEX_BYTE => {
+                    // The message's bytes, cut to what the Info column can show.
+                    let shown: String = e.text.chars().take(40).collect();
+                    at(250.0, Align2::LEFT_CENTER, shown);
+                }
+                PITCH_BEND | CHANNEL_PRESSURE => {}
+                num => {
+                    at(200.0, Align2::CENTER_CENTER, format!("{num}"));
+                    at(250.0, Align2::LEFT_CENTER, controller_name(num));
+                }
+            }
         } else {
             at(115.0, Align2::LEFT_CENTER, tr("Note").to_string());
             at(200.0, Align2::CENTER_CENTER, note_name(e.pitch));
@@ -476,6 +618,8 @@ mod tests {
             beats,
             dim: false,
             control: false,
+            value: 0,
+            text: String::new(),
             pitch: 60,
             vel: 100,
             len: 1.0,
@@ -505,6 +649,8 @@ mod tests {
             beats,
             dim: false,
             control: false,
+            value: 0,
+            text: String::new(),
             pitch: 60,
             vel: 100,
             len: 0.25,
@@ -512,5 +658,44 @@ mod tests {
         let fast: Vec<Event> = (0..32).map(|i| ev(i as f64 * 0.25)).collect();
         let slow: Vec<Event> = (0..32).map(|i| ev(i as f64 * 1.0)).collect();
         assert!(playhead_row(&fast, 2.0) > playhead_row(&slow, 2.0));
+    }
+
+    #[test]
+    fn a_sysex_message_is_one_row_and_a_bend_keeps_its_14_bits() {
+        use crate::model::{Control, CHANNEL_PRESSURE, PITCH_BEND, SYSEX_BYTE};
+        let mut p = Project::demo();
+        let controls = &mut p.tracks[0].regions[0].controls;
+        controls.clear();
+        controls.push(Control {
+            start: 1.0,
+            num: PITCH_BEND,
+            val: 12345,
+        });
+        controls.push(Control {
+            start: 2.0,
+            num: CHANNEL_PRESSURE,
+            val: 90,
+        });
+        for b in [0xf0u16, 0x41, 0xf7] {
+            controls.push(Control {
+                start: 3.0,
+                num: SYSEX_BYTE,
+                val: b,
+            });
+        }
+        let mut s = UiState::new();
+        s.tracks.selected = Some((0, 0));
+        let ev = events(&p, &s);
+        let sysex: Vec<&Event> = ev.iter().filter(|e| e.pitch == SYSEX_BYTE).collect();
+        assert_eq!(sysex.len(), 1, "three bytes, one row");
+        assert_eq!(sysex[0].text, "F0 41 F7");
+        assert_eq!(sysex[0].value, 3, "its number of bytes");
+        let bend = ev.iter().find(|e| e.pitch == PITCH_BEND).expect("the bend");
+        assert_eq!(bend.value, 12345, "all 14 bits");
+        let pressure = ev
+            .iter()
+            .find(|e| e.pitch == CHANNEL_PRESSURE)
+            .expect("the pressure");
+        assert_eq!(pressure.value, 90);
     }
 }
