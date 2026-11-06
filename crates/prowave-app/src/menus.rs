@@ -446,7 +446,9 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Undo" => s.can_undo,
         "Redo" => s.can_redo,
         "Delete Undo History" => s.can_undo || s.can_redo,
-        "Delete" | "Deselect All" => s.tracks.selected.is_some(),
+        "Delete" | "Deselect All" | "Copy" | "Cut" => s.tracks.selected.is_some(),
+        "Paste" => crate::region_edit::can_paste(p, &s.region_clip),
+        "Split at Playhead" => crate::region_edit::can_split(p, &s.tracks),
         "Delete Track" => p.tracks.len() > 1,
         "Release Track Stack" => p
             .tracks
@@ -636,6 +638,12 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         "Redo" => s.undo_cmd = Some(UndoCmd::Redo),
         "Delete Undo History" => s.undo_cmd = Some(UndoCmd::Clear),
         "Delete" => crate::tracks_area::delete_selected(p, &mut s.tracks),
+        "Copy" => {
+            crate::region_edit::copy_selected(p, &s.tracks, &mut s.region_clip);
+        }
+        "Cut" => crate::region_edit::cut_selected(p, &mut s.tracks, &mut s.region_clip),
+        "Paste" => crate::region_edit::paste_at_playhead(p, &mut s.tracks, &s.region_clip),
+        "Split at Playhead" => crate::region_edit::split_at_playhead(p, &mut s.tracks),
         "Deselect All" => s.tracks.selected = None,
         "Go to End" => {
             p.position_beats = p
@@ -1043,7 +1051,12 @@ mod tests {
                 ),
                 s.bottom == Bottom::Mixer,
                 (s.file_cmd, s.chooser.is_some(), s.undo_cmd, s.midi_cmd),
-                (s.ui_scale, s.tracks.bar_w, s.tracks.selected),
+                (
+                    s.ui_scale,
+                    s.tracks.bar_w,
+                    s.tracks.selected,
+                    s.region_clip.is_some()
+                ),
                 (
                     s.tracks.show_tempo,
                     s.tracks.show_markers,
@@ -1114,15 +1127,7 @@ mod tests {
             );
         }
         // And unimplemented ones are greyed, like the ones from the GitHub report.
-        for label in [
-            "Cut",
-            "Copy",
-            "Paste",
-            "Close",
-            "Export",
-            "Stem Splitter…",
-            "Join",
-        ] {
+        for label in ["Close", "Export", "Stem Splitter…", "Join"] {
             assert!(!enabled(label, &p, &s), "{label}");
         }
     }

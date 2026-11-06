@@ -300,6 +300,19 @@ reverse (`ClipEdit`), `peak_of`, tempo ramps, SMPTE, optional `asio` feature, th
 streaming check, input hardening. Review fixes: SMPTE labels one frame early at frame-exact
 positions (fixed, tested), prefetch size now follows the number of clips.
 
+✅ Done 2026-11-06 (in three PRs, see the changelog): Edit > Cut, Copy, Paste and Split at Playhead
+   on the selected region (`region_edit.rs`; the menu bar and the Tracks area's Edit menu). Paste puts
+   a copy on the selected track at the playhead (audio regions only on audio tracks); Split cuts a MIDI
+   region at the playhead and shortens a note that crosses the cut. Not done: splitting audio, Pattern
+   and Drummer regions, Select All and Join (need a selection of several regions).
+✅ Done 2026-11-06: Project Settings window (`project_settings.rs`; File > Project Settings, one tab
+   per group, saved in `.prowave`): General (project name), Synchronization (frame rate, start time,
+   MIDI Time Code ports), Metronome (click volume and accent; engine `SetClick`), Recording (1-4 bars
+   of count-in), Tuning (A4 427-453 Hz for software instruments; engine `SetTuning`), Audio (output
+   device and sample rate, read only), MIDI (which input plays live notes). Not done: choosing the
+   audio output device and buffer size, MIDI output ports, tuning for audio regions, Logic's other
+   General options.
+
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.
@@ -486,11 +499,11 @@ click never silently does nothing. The controls that looked active and did nothi
 on 2026-10-30: Count-in, Capture Recording, Quick Help, Toolbar, Note Pad, Loop Browser, All
 Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Output slots.
 
-- File: Close, Save as Template, Alternatives, Project Management, Project Settings, Page Setup,
+- File: Close, Save as Template, Alternatives, Project Management, Page Setup,
   Print, Movie, Import Audio File and Other Projects (dragging audio in works), Export of audio
   and MusicXML (Selection as MIDI File works), Bounce, Share, Show in File Manager, Open in
   Sound Library Manager, Project Alternatives
-- Edit: Undo History, Cut, Copy, Paste, Paste Replace, Select All, Split at Playhead, Join,
+- Edit: Undo History, Paste Replace, Select All, Join,
   Bounce and Join
 - Track: Rename Track, Show Master / Chord / Arrangement Track, Assign Track Color / Icon,
   Configure Track Header
@@ -505,7 +518,7 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
   Bring All to Front
 - Help: Key Commands, About Pro Wave
-- Tracks area: Edit (Cut, Copy, Paste, Select All, Split, Join), Functions (Folder, Quantize,
+- Tracks area: Edit (Select All, Join), Functions (Folder, Quantize,
   Bounce in Place, Convert to New Sampler Track, Move to Playhead), View (Show Global Tracks,
   Configure Track Header), every tool except Pointer and Fade, waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo

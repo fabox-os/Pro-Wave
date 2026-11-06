@@ -41,6 +41,7 @@ mod project_io;
 mod project_settings;
 mod recent_files;
 mod recorder;
+mod region_edit;
 mod score;
 mod scripter;
 mod side_panes;
@@ -103,6 +104,8 @@ pub struct UiState {
     /// Last import error or engine warning, shown in the menu bar.
     pub status: Option<String>,
     pub tracks: tracks_area::TracksView,
+    /// The region Edit > Cut / Copy put on the clipboard.
+    pub region_clip: region_edit::RegionClip,
     pub mixer: mixer::MixerView,
     /// What Mute and Solo were last frame, so mix groups follow (see `groups.rs`).
     pub group_watch: groups::GroupWatch,
@@ -180,6 +183,7 @@ impl UiState {
             bottom: Bottom::Mixer,
             status: None,
             tracks: tracks_area::TracksView::default(),
+            region_clip: None,
             mixer: mixer::MixerView {
                 inputs: audio_rec::InputChoice::load(),
                 ..mixer::MixerView::default()

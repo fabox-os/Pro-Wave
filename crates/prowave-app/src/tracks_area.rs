@@ -572,9 +572,30 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect, lanes_w: f32) {
         ui.set_min_width(260.0);
         crate::widgets::undo_items(ui, can_undo, can_redo, &mut undo_pick);
         ui.separator();
-        todo_item(ui, tr("Cut"));
-        todo_item(ui, tr("Copy"));
-        todo_item(ui, tr("Paste"));
+        if ui
+            .add_enabled(sel.is_some(), egui::Button::new(tr("Cut")))
+            .clicked()
+        {
+            crate::region_edit::cut_selected(p, v, &mut s.region_clip);
+            ui.close();
+        }
+        if ui
+            .add_enabled(sel.is_some(), egui::Button::new(tr("Copy")))
+            .clicked()
+        {
+            crate::region_edit::copy_selected(p, v, &mut s.region_clip);
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                crate::region_edit::can_paste(p, &s.region_clip),
+                egui::Button::new(tr("Paste")),
+            )
+            .clicked()
+        {
+            crate::region_edit::paste_at_playhead(p, v, &s.region_clip);
+            ui.close();
+        }
         if ui
             .add_enabled(
                 sel.is_some(),
@@ -587,7 +608,16 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect, lanes_w: f32) {
         }
         ui.separator();
         todo_item(ui, tr("Select All"));
-        todo_item(ui, tr("Split Regions at Playhead"));
+        if ui
+            .add_enabled(
+                crate::region_edit::can_split(p, v),
+                egui::Button::new(tr("Split Regions at Playhead")),
+            )
+            .clicked()
+        {
+            crate::region_edit::split_at_playhead(p, v);
+            ui.close();
+        }
         todo_item(ui, tr("Join Regions"));
         let rep = shortcut(ui, Modifiers::COMMAND, Key::R);
         if ui
