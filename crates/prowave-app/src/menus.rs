@@ -454,6 +454,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         }
         "Configure Track Header…" | "Show Master Track" => true,
         "Paste" => crate::region_edit::can_paste(p, &s.region_clip),
+        "Select All" => p.tracks.iter().any(|t| !t.regions.is_empty()),
+        "Join" => crate::region_edit::can_join(p, &s.tracks),
         "Split at Playhead" => crate::region_edit::can_split(p, &s.tracks),
         "Delete Track" => p.tracks.len() > 1,
         "Release Track Stack" => p
@@ -554,7 +556,7 @@ pub(crate) fn checked(label: &str, p: &Project, s: &crate::UiState) -> bool {
 
 /// Track numbers shifted, so a remembered region or note selection may point at another track.
 fn forget_region_selection(s: &mut crate::UiState) {
-    s.tracks.selected = None;
+    s.tracks.clear_selection();
     s.piano.selected.clear();
 }
 
@@ -575,6 +577,8 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             s.track_dialog = track_dialogs::open_for(label, p);
         }
         "Show Master Track" => p.show_master_track = !p.show_master_track,
+        "Select All" => s.tracks.select_all(p),
+        "Join" => crate::region_edit::join_selected(p, &mut s.tracks),
         "Show Mixer" | "Mixer" => {
             s.show_mixer = !(s.show_mixer && s.bottom == Bottom::Mixer);
             s.bottom = Bottom::Mixer;
@@ -642,7 +646,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             let bar = p.beats_to_bar(p.position_beats).floor() as f32 + 1.0;
             let track = p.selected_track;
             if let Some(ri) = p.add_generated_region(track, label == "New Drummer Region", bar) {
-                s.tracks.selected = Some((track, ri));
+                s.tracks.select_only(track, ri);
             }
         }
         "New Aux Track" => {
@@ -658,7 +662,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         "Cut" => crate::region_edit::cut_selected(p, &mut s.tracks, &mut s.region_clip),
         "Paste" => crate::region_edit::paste_at_playhead(p, &mut s.tracks, &s.region_clip),
         "Split at Playhead" => crate::region_edit::split_at_playhead(p, &mut s.tracks),
-        "Deselect All" => s.tracks.selected = None,
+        "Deselect All" => s.tracks.clear_selection(),
         "Go to End" => {
             p.position_beats = p
                 .tracks
@@ -1069,7 +1073,8 @@ mod tests {
                     s.ui_scale,
                     s.tracks.bar_w,
                     s.tracks.selected,
-                    s.region_clip.is_some(),
+                    s.region_clip.len(),
+                    s.tracks.extra.len(),
                     p.show_master_track,
                     p.header_hidden.len(),
                     s.track_dialog.is_some()
@@ -1121,13 +1126,13 @@ mod tests {
         let (p, mut s) = (Project::demo(), crate::UiState::new());
         s.can_undo = true;
         s.can_redo = true;
-        s.tracks.selected = Some((0, 0));
+        s.tracks.select_only(0, 0);
         for label in all_entries() {
             if !enabled(label, &p, &s) {
                 continue;
             }
             let (mut p2, mut s2) = (Project::demo(), crate::UiState::new());
-            s2.tracks.selected = Some((0, 0));
+            s2.tracks.select_only(0, 0);
             let before = state(&p2, &s2);
             apply(label, &mut p2, &mut s2);
             // These two may already be where they would take you.
@@ -1144,7 +1149,7 @@ mod tests {
             );
         }
         // And unimplemented ones are greyed, like the ones from the GitHub report.
-        for label in ["Close", "Export", "Stem Splitter…", "Join"] {
+        for label in ["Close", "Export", "Stem Splitter…"] {
             assert!(!enabled(label, &p, &s), "{label}");
         }
     }
@@ -1198,7 +1203,7 @@ mod tests {
         let (mut p, mut s) = (Project::demo(), crate::UiState::new());
         assert!(TRACK.contains(&"Create Track Stack…") && TRACK.contains(&"Release Track Stack"));
         p.selected_track = 2;
-        s.tracks.selected = Some((2, 0));
+        s.tracks.select_only(2, 0);
         let n = p.tracks.len();
         apply("Create Track Stack…", &mut p, &mut s);
         assert_eq!(p.tracks.len(), n + 1);

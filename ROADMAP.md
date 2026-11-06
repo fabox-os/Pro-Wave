@@ -304,7 +304,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    on the selected region (`region_edit.rs`; the menu bar and the Tracks area's Edit menu). Paste puts
    a copy on the selected track at the playhead (audio regions only on audio tracks); Split cuts a MIDI
    region at the playhead and shortens a note that crosses the cut. Not done: splitting audio, Pattern
-   and Drummer regions, Select All and Join (need a selection of several regions).
+   and Drummer regions. Select All and Join were added in 2026-11-06 (see below).
 ✅ Done 2026-11-06: Project Settings window (`project_settings.rs`; File > Project Settings, one tab
    per group, saved in `.prowave`): General (project name), Synchronization (frame rate, start time,
    MIDI Time Code ports), Metronome (click volume and accent; engine `SetClick`), Recording (1-4 bars
@@ -319,6 +319,13 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    the tracks with the master fader (no automation lane yet). Icons, colours, names, the master strip
    and hidden header parts are saved in `.prowave`. Not done: Show Chord Track and Show Arrangement
    Track (new data models).
+
+✅ Done 2026-11-06: multi-region selection. Edit > Select All selects every region; Shift or Command
+   click adds or removes a region; dragging a selected region moves the whole selection; Delete, Copy,
+   Cut, Paste, Repeat, Split and Set Locators by Regions act on all of it. Join (menu bar and Tracks
+   area) merges the selected MIDI regions of one track into one region, keeping every note where it
+   was. `region_edit.rs`, `tracks_area.rs` (`TracksView::extra`). Not done: Join or Split on audio,
+   Pattern, Drummer and take-folder regions; Bounce and Join.
 
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
@@ -510,8 +517,7 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
   Print, Movie, Import Audio File and Other Projects (dragging audio in works), Export of audio
   and MusicXML (Selection as MIDI File works), Bounce, Share, Show in File Manager, Open in
   Sound Library Manager, Project Alternatives
-- Edit: Undo History, Paste Replace, Select All, Join,
-  Bounce and Join
+- Edit: Undo History, Paste Replace, Bounce and Join
 - Track: Show Chord / Arrangement Track (both need new data: chord events and sections)
 - Navigate: Go to Position
 - Record: Record / Record Repeat, Record Toggle, Record Enable, New Take,
@@ -524,7 +530,7 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
   Bring All to Front
 - Help: Key Commands, About Pro Wave
-- Tracks area: Edit (Select All, Join), Functions (Folder, Quantize,
+- Tracks area: Edit (Bounce and Join is not done), Functions (Folder, Quantize,
   Bounce in Place, Convert to New Sampler Track, Move to Playhead), View (Show Global Tracks,
   every tool except Pointer and Fade, waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo

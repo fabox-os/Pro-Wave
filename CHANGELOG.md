@@ -10,12 +10,13 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Project Settings:** File > Project Settings opens a window with tabs. *General* renames the project. *Synchronization* sets the SMPTE frame rate, start time and MIDI Time Code ports. *Metronome* sets the click volume and whether the first beat of each bar clicks higher. *Recording* sets 1 to 4 bars of count-in. *Tuning* sets the reference pitch (A4 = 427 to 453 Hz) for software instruments. *Audio* shows the output device and sample rate. *MIDI* picks which MIDI keyboard plays live notes. All of it is saved with the project.
 ✅ **Cut, Copy and Paste regions:** in the Edit menu, Cut and Copy put the selected region on the clipboard and Paste puts a copy on the selected track at the playhead. Audio regions only paste onto audio tracks.
 ✅ **Split at Playhead:** cuts the selected MIDI region in two where the playhead is. A note that crosses the cut ends there.
+✅ **Select All and Join:** Edit > Select All selects every region; Shift or Command click adds or removes one, and dragging moves the whole selection. Join merges the selected MIDI regions of one track into one region, keeping each note where it was.
 ✅ **Track menu:** Rename Track, Assign Track Color, Assign Track Icon and Configure Track Header now work. Configure Track Header (also in the Tracks area's View menu) hides parts of every track header. Show Master Track adds a Master strip with the master fader under the tracks. All saved with the project.
 
 ### Still to do or test
 
 ❌ Project Settings: choosing the audio output device and buffer size; MIDI output ports
-❌ Split at Playhead on audio, Pattern and Drummer regions; Select All and Join
+❌ Split at Playhead and Join on audio, Pattern and Drummer regions; Bounce and Join
 ❌ Show Chord Track and Show Arrangement Track
 ❌ Plug-ins (CLAP, VST3, AU) are not supported yet
 

@@ -186,7 +186,7 @@ impl UiState {
             bottom: Bottom::Mixer,
             status: None,
             tracks: tracks_area::TracksView::default(),
-            region_clip: None,
+            region_clip: Vec::new(),
             mixer: mixer::MixerView {
                 inputs: audio_rec::InputChoice::load(),
                 ..mixer::MixerView::default()
@@ -362,7 +362,7 @@ impl App {
         };
         if changed {
             // Track and region numbers may point elsewhere now.
-            self.ui.tracks.selected = None;
+            self.ui.tracks.clear_selection();
             self.ui.piano.selected.clear();
             ctx.request_repaint();
         }
@@ -428,11 +428,11 @@ impl App {
         };
         match midi {
             recorder::Outcome::Started(t, r) => {
-                s.tracks.selected = Some((t, r));
+                s.tracks.select_only(t, r);
                 s.piano.selected.clear();
             }
             recorder::Outcome::Finished(kept) => {
-                s.tracks.selected = kept;
+                s.tracks.set_primary(kept);
                 s.piano.selected.clear();
             }
             recorder::Outcome::NoTrack => {
@@ -442,7 +442,7 @@ impl App {
         }
         if std::mem::take(&mut s.capture_cmd) {
             match recorder::capture(&mut s.rec, p) {
-                Some(region) => s.tracks.selected = Some(region),
+                Some(region) => s.tracks.select_only(region.0, region.1),
                 None => s.status = Some(i18n::tr("Capture Recording: nothing was played").into()),
             }
         }
@@ -464,7 +464,7 @@ impl App {
         {
             audio_rec::Outcome::Finished(kept, warning) => {
                 if kept.is_some() {
-                    s.tracks.selected = kept;
+                    s.tracks.set_primary(kept);
                 }
                 if warning.is_some() {
                     s.status = warning;
@@ -837,7 +837,7 @@ fn shot_flex_scene(app: &mut App, ctx: &egui::Context, kind: &str) {
     groove::set_groove_track(pr, Some(t));
     pr.tracks[0].params.follow_groove = true;
     pr.selected_track = t;
-    app.ui.tracks.selected = Some((t, 0));
+    app.ui.tracks.select_only(t, 0);
     match kind {
         "editor" => smart_tempo::open_editor(&app.project, &mut app.ui, t, 0),
         "menu" => app.ui.tracks.shot_menu = Some((t, Some(0))),
@@ -1150,6 +1150,10 @@ fn main() -> eframe::Result {
                 // `PROWAVE_SHOT_SCENE=pattern` or `drummer` opens that editor on a new region
                 // of the Drummer track.
                 let scene = std::env::var("PROWAVE_SHOT_SCENE").unwrap_or_default();
+                // `select-all`: every region selected (Edit > Select All).
+                if scene == "select-all" {
+                    app.ui.tracks.select_all(&app.project);
+                }
                 // `tracks-extras`: the Master strip, two hidden header parts and a chosen icon.
                 if scene == "tracks-extras" {
                     app.project.show_master_track = true;
@@ -1171,7 +1175,7 @@ fn main() -> eframe::Result {
                     _ => None,
                 };
                 if scene == "score" || scene == "midifx" {
-                    app.ui.tracks.selected = Some((0, 0));
+                    app.ui.tracks.select_only(0, 0);
                     app.project.selected_track = 0;
                     app.ui.bottom = Bottom::PianoRoll;
                     app.ui.score_tab = true;
@@ -1210,7 +1214,7 @@ fn main() -> eframe::Result {
                     {
                         if let Some(ri) = pr.add_generated_region(t, scene == "drummer", 40.0) {
                             pr.selected_track = t;
-                            app.ui.tracks.selected = Some((t, ri));
+                            app.ui.tracks.select_only(t, ri);
                             app.ui.bottom = Bottom::PianoRoll;
                         }
                     }
