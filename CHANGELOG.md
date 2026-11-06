@@ -3,6 +3,13 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Trim regions:** drag the left or right edge of a region to trim it. An audio region keeps its whole recording: the left edge moves where it starts playing in the file and the right edge how much plays, and both can be dragged back out up to the ends of the file; the waveform stays in place. A MIDI region moves its notes with the left edge and cuts them at the right edge (notes cut away do not come back when the edge is dragged out again after you let go; Undo does bring them back). Edges snap like moves do. Trims are saved with the project.
+❌ Flex, take-folder, Pattern and Drummer regions cannot be trimmed.
+
 ## 0.2.2
 
 Tested on Ubuntu 26.04.1 LTS (x86-64, kernel 7.0.0-42): the full project check (formatting,

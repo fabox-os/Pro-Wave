@@ -496,6 +496,8 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
                                 .collect(),
                         }
                     }),
+                    audio_offset: r.audio.as_ref().map_or(0.0, |a| a.offset_secs),
+                    audio_length: r.audio.as_ref().and_then(|a| a.length_secs),
                     mute: r.params.mute,
                     quantize: r.params.quantize,
                     transpose: r.params.transpose,
@@ -678,6 +680,15 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
                         Some(f) => {
                             let mut a = audio_region(f.clone(), ctx);
                             a.flex = r.flex.as_ref().map(|d| flex_from_doc(d, f.clone()));
+                            a.offset_secs = if r.audio_offset.is_finite() {
+                                r.audio_offset.clamp(0.0, f.duration_secs())
+                            } else {
+                                0.0
+                            };
+                            a.length_secs = r
+                                .audio_length
+                                .filter(|l| l.is_finite() && *l > 0.0)
+                                .map(|l| l.min(f.duration_secs()));
                             Some(a)
                         }
                         None => continue,
@@ -1634,6 +1645,37 @@ pub(crate) mod tests {
             valid_smpte_start([0, 10, 0, 0], SmpteRate::Fps29_97Drop),
             [0, 10, 0, 0]
         );
+    }
+
+    #[test]
+    fn a_trimmed_audio_region_is_saved_and_an_untrimmed_one_stays_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut p = Project::empty();
+        let wav = dir.path().join("take.wav");
+        write_wav(&wav);
+        crate::import::import_audio(&mut p, &wav, &ctx).unwrap();
+        crate::import::import_audio(&mut p, &wav, &ctx).unwrap();
+        let (a, b) = (p.tracks.len() - 2, p.tracks.len() - 1);
+        let secs = p.tracks[a].regions[0]
+            .audio
+            .as_ref()
+            .unwrap()
+            .file
+            .duration_secs();
+        {
+            let audio = p.tracks[a].regions[0].audio.as_mut().unwrap();
+            audio.offset_secs = secs * 0.25;
+            audio.length_secs = Some(secs * 0.5);
+        }
+        let path = save_project(&p, &dir.path().join("trim")).unwrap();
+        let (q, warnings) = open_project(&path, &ctx).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let x = q.tracks[a].regions[0].audio.as_ref().unwrap();
+        assert!((x.offset_secs - secs * 0.25).abs() < 1e-9);
+        assert!((x.length_secs.unwrap() - secs * 0.5).abs() < 1e-9);
+        let y = q.tracks[b].regions[0].audio.as_ref().unwrap();
+        assert_eq!((y.offset_secs, y.length_secs), (0.0, None));
     }
 
     #[test]

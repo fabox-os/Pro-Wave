@@ -325,6 +325,8 @@ mod tests {
             file: prowave_engine::AudioFile::open(dir.join("tone.caf")).unwrap(),
             peaks: Default::default(),
             flex: None,
+            offset_secs: 0.0,
+            length_secs: None,
         }
     }
 

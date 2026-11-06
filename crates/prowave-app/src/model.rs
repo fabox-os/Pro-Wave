@@ -571,6 +571,11 @@ pub struct AudioRegion {
     pub peaks: Arc<OnceLock<Vec<(f32, f32)>>>,
     /// Flex Time and Flex Pitch: when set, `file` is the sound made from this edit.
     pub flex: Option<crate::flex_edit::FlexEdit>,
+    /// Trim: seconds of the file before the region's first sound (Logic: dragging the left
+    /// edge of an audio region).
+    pub offset_secs: f64,
+    /// Trim: seconds of the file the region plays; `None` plays to the end of the file.
+    pub length_secs: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -2389,6 +2394,8 @@ mod tests {
             file: prowave_engine::AudioFile::open(dir.join("tone.caf")).unwrap(),
             peaks: Default::default(),
             flex: None,
+            offset_secs: 0.0,
+            length_secs: None,
         }
     }
 

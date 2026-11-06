@@ -167,6 +167,8 @@ mod tests {
             .unwrap(),
             peaks: Default::default(),
             flex: None,
+            offset_secs: 0.0,
+            length_secs: None,
         });
         assert!(!insert(&mut p, 0, 0, &[0xf0, 0xf7]));
         assert_ne!(

@@ -120,6 +120,10 @@ pub struct RegionDoc {
     pub drummer: Option<DrummerDoc>,
     /// Flex Time and Flex Pitch edits of an audio region (`audio` is then the recording).
     pub flex: Option<FlexDoc>,
+    /// A trimmed audio region: seconds of the file before it, and how many it plays (`None`:
+    /// to the end of the file).
+    pub audio_offset: f64,
+    pub audio_length: Option<f64>,
 }
 
 /// The Flex edit of an audio region.

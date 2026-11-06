@@ -44,6 +44,7 @@ mod project_settings;
 mod recent_files;
 mod recorder;
 mod region_edit;
+mod region_trim;
 mod score;
 mod scripter;
 mod side_panes;

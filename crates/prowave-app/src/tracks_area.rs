@@ -162,6 +162,8 @@ pub struct TracksView {
     /// A drag of selected regions in progress: each one's (track, region, start in beats) when it
     /// began, so they all move by the same distance.
     group_drag: Vec<(usize, usize, f64)>,
+    /// An edge being dragged to trim a region: the region as it was when the drag began.
+    trim_drag: Option<(usize, usize, crate::region_trim::Edge, Region)>,
     cycle_anchor: Option<f64>,
     /// A swipe on a take row in progress: the comp as it was and where the swipe began.
     swipe: Option<(Vec<crate::model::CompSegment>, f32)>,
@@ -300,6 +302,7 @@ impl Default for TracksView {
             extra: Vec::new(),
             grab_beats: 0.0,
             group_drag: Vec::new(),
+            trim_drag: None,
             cycle_anchor: None,
             swipe: None,
             normalize_jobs: Vec::new(),
@@ -355,6 +358,8 @@ fn playhead_beat(x: f32, lanes_left: f32, scroll_x: f32, beat_px: f32) -> f64 {
 
 /// Half the height of the grab zone on a track's lower edge.
 const RESIZE_GRIP: f32 = 3.0;
+/// Width of the grab zone on each side edge of a region, to trim it.
+const TRIM_GRIP: f32 = 6.0;
 
 /// `(top, height)` of every track row in points, from the top of the first track (unscrolled):
 /// the global track zoom `row_h` times each track's own height factor.
@@ -2023,7 +2028,7 @@ fn draw_region(
     let edit = region.audio.is_some() || track.kind == TrackKind::Audio;
     if let Some(peaks) = region.audio.as_ref().and_then(|a| a.peaks.get()) {
         let gain = 10f32.powf(region.params.gain_db / 20.0);
-        let full_x = (full.left(), full.width());
+        let full_x = peaks_extent(region, full);
         draw_peaks(g, inner, full_x, peaks, gain, region.params.reverse, ink);
     } else if region.audio.is_some() {
         g.line_segment(
@@ -2184,6 +2189,34 @@ fn draw_fades(
 
 /// Draws a recorded waveform: `full_x` is the left edge and width of the whole region on
 /// screen, `gain` its region gain (linear) and `reverse` plays it back to front.
+/// Where the whole recording sits on screen as (left, width), for a region that may be trimmed:
+/// the part of the file before the region's first sound is off to the left of it (to the right
+/// of it for a reversed region, which plays its part backwards).
+fn peaks_extent(region: &Region, full: Rect) -> (f32, f32) {
+    let Some(a) = region.audio.as_ref() else {
+        return (full.left(), full.width());
+    };
+    let file_secs = a.file.duration_secs();
+    let offset = a.offset_secs.clamp(0.0, file_secs);
+    let play = a
+        .length_secs
+        .unwrap_or(file_secs - offset)
+        .clamp(0.0, file_secs - offset);
+    if play <= 0.0 || file_secs <= 0.0 {
+        return (full.left(), full.width());
+    }
+    let px_per_sec = f64::from(full.width()) / play;
+    let hidden = if region.params.reverse {
+        file_secs - offset - play
+    } else {
+        offset
+    };
+    (
+        (f64::from(full.left()) - hidden * px_per_sec) as f32,
+        (file_secs * px_per_sec) as f32,
+    )
+}
+
 fn draw_peaks(
     g: &Painter,
     body: Rect,
@@ -2792,6 +2825,64 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
                 s.bottom = Bottom::PianoRoll;
             }
             let fade_tool = v.tool == TrackTool::Fade && p.tracks[ti].kind == TrackKind::Audio;
+            // The edges: dragging one trims the region. They are registered after the body so
+            // they win where they overlap it.
+            if !fade_tool
+                && full.width() > 2.0 * TRIM_GRIP + 4.0
+                && crate::region_trim::trimmable(&p.tracks[ti].regions[ri])
+            {
+                use crate::region_trim::Edge;
+                for (edge, zone) in [
+                    (
+                        Edge::Left,
+                        Rect::from_min_max(
+                            full.left_top(),
+                            pos2(full.left() + TRIM_GRIP, full.bottom()),
+                        ),
+                    ),
+                    (
+                        Edge::Right,
+                        Rect::from_min_max(
+                            pos2(full.right() - TRIM_GRIP, full.top()),
+                            full.right_bottom(),
+                        ),
+                    ),
+                ] {
+                    let zone = zone.intersect(lanes);
+                    if zone.width() <= 0.0 || zone.height() <= 0.0 {
+                        continue;
+                    }
+                    let grip = ui
+                        .interact(
+                            zone,
+                            id(("region_edge", ti, ri, edge == Edge::Left)),
+                            Sense::drag(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                    if grip.drag_started() {
+                        if !v.is_selected(ti, ri) {
+                            v.select_only(ti, ri);
+                        }
+                        p.selected_track = ti;
+                        v.trim_drag = Some((ti, ri, edge, p.tracks[ti].regions[ri].clone()));
+                    }
+                    if grip.dragged() {
+                        if let (Some((_, _, _, original)), Some(pt)) =
+                            (v.trim_drag.as_ref(), grip.interact_pointer_pos())
+                        {
+                            // Each frame starts again from the region as it was, so dragging an
+                            // edge back brings back what it passed over.
+                            p.tracks[ti].regions[ri] = original.clone();
+                            let to = snap_pos(beat_of(pt.x).max(0.0));
+                            crate::region_trim::trim(p, ti, ri, edge, to);
+                        }
+                    }
+                    if grip.drag_stopped() {
+                        v.trim_drag = None;
+                        moved = true;
+                    }
+                }
+            }
             if fade_tool && resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }

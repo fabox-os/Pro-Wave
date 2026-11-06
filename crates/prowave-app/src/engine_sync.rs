@@ -410,7 +410,7 @@ fn song_notes(p: &Project) -> Vec<NoteEvent> {
 #[derive(PartialEq, Default, Debug)]
 struct AudioLayout {
     tracks: usize,
-    clips: Vec<(std::path::PathBuf, u16, u64, String)>,
+    clips: Vec<(std::path::PathBuf, u16, u64, String, u64, Option<u64>)>,
 }
 
 /// The edits of region `r` of track `t`: its own gain, fades and reverse, with the fades
@@ -432,7 +432,15 @@ fn audio_layout(p: &Project) -> AudioLayout {
                 let a = r.audio.as_ref()?;
                 // Gain, fades and reverse are set when a clip starts streaming.
                 let edit = format!("{:?}", clip_edit(p, t, r));
-                Some((a.file.path.clone(), track, origin.to_bits(), edit))
+                // A trim changes which part of the file the clip streams.
+                Some((
+                    a.file.path.clone(),
+                    track,
+                    origin.to_bits(),
+                    edit,
+                    a.offset_secs.to_bits(),
+                    a.length_secs.map(f64::to_bits),
+                ))
             })
             .collect(),
     }
@@ -446,7 +454,15 @@ fn build_song(engine: &Engine, p: &Project) -> Song {
     let clips = playing_regions(p)
         .filter_map(|(track, t, r, origin)| {
             let a = r.audio.as_ref()?;
-            Some(engine.stream_clip_in(&a.file, track, origin, clip_edit(p, t, r), streamed))
+            Some(engine.stream_clip_range(
+                &a.file,
+                track,
+                origin,
+                clip_edit(p, t, r),
+                streamed,
+                a.offset_secs,
+                a.length_secs,
+            ))
         })
         .collect();
     let notes = song_notes(p);
