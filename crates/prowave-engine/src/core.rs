@@ -338,6 +338,8 @@ pub enum Command {
     },
     /// The live input, for monitoring. Replaces the one before.
     SetInput(Option<Box<InputFeed>>),
+    /// Plays a decoded file once next to the song (browser audition); `None` stops it.
+    SetPreview(Option<Box<crate::preview::Preview>>),
     /// The tracks that hear their input now (the first `count` of `tracks`).
     SetMonitors {
         tracks: [MonitorTrack; MAX_MONITORS],
@@ -486,6 +488,7 @@ impl Command {
                 | Self::SetPdc { .. }
                 | Self::SetAutomation(_)
                 | Self::SetInput(_)
+                | Self::SetPreview(_)
         )
     }
 
@@ -511,6 +514,7 @@ pub enum Garbage {
     Pdc(Box<Pdc>),
     Automation(Vec<AutoLane>),
     Input(Box<InputFeed>),
+    Preview(Box<crate::preview::Preview>),
     SoundFont(Box<SfPlayer>),
 }
 
@@ -725,6 +729,7 @@ pub struct EngineCore {
     count_wait: u32,
     count_step: u32,
     input: Option<Box<InputFeed>>,
+    preview: Option<Box<crate::preview::Preview>>,
     monitors: [MonitorTrack; MAX_MONITORS],
     monitor_count: usize,
     track_gain_l: Vec<f32>,
@@ -872,6 +877,7 @@ impl EngineCore {
             count_wait: 0,
             count_step: 1,
             input: None,
+            preview: None,
             monitors: [MonitorTrack::default(); MAX_MONITORS],
             monitor_count: 0,
             track_gain_l: vec![1.0; MAX_TRACKS],
@@ -1151,6 +1157,7 @@ impl EngineCore {
             || self.voices.iter().any(|v| v.active)
             || self.click_remaining > 0
             || self.counting
+            || self.preview.is_some()
             || (self.test_hz > 0.0 && self.test_gain > 0.0);
         if sounding {
             (self.sr * 0.005).round().max(1.0) as u32
@@ -1441,6 +1448,11 @@ impl EngineCore {
                     self.count_left = clicks;
                     self.count_wait = 0;
                     self.counting = true;
+                }
+                Command::SetPreview(preview) => {
+                    if let Some(old) = std::mem::replace(&mut self.preview, preview) {
+                        let _ = self.trash.push(Garbage::Preview(old));
+                    }
                 }
                 Command::SetInput(feed) => {
                     let mut feed = feed;
@@ -1893,6 +1905,12 @@ impl EngineCore {
         for c in self.song.clips.iter_mut() {
             c.service();
         }
+        // A finished preview goes back through the garbage queue, never freed here.
+        if self.preview.as_ref().is_some_and(|p| p.finished()) && !self.trash.is_full() {
+            if let Some(done) = self.preview.take() {
+                let _ = self.trash.push(Garbage::Preview(done));
+            }
+        }
         self.track_pk_l.fill(0.0);
         self.track_pk_r.fill(0.0);
         if let Some(feed) = self.input.as_mut() {
@@ -2070,6 +2088,11 @@ impl EngineCore {
             let (ml, mr) = self.mix_strips();
             l += ml;
             r += mr;
+            if let Some(p) = self.preview.as_mut() {
+                let (pl, pr) = p.next_frame();
+                l += f64::from(pl);
+                r += f64::from(pr);
+            }
             if self.test_hz > 0.0 {
                 self.test_phase += self.test_hz / self.sr;
                 if self.test_phase >= 1.0 {

@@ -356,6 +356,7 @@ mod tests {
     fn app() -> App {
         let project = Project::demo();
         App {
+            preview_load: None,
             saved: content(&project),
             history: crate::undo::History::new(&project),
             project,

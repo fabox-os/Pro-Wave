@@ -757,3 +757,4 @@ None = Wala
 Choose SoundFont… = Pumili ng SoundFont…
 Remove SoundFont = Alisin ang SoundFont
 Guitar Amp = Amp ng Gitara
+Stop Preview = Ihinto ang preview

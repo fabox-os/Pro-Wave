@@ -757,3 +757,4 @@ None = Ei mitään
 Choose SoundFont… = Valitse SoundFont…
 Remove SoundFont = Poista SoundFont
 Guitar Amp = Kitaravahvistin
+Stop Preview = Pysäytä esikuuntelu

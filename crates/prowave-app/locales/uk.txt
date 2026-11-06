@@ -757,3 +757,4 @@ None = Немає
 Choose SoundFont… = Вибрати SoundFont…
 Remove SoundFont = Видалити SoundFont
 Guitar Amp = Гітарний підсилювач
+Stop Preview = Зупинити попереднє прослуховування

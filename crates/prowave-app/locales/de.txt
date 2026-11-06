@@ -757,3 +757,4 @@ None = Keine
 Choose SoundFont… = SoundFont wählen…
 Remove SoundFont = SoundFont entfernen
 Guitar Amp = Gitarrenverstärker
+Stop Preview = Vorhören beenden

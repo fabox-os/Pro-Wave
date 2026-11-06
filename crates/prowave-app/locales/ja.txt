@@ -757,3 +757,4 @@ None = なし
 Choose SoundFont… = SoundFontを選択…
 Remove SoundFont = SoundFontを削除
 Guitar Amp = ギターアンプ
+Stop Preview = プレビューを停止

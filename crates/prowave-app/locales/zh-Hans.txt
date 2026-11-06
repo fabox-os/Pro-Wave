@@ -757,3 +757,4 @@ None = 无
 Choose SoundFont… = 选择 SoundFont…
 Remove SoundFont = 移除 SoundFont
 Guitar Amp = 吉他放大器
+Stop Preview = 停止试听

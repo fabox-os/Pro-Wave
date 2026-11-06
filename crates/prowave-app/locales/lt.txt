@@ -757,3 +757,4 @@ None = Nėra
 Choose SoundFont… = Pasirinkti SoundFont…
 Remove SoundFont = Pašalinti SoundFont
 Guitar Amp = Gitaros stiprintuvas
+Stop Preview = Sustabdyti peržiūrą

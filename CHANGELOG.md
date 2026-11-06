@@ -3,6 +3,12 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Hear files in the browser while the song plays:** in the Loop Browser and All Files, one click on an audio file plays it once through the output, mixed with the running song (double-click still adds it to the project). Clicking another file replaces the preview; **Stop Preview** or opening a folder stops it. Files are cut at two minutes. The preview is not stretched to the project's tempo or key.
+
 ## 0.2.2
 
 Tested on Ubuntu 26.04.1 LTS (x86-64, kernel 7.0.0-42): the full project check (formatting,

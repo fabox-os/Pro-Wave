@@ -757,3 +757,4 @@ None = Tidak Ada
 Choose SoundFont… = Pilih SoundFont…
 Remove SoundFont = Hapus SoundFont
 Guitar Amp = Amp Gitar
+Stop Preview = Hentikan pratinjau

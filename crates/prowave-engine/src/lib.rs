@@ -24,6 +24,7 @@ mod mapped;
 mod monitor;
 mod mtc;
 mod output;
+mod preview;
 mod routing;
 mod soundfont;
 mod synth;
@@ -59,6 +60,7 @@ pub use crate::mtc::{
     MtcMessage,
 };
 pub use crate::output::{peak_of, Engine, EngineError};
+pub use crate::preview::{Preview, MAX_PREVIEW_SECONDS};
 pub use crate::routing::{
     curve_shape, lane_value, send_gain, AutoLane, AutoPoint, AutoTarget, Route, SendSpec,
     MAX_AUTO_POINTS, MAX_BUSES, MAX_SENDS,

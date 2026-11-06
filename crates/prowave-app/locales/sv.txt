@@ -757,3 +757,4 @@ None = Ingen
 Choose SoundFont… = Välj SoundFont…
 Remove SoundFont = Ta bort SoundFont
 Guitar Amp = Gitarrförstärkare
+Stop Preview = Stoppa förhandslyssning

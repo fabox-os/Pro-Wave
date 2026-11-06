@@ -278,6 +278,57 @@ struct App {
     chase: mtc_in::Chase,
     /// Looks for a newer release and installs it (Windows).
     updater: updater::Updater,
+    /// A browser preview being decoded on a background thread.
+    preview_load: Option<std::sync::mpsc::Receiver<Option<Box<prowave_engine::Preview>>>>,
+}
+
+impl App {
+    /// Starts, replaces or stops the file preview the browser asked for. The file is decoded
+    /// and resampled on a background thread; the engine then plays it next to the song.
+    fn run_preview(&mut self, ctx: &egui::Context) {
+        use file_browser::PreviewCmd;
+        let Some(sync) = self.sync.as_mut() else {
+            self.ui.browser.preview_cmd = None;
+            return;
+        };
+        match self.ui.browser.preview_cmd.take() {
+            Some(PreviewCmd::Stop) => {
+                self.preview_load = None;
+                let _ = sync.engine.send(prowave_engine::Command::SetPreview(None));
+            }
+            Some(PreviewCmd::Play(path)) => {
+                let rate = sync.engine.sample_rate();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let spawned = std::thread::Builder::new()
+                    .name("preview-decode".into())
+                    .spawn(move || {
+                        let loaded = prowave_engine::Preview::from_file(&path, rate)
+                            .map_err(|e| tracing::warn!("cannot preview {}: {e}", path.display()))
+                            .ok();
+                        let _ = tx.send(loaded.map(Box::new));
+                    });
+                self.preview_load = spawned.is_ok().then_some(rx);
+            }
+            None => {}
+        }
+        if let Some(rx) = &self.preview_load {
+            match rx.try_recv() {
+                Ok(loaded) => {
+                    self.preview_load = None;
+                    if let Some(p) = loaded {
+                        if !sync
+                            .engine
+                            .send(prowave_engine::Command::SetPreview(Some(p)))
+                        {
+                            tracing::warn!("the engine queue is full: preview skipped");
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.preview_load = None,
+            }
+        }
+    }
 }
 
 impl App {
@@ -718,6 +769,7 @@ impl eframe::App for App {
         for path in std::mem::take(&mut self.ui.open_paths) {
             self.import(&path, &ctx);
         }
+        self.run_preview(&ctx);
         self.record_audio(&ctx);
         self.play_and_record_midi(&ctx);
         if std::mem::take(&mut self.ui.update_check) {
@@ -1112,6 +1164,7 @@ fn main() -> eframe::Result {
                 }
             };
             let mut app = App {
+                preview_load: None,
                 saved: file_commands::content(&project),
                 history: undo::History::new(&project),
                 project,

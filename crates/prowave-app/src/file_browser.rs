@@ -1,5 +1,6 @@
 //! The Loop Browser and the All Files browser (the two buttons at the right of the control bar):
-//! a folder list; double-click a file to add it to the project.
+//! a folder list; click a file to hear it live next to the song, double-click to add it to the
+//! project.
 //!
 //! The Loop Browser shows the audio files of a folder of your choice, which it remembers. For
 //! Apple Loops (`.caf`) it also reads the tags (tempo, key, category) on a background thread,
@@ -68,8 +69,21 @@ impl Drop for TagScan {
     }
 }
 
+/// What the browser asks of the engine's preview voice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreviewCmd {
+    /// Play this file once next to the song (a click on a file).
+    Play(PathBuf),
+    /// Stop the preview.
+    Stop,
+}
+
 #[derive(Default)]
 pub struct BrowserView {
+    /// A preview to start or stop; taken by the app each frame.
+    pub preview_cmd: Option<PreviewCmd>,
+    /// The file last clicked, shown selected.
+    pub previewing: Option<PathBuf>,
     /// The pane on show, if any.
     pub open: Option<Tab>,
     dir: Option<PathBuf>,
@@ -211,6 +225,10 @@ pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
         {
             v.dir = dir.parent().map(Path::to_path_buf);
         }
+        if v.previewing.is_some() && ui.button(tr("Stop Preview")).clicked() {
+            v.preview_cmd = Some(PreviewCmd::Stop);
+            v.previewing = None;
+        }
         if tab == Tab::Loops && ui.button(tr("Choose Folder…")).clicked() {
             if let Some(picked) = rfd::FileDialog::new().pick_folder() {
                 if let Some(file) = loop_folder_file() {
@@ -251,11 +269,15 @@ pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
             } else {
                 e.name.clone()
             };
-            let row = ui.selectable_label(false, text);
+            let row = ui.selectable_label(v.previewing.as_ref() == Some(&e.path), text);
             if e.folder && row.clicked() {
                 enter = Some(e.path.clone());
             } else if !e.folder && row.double_clicked() {
                 add = Some(e.path.clone());
+            } else if !e.folder && row.clicked() {
+                // One click auditions the file live, next to the running song.
+                v.preview_cmd = Some(PreviewCmd::Play(e.path.clone()));
+                v.previewing = Some(e.path.clone());
             }
             if let Some(line) = v
                 .tags
@@ -273,6 +295,8 @@ pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
     });
     if enter.is_some() {
         v.dir = enter;
+        v.previewing = None;
+        v.preview_cmd = Some(PreviewCmd::Stop);
         v.search.clear();
     }
     s.open_paths.extend(add);
