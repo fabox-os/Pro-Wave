@@ -80,7 +80,8 @@ pub struct ControlDoc {
     /// Beats from the region start.
     pub start: f32,
     pub num: u8,
-    pub val: u8,
+    /// 0-127, or 0-16383 for pitch bend (see `Control::val` in the app).
+    pub val: u16,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -265,6 +266,9 @@ pub struct TrackDoc {
     /// External MIDI tracks: the MIDI output port (by name) and the channel, 1-16.
     pub midi_port: Option<String>,
     pub midi_channel: u8,
+    /// External MIDI: the program and bank sent when the track is routed (absent: none).
+    pub midi_program: Option<u8>,
+    pub midi_bank: Option<u16>,
     /// SoundFont instrument: the `.sf2` file (its path) and the preset's bank and program.
     pub soundfont: Option<String>,
     pub soundfont_bank: u16,
@@ -392,6 +396,8 @@ impl Default for TrackDoc {
             vca: None,
             midi_port: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             soundfont: None,
             soundfont_bank: 0,
             soundfont_program: 0,
@@ -454,6 +460,10 @@ pub struct ProjectDoc {
     pub tuning_hz: Option<f32>,
     /// MIDI input port (by name) that plays live notes; `None` picks the first keyboard.
     pub midi_in_port: Option<String>,
+    /// MIDI output port (by name) that sends MIDI Clock while the song plays, if any.
+    pub midi_clock_out: Option<String>,
+    /// MIDI input port (by name) whose clock the song follows (start, stop, position, tempo).
+    pub midi_clock_in: Option<String>,
     /// Track > Show Master Track: the master strip under the tracks.
     pub show_master_track: bool,
     /// Names of the track-header parts that are hidden (Track > Configure Track Header).
@@ -520,6 +530,8 @@ impl Default for ProjectDoc {
             count_in_bars: 1,
             tuning_hz: None,
             midi_in_port: None,
+            midi_clock_out: None,
+            midi_clock_in: None,
             show_master_track: false,
             header_hidden: Vec::new(),
         }

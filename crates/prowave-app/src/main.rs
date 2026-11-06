@@ -9,6 +9,8 @@ mod apple_loops;
 mod audio_rec;
 mod automation;
 mod bench;
+mod clock_follow;
+mod clock_in;
 mod engine_sync;
 mod event_list;
 mod file_browser;
@@ -51,6 +53,7 @@ mod soundfonts;
 mod start_screen;
 mod step_editor;
 mod sync_menu;
+mod sysex;
 mod takes;
 mod tempo_track;
 mod theme;
@@ -121,6 +124,10 @@ pub struct UiState {
     pub track_dialog: Option<track_dialogs::TrackDialog>,
     /// The audio output the engine plays on (name, sample rate), for Project Settings > Audio.
     pub audio_info: Option<(String, u32)>,
+    /// Project Settings > MIDI: send MIDI panic on the next frame.
+    pub midi_panic: bool,
+    /// Event list > SysEx…: the message being typed, while its window is open.
+    pub sysex_entry: Option<String>,
     /// The MIDI Transform window.
     pub transform: transform_ui::TransformView,
     /// The editor panel shows the Score instead of the Piano Roll for ordinary MIDI regions.
@@ -186,7 +193,7 @@ impl UiState {
             bottom: Bottom::Mixer,
             status: None,
             tracks: tracks_area::TracksView::default(),
-            region_clip: None,
+            region_clip: Vec::new(),
             mixer: mixer::MixerView {
                 inputs: audio_rec::InputChoice::load(),
                 ..mixer::MixerView::default()
@@ -200,6 +207,8 @@ impl UiState {
             settings_tab: None,
             track_dialog: None,
             audio_info: None,
+            midi_panic: false,
+            sysex_entry: None,
             transform: transform_ui::TransformView::default(),
             score_tab: false,
             score: score::ScoreView::default(),
@@ -262,6 +271,9 @@ struct App {
     midi_out: Option<midi_out::MidiOut>,
     /// Reads MIDI Time Code from the project's port (none while benchmarking).
     mtc_in: Option<mtc_in::MtcIn>,
+    /// The input port whose MIDI Clock the song follows, and the follower that reads it.
+    clock_in: clock_in::ClockIn,
+    clock_follow: clock_follow::ClockFollower,
     /// Makes the transport follow that time code.
     chase: mtc_in::Chase,
     /// Looks for a newer release and installs it (Windows).
@@ -362,7 +374,7 @@ impl App {
         };
         if changed {
             // Track and region numbers may point elsewhere now.
-            self.ui.tracks.selected = None;
+            self.ui.tracks.clear_selection();
             self.ui.piano.selected.clear();
             ctx.request_repaint();
         }
@@ -371,6 +383,25 @@ impl App {
     }
 
     /// MIDI Time Code in: the transport follows the port the project chases, if any.
+    /// Follow MIDI Clock: the transport starts, continues, stops and jumps as the clock input
+    /// says, and the tempo is the clock's. Arrivals are read every frame even when no port is
+    /// followed, so the queue does not fill up.
+    fn follow_clock(&mut self, ctx: &egui::Context) {
+        self.clock_in.sync(self.project.midi_clock_in.as_deref());
+        let mut arrivals = Vec::new();
+        self.clock_in.poll(&mut arrivals);
+        if self.project.midi_clock_in.is_none() {
+            return;
+        }
+        for a in arrivals {
+            let Some(event) = self.clock_follow.message(a.at_us, a.data()) else {
+                continue;
+            };
+            clock_follow::apply(&mut self.project, event);
+            ctx.request_repaint();
+        }
+    }
+
     fn follow_time_code(&mut self, ctx: &egui::Context) {
         let Some(input) = self.mtc_in.as_mut() else {
             return;
@@ -416,8 +447,11 @@ impl App {
                     track: track.min(usize::from(u16::MAX)) as u16,
                 },
                 recorder::LiveNote::Off { pitch } => piano_roll::Audition::Off { pitch },
-                // The engine has no sustain pedal yet: it is only recorded.
-                recorder::LiveNote::Sustain { .. } => continue,
+                // The engine has no sustain pedal, bend or pressure for the keys yet: they are
+                // only recorded.
+                recorder::LiveNote::Sustain { .. }
+                | recorder::LiveNote::Bend { .. }
+                | recorder::LiveNote::Pressure { .. } => continue,
             });
         }
         // Record on an audio track is the audio recorder's (see `record_audio`).
@@ -428,11 +462,11 @@ impl App {
         };
         match midi {
             recorder::Outcome::Started(t, r) => {
-                s.tracks.selected = Some((t, r));
+                s.tracks.select_only(t, r);
                 s.piano.selected.clear();
             }
             recorder::Outcome::Finished(kept) => {
-                s.tracks.selected = kept;
+                s.tracks.set_primary(kept);
                 s.piano.selected.clear();
             }
             recorder::Outcome::NoTrack => {
@@ -442,7 +476,7 @@ impl App {
         }
         if std::mem::take(&mut s.capture_cmd) {
             match recorder::capture(&mut s.rec, p) {
-                Some(region) => s.tracks.selected = Some(region),
+                Some(region) => s.tracks.select_only(region.0, region.1),
                 None => s.status = Some(i18n::tr("Capture Recording: nothing was played").into()),
             }
         }
@@ -464,7 +498,7 @@ impl App {
         {
             audio_rec::Outcome::Finished(kept, warning) => {
                 if kept.is_some() {
-                    s.tracks.selected = kept;
+                    s.tracks.set_primary(kept);
                 }
                 if warning.is_some() {
                     s.status = warning;
@@ -568,10 +602,15 @@ impl eframe::App for App {
         for path in dropped {
             self.import(&path, &ctx);
         }
+        let panic = std::mem::take(&mut self.ui.midi_panic);
         if let Some(out) = self.midi_out.as_mut() {
             out.sync(&self.project);
+            if panic {
+                out.panic();
+            }
         }
         self.follow_time_code(&ctx);
+        self.follow_clock(&ctx);
         // Pattern and Drummer regions follow their length and the bars under them.
         self.project.refresh_generated();
         if let Some(sync) = self.sync.as_mut() {
@@ -837,7 +876,7 @@ fn shot_flex_scene(app: &mut App, ctx: &egui::Context, kind: &str) {
     groove::set_groove_track(pr, Some(t));
     pr.tracks[0].params.follow_groove = true;
     pr.selected_track = t;
-    app.ui.tracks.selected = Some((t, 0));
+    app.ui.tracks.select_only(t, 0);
     match kind {
         "editor" => smart_tempo::open_editor(&app.project, &mut app.ui, t, 0),
         "menu" => app.ui.tracks.shot_menu = Some((t, Some(0))),
@@ -1058,7 +1097,10 @@ fn main() -> eframe::Result {
                         midi_out = sync
                             .take_midi_out()
                             .zip(sync.take_mtc_out())
-                            .map(|(notes, mtc)| midi_out::MidiOut::start(notes, mtc));
+                            .zip(sync.take_clock_out())
+                            .map(|((notes, mtc), clock)| {
+                                midi_out::MidiOut::start(midi_out::Queues { notes, mtc, clock })
+                            });
                     }
                     Some(sync)
                 }
@@ -1083,6 +1125,8 @@ fn main() -> eframe::Result {
                 midi: (!measuring).then(midi_in::MidiIn::new),
                 midi_out,
                 mtc_in: (!measuring).then(|| mtc_in::MtcIn::new(cc.egui_ctx.clone())),
+                clock_in: clock_in::ClockIn::default(),
+                clock_follow: clock_follow::ClockFollower::default(),
                 chase: mtc_in::Chase::default(),
                 updater: updater::Updater::new(),
             };
@@ -1150,6 +1194,24 @@ fn main() -> eframe::Result {
                 // `PROWAVE_SHOT_SCENE=pattern` or `drummer` opens that editor on a new region
                 // of the Drummer track.
                 let scene = std::env::var("PROWAVE_SHOT_SCENE").unwrap_or_default();
+                // `midi-out`: the External MIDI track selected, with a program and a bank set.
+                if scene == "midi-out" {
+                    if let Some(ti) = app
+                        .project
+                        .tracks
+                        .iter()
+                        .position(|t| t.kind == crate::model::TrackKind::ExternalMidi)
+                    {
+                        app.project.selected_track = ti;
+                        app.project.tracks[ti].midi_program = Some(40);
+                        app.project.tracks[ti].midi_bank = Some(2);
+                        app.ui.inspector.track_open = true;
+                    }
+                }
+                // `select-all`: every region selected (Edit > Select All).
+                if scene == "select-all" {
+                    app.ui.tracks.select_all(&app.project);
+                }
                 // `tracks-extras`: the Master strip, two hidden header parts and a chosen icon.
                 if scene == "tracks-extras" {
                     app.project.show_master_track = true;
@@ -1171,7 +1233,7 @@ fn main() -> eframe::Result {
                     _ => None,
                 };
                 if scene == "score" || scene == "midifx" {
-                    app.ui.tracks.selected = Some((0, 0));
+                    app.ui.tracks.select_only(0, 0);
                     app.project.selected_track = 0;
                     app.ui.bottom = Bottom::PianoRoll;
                     app.ui.score_tab = true;
@@ -1210,7 +1272,7 @@ fn main() -> eframe::Result {
                     {
                         if let Some(ri) = pr.add_generated_region(t, scene == "drummer", 40.0) {
                             pr.selected_track = t;
-                            app.ui.tracks.selected = Some((t, ri));
+                            app.ui.tracks.select_only(t, ri);
                             app.ui.bottom = Bottom::PianoRoll;
                         }
                     }
