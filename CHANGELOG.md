@@ -3,29 +3,67 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
-## Unreleased
+## 0.2.2
 
-### All systems (Windows, macOS, Linux)
+Tested on Ubuntu 26.04.1 LTS (x86-64, kernel 7.0.0-42): the full project check (formatting,
+clippy with warnings as errors, all tests, real-time allocation check, miri, cargo-deny and the
+wasm build), the layout screenshots, and the MIDI tests through real ALSA ports. No audio device
+and no MIDI hardware were used. Windows and macOS builds are not tested in this release.
 
-✅ **Project Settings:** File > Project Settings opens a window with tabs. *General* renames the project. *Synchronization* sets the SMPTE frame rate, start time and MIDI Time Code ports. *Metronome* sets the click volume and whether the first beat of each bar clicks higher. *Recording* sets 1 to 4 bars of count-in. *Tuning* sets the reference pitch (A4 = 427 to 453 Hz) for software instruments. *Audio* shows the output device and sample rate. *MIDI* picks which MIDI keyboard plays live notes. All of it is saved with the project.
-✅ **Cut, Copy and Paste regions:** in the Edit menu, Cut and Copy put the selected region on the clipboard and Paste puts a copy on the selected track at the playhead. Audio regions only paste onto audio tracks.
-✅ **Split at Playhead:** cuts the selected MIDI region in two where the playhead is. A note that crosses the cut ends there.
-✅ **Functions menu:** Move to Playhead moves the selected regions to the playhead, keeping their distances. Quantize snaps the notes of the selected MIDI regions to the region's Quantize grid (1/16 when it is off). Folder puts the selected track into a track stack.
-✅ **MIDI outputs:** the MIDI Clock can be sent to a port (Synchronization > Send MIDI Clock). An external MIDI track sends its program and bank when it is routed (Inspector: MIDI Program, MIDI Bank). Project Settings > MIDI has Send MIDI Panic. A note that was sounding when its track was moved to another port is released on the old port now, so it no longer stays on.
-✅ **Pitch bend, channel pressure and SysEx:** a MIDI keyboard's pitch bend and channel pressure are recorded into the region. MIDI files keep them and their SysEx messages, both ways. External MIDI tracks send them.
-✅ **Follow MIDI Clock:** Synchronization > Follow MIDI Clock makes the song start, continue, stop and jump where a MIDI clock input says, and its tempo is the clock's.
-✅ **Event list:** pitch bend shows its full value and each SysEx message is one row. **SysEx…** in the event list adds a message typed in hex at the playhead.
-✅ **Fixes:** a followed MIDI clock port that is missing is looked for every few seconds, not every frame.
-✅ **Select All and Join:** Edit > Select All selects every region; Shift or Command click adds or removes one, and dragging moves the whole selection. Join merges the selected MIDI regions of one track into one region, keeping each note where it was.
-✅ **Track menu:** Rename Track, Assign Track Color, Assign Track Icon and Configure Track Header now work. Configure Track Header (also in the Tracks area's View menu) hides parts of every track header. Show Master Track adds a Master strip with the master fader under the tracks. All saved with the project.
+### New: instruments and effects
 
-### Still to do or test
+✅ **Amp Designer:** a guitar and bass amplifier in any Audio FX slot. Five models (Clean Combo, Tweed, British Crunch, Plexi Lead, Bass Amp), tone stack, three speaker cabinets or none, and a microphone position from the edge of the cone to its centre. It reports its delay to plug-in delay compensation.
+✅ **SoundFont (.sf2) instruments:** an instrument track can play a preset from a SoundFont file (General MIDI and drum kits), chosen in the Inspector. Synthesis is pure Rust (no native library).
+✅ **Apple Loops tags:** the Loop Browser reads the category, genre, key and beat count of Apple Loops (`.caf`) and shows them under each name; search finds loops by them.
 
-❌ Project Settings: choosing the audio output device and buffer size; MIDI output ports
-❌ MIDI: poly aftertouch; entering SysEx by hand; bend and SysEx on the internal instruments; testing on a real hardware synth
-❌ Split at Playhead and Join on audio, Pattern and Drummer regions; Bounce and Join; Bounce in Place; Convert to New Sampler Track
-❌ Show Chord Track and Show Arrangement Track
-❌ Plug-ins (CLAP, VST3, AU) are not supported yet
+### New: editing
+
+✅ **Cut, Copy and Paste regions:** Edit menu. Paste puts a copy on the selected track at the playhead, keeping the distances between several regions. Audio regions paste only onto audio tracks.
+✅ **Split at Playhead:** cuts every selected MIDI region under the playhead. A note that crosses the cut ends there.
+✅ **Select All and Join:** Edit > Select All selects every region. Shift or Command click adds or removes one, and dragging a selected region moves the whole selection. Join merges the selected MIDI regions of one track into one region, keeping every note in place.
+✅ **Functions menu:** Move to Playhead, Quantize (the notes of selected MIDI regions go to the region's Quantize grid, 1/16 when Off), and Folder (puts the selected track into a track stack).
+✅ **Track menu:** Rename Track, Assign Track Color (16 swatches), Assign Track Icon (15 icons or Automatic), Configure Track Header (hide the number, icon, name, M/S/R/I buttons, volume slider or pan knob), and Show Master Track (a Master strip with the master fader under the tracks).
+
+### New: project and transport
+
+✅ **Project Settings** (File > Project Settings): General (project name), Synchronization (SMPTE frame rate, start time, MIDI Time Code and MIDI Clock ports), Metronome (click volume and accent of the first beat), Recording (1 to 4 bars of count-in), Tuning (reference pitch A4 from 427 to 453 Hz), Audio (output device and sample rate, read only), MIDI (input port for live notes, and Send MIDI Panic). All of it is saved with the project.
+✅ **Follow MIDI Clock:** Synchronization > Follow MIDI Clock: the song starts, continues, stops and jumps where a MIDI clock input says, and its tempo is the clock's.
+
+### New: MIDI
+
+✅ **MIDI outputs:** an external MIDI track sends its bank and program when it is routed (Inspector: MIDI Program, MIDI Bank). Synchronization > Send MIDI Clock sends Start, Continue, Stop, Timing Clock and Song Position to a port. Send MIDI Panic silences every note on every output the tracks use.
+✅ **Pitch bend, channel pressure and SysEx in regions:** a keyboard's pitch bend and channel pressure are recorded; MIDI files keep them and their SysEx messages, both ways; external MIDI tracks send them (bend at 14 bits, each SysEx message whole).
+✅ **Event list:** shows pitch bend with its full value, channel pressure as Aftertouch, and each SysEx message as one row. **SysEx…** adds a message typed in hex at the playhead.
+
+### New: metronome and tuning
+
+✅ The metronome level and accent, the count-in bars and the reference pitch are now real engine settings (`SetClick`, `SetTuning`), not only displayed.
+
+### Fixed
+
+✅ **Denormal numbers on the audio thread** are flushed to zero on x86-64, so a fading reverb or filter tail no longer causes CPU spikes (contributed by SakaBoluwatife).
+✅ **Missing interface texts:** ten texts of the Amp Designer, the Guitar Amp category and the SoundFont inspector were missing from every translation, so the translation test failed. Added to all 16 languages.
+✅ **Stuck MIDI notes:** a note still sounding when its track was moved to another port or channel was never released; it is now released on the port it started on.
+✅ **Missing clock port:** a followed MIDI clock port that is not there is looked for every few seconds, not every frame; clearing it no longer keeps its name for the next choice.
+✅ **Capture Recording** keeps the sustain pedal, pitch bend and channel pressure (it used to drop the pedal).
+✅ **Master strip** no longer shares a widget ID with the transport fader.
+
+### Known limitations
+
+❌ **Not tested with hardware:** no real MIDI synth, clock source, audio interface or plug-in was used. The MIDI tests use ALSA virtual ports.
+❌ **Plug-ins:** CLAP, VST3 and AU hosting does not exist yet. The Plug-in Manager is greyed out.
+❌ **Bounce:** Bounce in Place and Bounce and Join need offline rendering, which the engine does not have yet.
+❌ **Convert to New Sampler Track:** needs a sampler instrument, which the project does not have yet.
+❌ **Chord and Arrangement tracks:** Show Chord Track and Show Arrangement Track need data that does not exist yet.
+❌ **Split and Join on audio, Pattern, Drummer and take-folder regions:** not done. Audio needs a start offset into the file in the engine.
+❌ **Folder:** the Functions menu's Folder creates a track stack, our reading of Logic's "Folder".
+❌ **Audio settings:** the output device and buffer size cannot be chosen yet. Project Settings > Audio shows them read only.
+❌ **MIDI:** poly aftertouch is not read; SysEx cannot be edited byte by byte and is not made for audio, Pattern or Drummer regions; pitch bend and SysEx do not reach the internal instruments; a seek while stopped sends no clock, and while playing it sends a Song Position; a MIDI clock output on the same device as the followed input would echo back.
+❌ **Follow MIDI Clock:** the Play and Stop buttons still work next to a followed clock; a sudden tempo change takes about two beats to follow.
+❌ **Master strip:** it has no automation lane yet.
+❌ **Apple Loops:** the older AIFF-based loop format is not read; the tag reader was built from community notes on the format, not from Apple's files.
+❌ **Translations:** the texts added in this release are machine-written and need a native-speaker review.
+❌ **Linux graphics fallbacks:** still to be confirmed by a tester with an NVIDIA card; audio recording and sound on real Linux and macOS hardware.
 
 ## 0.2.1
 
