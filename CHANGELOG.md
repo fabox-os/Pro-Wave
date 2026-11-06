@@ -10,13 +10,20 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Project Settings:** File > Project Settings opens a window with tabs. *General* renames the project. *Synchronization* sets the SMPTE frame rate, start time and MIDI Time Code ports. *Metronome* sets the click volume and whether the first beat of each bar clicks higher. *Recording* sets 1 to 4 bars of count-in. *Tuning* sets the reference pitch (A4 = 427 to 453 Hz) for software instruments. *Audio* shows the output device and sample rate. *MIDI* picks which MIDI keyboard plays live notes. All of it is saved with the project.
 ✅ **Cut, Copy and Paste regions:** in the Edit menu, Cut and Copy put the selected region on the clipboard and Paste puts a copy on the selected track at the playhead. Audio regions only paste onto audio tracks.
 ✅ **Split at Playhead:** cuts the selected MIDI region in two where the playhead is. A note that crosses the cut ends there.
+✅ **Functions menu:** Move to Playhead moves the selected regions to the playhead, keeping their distances. Quantize snaps the notes of the selected MIDI regions to the region's Quantize grid (1/16 when it is off). Folder puts the selected track into a track stack.
+✅ **MIDI outputs:** the MIDI Clock can be sent to a port (Synchronization > Send MIDI Clock). An external MIDI track sends its program and bank when it is routed (Inspector: MIDI Program, MIDI Bank). Project Settings > MIDI has Send MIDI Panic. A note that was sounding when its track was moved to another port is released on the old port now, so it no longer stays on.
+✅ **Pitch bend, channel pressure and SysEx:** a MIDI keyboard's pitch bend and channel pressure are recorded into the region. MIDI files keep them and their SysEx messages, both ways. External MIDI tracks send them.
+✅ **Follow MIDI Clock:** Synchronization > Follow MIDI Clock makes the song start, continue, stop and jump where a MIDI clock input says, and its tempo is the clock's.
+✅ **Event list:** pitch bend shows its full value and each SysEx message is one row. **SysEx…** in the event list adds a message typed in hex at the playhead.
+✅ **Fixes:** a followed MIDI clock port that is missing is looked for every few seconds, not every frame.
 ✅ **Select All and Join:** Edit > Select All selects every region; Shift or Command click adds or removes one, and dragging moves the whole selection. Join merges the selected MIDI regions of one track into one region, keeping each note where it was.
 ✅ **Track menu:** Rename Track, Assign Track Color, Assign Track Icon and Configure Track Header now work. Configure Track Header (also in the Tracks area's View menu) hides parts of every track header. Show Master Track adds a Master strip with the master fader under the tracks. All saved with the project.
 
 ### Still to do or test
 
 ❌ Project Settings: choosing the audio output device and buffer size; MIDI output ports
-❌ Split at Playhead and Join on audio, Pattern and Drummer regions; Bounce and Join
+❌ MIDI: poly aftertouch; entering SysEx by hand; bend and SysEx on the internal instruments; testing on a real hardware synth
+❌ Split at Playhead and Join on audio, Pattern and Drummer regions; Bounce and Join; Bounce in Place; Convert to New Sampler Track
 ❌ Show Chord Track and Show Arrangement Track
 ❌ Plug-ins (CLAP, VST3, AU) are not supported yet
 

@@ -254,6 +254,65 @@ pub(crate) fn join_selected(p: &mut Project, v: &mut TracksView) {
     }
 }
 
+/// Functions > Move to Playhead: the earliest selected region starts at the playhead, the others
+/// keep their distances from it (each stays on its track).
+pub(crate) fn move_to_playhead(p: &mut Project, v: &TracksView) {
+    let sel = v.selection();
+    let base = sel
+        .iter()
+        .filter_map(|&(t, r)| p.tracks.get(t)?.regions.get(r))
+        .map(|reg| reg.start_bar)
+        .fold(f32::MAX, f32::min);
+    if sel.is_empty() || base == f32::MAX {
+        return;
+    }
+    let playhead_bar = p.beats_to_bar(p.position_beats) as f32 + 1.0;
+    for (t, r) in sel {
+        if let Some(reg) = p.tracks.get_mut(t).and_then(|tr| tr.regions.get_mut(r)) {
+            reg.start_bar = playhead_bar + (reg.start_bar - base);
+        }
+    }
+    p.song_rev += 1;
+}
+
+/// Grid used by Functions > Quantize when the region's Quantize setting is Off: 1/16 note.
+pub const DEFAULT_QUANTIZE_GRID: f32 = 0.25;
+
+/// Whether Quantize does anything to the selection: a selected region with notes of its own.
+pub(crate) fn can_quantize(p: &Project, v: &TracksView) -> bool {
+    v.selection().into_iter().any(|(t, r)| {
+        p.tracks
+            .get(t)
+            .and_then(|tr| tr.regions.get(r))
+            .is_some_and(|reg| plain_midi(reg) && !reg.notes.is_empty())
+    })
+}
+
+/// Functions > Quantize: moves the notes of every selected MIDI region onto the region's
+/// Quantize grid (1/16 when it is Off). Destructive, like Logic's Functions > Quantize.
+pub(crate) fn quantize_selected(p: &mut Project, v: &TracksView) {
+    let mut changed = false;
+    for (t, r) in v.selection() {
+        let Some(reg) = p.tracks.get_mut(t).and_then(|tr| tr.regions.get_mut(r)) else {
+            continue;
+        };
+        if !plain_midi(reg) || reg.notes.is_empty() {
+            continue;
+        }
+        let grid = reg
+            .params
+            .quantize
+            .filter(|g| *g > 0.0)
+            .unwrap_or(DEFAULT_QUANTIZE_GRID);
+        let all: Vec<usize> = (0..reg.notes.len()).collect();
+        crate::note_edit::quantize(&mut reg.notes, &all, grid, 1.0, 0.0);
+        changed = true;
+    }
+    if changed {
+        p.song_rev += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +477,52 @@ mod tests {
         p.tracks[0].regions[1].audio = Some(test_audio());
         v.select_many(&[(0, 0), (0, 1)]);
         assert!(!can_join(&p, &v), "an audio region is in it");
+    }
+    #[test]
+    fn move_to_playhead_keeps_the_distances_between_the_regions() {
+        let (mut p, mut v) = rig();
+        second_region(&mut p, 3.0); // two bars after the first
+        v.select_many(&[(0, 0), (0, 1)]);
+        p.position_beats = 32.0; // bar 9
+        move_to_playhead(&mut p, &v);
+        let starts: Vec<f32> = p.tracks[0].regions.iter().map(|r| r.start_bar).collect();
+        assert_eq!(starts, vec![9.0, 11.0]);
+    }
+
+    #[test]
+    fn move_to_playhead_does_nothing_without_a_selection() {
+        let (mut p, mut v) = rig();
+        v.clear_selection();
+        p.position_beats = 32.0;
+        move_to_playhead(&mut p, &v);
+        assert_eq!(p.tracks[0].regions[0].start_bar, 1.0);
+    }
+
+    #[test]
+    fn quantize_snaps_the_notes_of_selected_regions_to_the_grid() {
+        let (mut p, mut v) = rig();
+        // Notes at 0, 3 and 8 are on the 1/16 grid already; move one off it.
+        p.tracks[0].regions[0].notes[1].start = 3.1;
+        v.select_only(0, 0);
+        assert!(can_quantize(&p, &v));
+        quantize_selected(&mut p, &v);
+        assert!((p.tracks[0].regions[0].notes[1].start - 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn quantize_uses_the_regions_grid_and_skips_generated_regions() {
+        let (mut p, mut v) = rig();
+        p.tracks[0].regions[0].notes = vec![note(0.3, 1.0)];
+        p.tracks[0].regions[0].params.quantize = Some(1.0); // whole beats
+        v.select_only(0, 0);
+        quantize_selected(&mut p, &v);
+        assert_eq!(p.tracks[0].regions[0].notes[0].start, 0.0);
+        // A generated region's notes are made from its settings, so they are left alone.
+        p.tracks[0].regions[0].generated = Some(crate::model::Generated::new(
+            crate::model::Generator::Drummer(crate::pattern::DrummerParams::new(
+                crate::pattern::DrumStyle::Rock,
+            )),
+        ));
+        assert!(!can_quantize(&p, &v));
     }
 }
