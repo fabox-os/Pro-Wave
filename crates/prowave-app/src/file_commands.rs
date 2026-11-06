@@ -369,6 +369,8 @@ mod tests {
             midi: None,
             midi_out: None,
             mtc_in: None,
+            clock_in: crate::clock_in::ClockIn::default(),
+            clock_follow: crate::clock_follow::ClockFollower::default(),
             chase: crate::mtc_in::Chase::default(),
             updater: crate::updater::Updater::new(),
         }

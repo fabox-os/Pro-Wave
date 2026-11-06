@@ -9,6 +9,8 @@ mod apple_loops;
 mod audio_rec;
 mod automation;
 mod bench;
+mod clock_follow;
+mod clock_in;
 mod engine_sync;
 mod event_list;
 mod file_browser;
@@ -51,6 +53,7 @@ mod soundfonts;
 mod start_screen;
 mod step_editor;
 mod sync_menu;
+mod sysex;
 mod takes;
 mod tempo_track;
 mod theme;
@@ -123,6 +126,8 @@ pub struct UiState {
     pub audio_info: Option<(String, u32)>,
     /// Project Settings > MIDI: send MIDI panic on the next frame.
     pub midi_panic: bool,
+    /// Event list > SysEx…: the message being typed, while its window is open.
+    pub sysex_entry: Option<String>,
     /// The MIDI Transform window.
     pub transform: transform_ui::TransformView,
     /// The editor panel shows the Score instead of the Piano Roll for ordinary MIDI regions.
@@ -203,6 +208,7 @@ impl UiState {
             track_dialog: None,
             audio_info: None,
             midi_panic: false,
+            sysex_entry: None,
             transform: transform_ui::TransformView::default(),
             score_tab: false,
             score: score::ScoreView::default(),
@@ -265,6 +271,9 @@ struct App {
     midi_out: Option<midi_out::MidiOut>,
     /// Reads MIDI Time Code from the project's port (none while benchmarking).
     mtc_in: Option<mtc_in::MtcIn>,
+    /// The input port whose MIDI Clock the song follows, and the follower that reads it.
+    clock_in: clock_in::ClockIn,
+    clock_follow: clock_follow::ClockFollower,
     /// Makes the transport follow that time code.
     chase: mtc_in::Chase,
     /// Looks for a newer release and installs it (Windows).
@@ -374,6 +383,25 @@ impl App {
     }
 
     /// MIDI Time Code in: the transport follows the port the project chases, if any.
+    /// Follow MIDI Clock: the transport starts, continues, stops and jumps as the clock input
+    /// says, and the tempo is the clock's. Arrivals are read every frame even when no port is
+    /// followed, so the queue does not fill up.
+    fn follow_clock(&mut self, ctx: &egui::Context) {
+        self.clock_in.sync(self.project.midi_clock_in.as_deref());
+        let mut arrivals = Vec::new();
+        self.clock_in.poll(&mut arrivals);
+        if self.project.midi_clock_in.is_none() {
+            return;
+        }
+        for a in arrivals {
+            let Some(event) = self.clock_follow.message(a.at_us, a.data()) else {
+                continue;
+            };
+            clock_follow::apply(&mut self.project, event);
+            ctx.request_repaint();
+        }
+    }
+
     fn follow_time_code(&mut self, ctx: &egui::Context) {
         let Some(input) = self.mtc_in.as_mut() else {
             return;
@@ -419,8 +447,11 @@ impl App {
                     track: track.min(usize::from(u16::MAX)) as u16,
                 },
                 recorder::LiveNote::Off { pitch } => piano_roll::Audition::Off { pitch },
-                // The engine has no sustain pedal yet: it is only recorded.
-                recorder::LiveNote::Sustain { .. } => continue,
+                // The engine has no sustain pedal, bend or pressure for the keys yet: they are
+                // only recorded.
+                recorder::LiveNote::Sustain { .. }
+                | recorder::LiveNote::Bend { .. }
+                | recorder::LiveNote::Pressure { .. } => continue,
             });
         }
         // Record on an audio track is the audio recorder's (see `record_audio`).
@@ -579,6 +610,7 @@ impl eframe::App for App {
             }
         }
         self.follow_time_code(&ctx);
+        self.follow_clock(&ctx);
         // Pattern and Drummer regions follow their length and the bars under them.
         self.project.refresh_generated();
         if let Some(sync) = self.sync.as_mut() {
@@ -1093,6 +1125,8 @@ fn main() -> eframe::Result {
                 midi: (!measuring).then(midi_in::MidiIn::new),
                 midi_out,
                 mtc_in: (!measuring).then(|| mtc_in::MtcIn::new(cc.egui_ctx.clone())),
+                clock_in: clock_in::ClockIn::default(),
+                clock_follow: clock_follow::ClockFollower::default(),
                 chase: mtc_in::Chase::default(),
                 updater: updater::Updater::new(),
             };

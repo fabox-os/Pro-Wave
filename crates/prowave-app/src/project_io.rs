@@ -564,6 +564,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         tuning_hz: Some(p.tuning_hz),
         midi_in_port: p.midi_in_port.clone(),
         midi_clock_out: p.midi_clock_out.clone(),
+        midi_clock_in: p.midi_clock_in.clone(),
         show_master_track: p.show_master_track,
         header_hidden: p
             .header_hidden
@@ -807,6 +808,7 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
     p.mtc_in = port_name(&doc.mtc_in);
     p.midi_in_port = port_name(&doc.midi_in_port);
     p.midi_clock_out = port_name(&doc.midi_clock_out);
+    p.midi_clock_in = port_name(&doc.midi_clock_in);
     p.show_master_track = doc.show_master_track;
     p.header_hidden = doc
         .header_hidden
@@ -1189,6 +1191,10 @@ pub(crate) mod tests {
             (Some(127), Some(16383))
         );
         assert_eq!(r.midi_clock_out, None, "an empty port name is no port");
+        p.midi_clock_in = Some("Clock Source".into());
+        let (doc2, _) = to_doc(&p);
+        let (q2, _) = from_doc(&doc2, Path::new("."), &egui::Context::default());
+        assert_eq!(q2.midi_clock_in.as_deref(), Some("Clock Source"));
     }
 
     #[test]
@@ -2109,7 +2115,7 @@ pub(crate) mod tests {
         let pedal = |val: u8| Control {
             start: 0.0,
             num: 64,
-            val,
+            val: u16::from(val),
         };
         let takes = vec![
             Take {

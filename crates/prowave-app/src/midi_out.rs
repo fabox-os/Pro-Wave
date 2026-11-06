@@ -8,7 +8,7 @@
 //! The same thread sends MIDI Time Code, which the engine makes on the audio clock, to the port
 //! the project names (`Project::mtc_out`).
 
-use crate::model::{Project, TrackKind};
+use crate::model::{Project, TrackKind, CHANNEL_PRESSURE, PITCH_BEND, SYSEX_BYTE};
 use midir::{MidiOutput, MidiOutputConnection};
 use prowave_engine::{ClockMessage, MidiOutEvent, MtcMessage};
 use rtrb::Consumer;
@@ -51,6 +51,24 @@ pub fn controller_message(channel: u8, number: u8, value: u8) -> [u8; 3] {
         value.min(127),
     ]
 }
+
+/// The pitch bend message of a channel: the value is 14 bits, the least significant 7 first.
+pub fn pitch_bend_message(channel: u8, value: u16) -> [u8; 3] {
+    let v = value.min(16383);
+    [
+        0xe0 | (channel.clamp(1, 16) - 1),
+        (v & 0x7f) as u8,
+        (v >> 7) as u8,
+    ]
+}
+
+/// The channel pressure message of a channel.
+pub fn channel_pressure_message(channel: u8, value: u16) -> [u8; 2] {
+    [0xd0 | (channel.clamp(1, 16) - 1), value.min(127) as u8]
+}
+
+/// The longest System Exclusive message the sender will hold back (a longer one is dropped).
+const MAX_SYSEX: usize = 4096;
 
 /// The messages that select a sound on a channel: Bank Select (controllers 0 and 32, the most
 /// and least significant 7 bits of the bank) when there is a bank, then Program Change.
@@ -243,6 +261,8 @@ struct Sender {
     /// Notes that were started and not yet released: (track, port, channel, pitch). A note is
     /// released on the port it started on, even when its track was routed elsewhere since.
     sounding: HashSet<(u16, String, u8, u8)>,
+    /// The System Exclusive message each track is in the middle of, byte by byte.
+    sysex: HashMap<u16, Vec<u8>>,
     /// The routes as they were the last time they were followed.
     known: Vec<Route>,
 }
@@ -268,6 +288,7 @@ impl Sender {
             connections: HashMap::new(),
             failed: HashMap::new(),
             sounding: HashSet::new(),
+            sysex: HashMap::new(),
             known: Vec::new(),
         }
     }
@@ -379,7 +400,18 @@ impl Sender {
             return;
         };
         if ev.controller {
-            self.write(&port, &controller_message(channel, ev.pitch, ev.vel));
+            match ev.pitch {
+                PITCH_BEND => {
+                    self.write(&port, &pitch_bend_message(channel, ev.value));
+                }
+                CHANNEL_PRESSURE => {
+                    self.write(&port, &channel_pressure_message(channel, ev.value));
+                }
+                SYSEX_BYTE => self.sysex_byte(ev.track, &port, ev.value.min(255) as u8),
+                number => {
+                    self.write(&port, &controller_message(channel, number, ev.vel));
+                }
+            }
             return;
         }
         let key = (ev.track, port.clone(), channel, ev.pitch);
@@ -397,6 +429,33 @@ impl Sender {
         let port = self.ports.mtc.lock().ok().and_then(|p| p.clone());
         if let Some(port) = port {
             self.write(&port, m.bytes());
+        }
+    }
+
+    /// One byte of a System Exclusive message. The message starts at 0xF0 and goes out whole at
+    /// its 0xF7; bytes that come without a start are ignored, and a message that grows too long
+    /// is dropped.
+    fn sysex_byte(&mut self, track: u16, port: &str, byte: u8) {
+        let done = {
+            let buf = self.sysex.entry(track).or_default();
+            if byte == 0xf0 {
+                buf.clear();
+                buf.push(byte);
+            } else if !buf.is_empty() {
+                if buf.len() >= MAX_SYSEX {
+                    buf.clear();
+                } else {
+                    buf.push(byte);
+                }
+            }
+            if byte == 0xf7 && buf.len() > 1 {
+                Some(std::mem::take(buf))
+            } else {
+                None
+            }
+        };
+        if let Some(message) = done {
+            self.write(port, &message);
         }
     }
 
@@ -530,6 +589,7 @@ mod tests {
             pitch,
             vel: 90,
             controller: false,
+            value: 0,
         }
     }
 
@@ -569,6 +629,19 @@ mod tests {
             [0x89, 36, 64],
             "channel 10 is drums"
         );
+    }
+
+    #[test]
+    fn pitch_bend_and_pressure_are_raw_midi_on_their_channel() {
+        assert_eq!(pitch_bend_message(1, 8192), [0xe0, 0, 0x40]);
+        assert_eq!(pitch_bend_message(3, 16383), [0xe2, 0x7f, 0x7f]);
+        assert_eq!(
+            pitch_bend_message(1, u16::MAX),
+            [0xe0, 0x7f, 0x7f],
+            "clamped"
+        );
+        assert_eq!(channel_pressure_message(16, 90), [0xdf, 90]);
+        assert_eq!(channel_pressure_message(1, 500), [0xd0, 127]);
     }
 
     #[test]
@@ -792,6 +865,11 @@ mod tests {
         );
         assert!(tx.push(ev(0, true, 67)).is_ok());
         pump(&mut sender);
+        // Pitch bend and a SysEx message on the same route.
+        assert!(tx.push(ctl(0, PITCH_BEND, 8192)).is_ok());
+        for b in [0xf0u8, 0x7e, 0x7f, 0xf7] {
+            assert!(tx.push(ctl(0, SYSEX_BYTE, u16::from(b))).is_ok());
+        }
         // The engine's Note Off carries velocity 0.
         assert!(tx
             .push(MidiOutEvent {
@@ -800,6 +878,7 @@ mod tests {
                 pitch: 67,
                 vel: 0,
                 controller: false,
+                value: 0,
             })
             .is_ok());
         pump(&mut sender);
@@ -811,8 +890,12 @@ mod tests {
             sender.send_clock(m);
         }
 
+        // In the order they were queued: note on, bend, SysEx, note off; then the clock.
+        // Channel 4 is status 0xE3 for a bend.
         let want = vec![
             message(true, 4, 67, 90).to_vec(),
+            vec![0xe3, 0, 0x40],
+            vec![0xf0, 0x7e, 0x7f, 0xf7],
             message(false, 4, 67, 0).to_vec(),
             vec![0xfa],
             vec![0xf8],
@@ -827,6 +910,39 @@ mod tests {
             *got.lock().unwrap(),
             want,
             "the port received the note on and off"
+        );
+    }
+
+    /// A controller-kind event of a track, as the engine makes it.
+    fn ctl(track: u16, pitch: u8, value: u16) -> MidiOutEvent {
+        MidiOutEvent {
+            track,
+            on: false,
+            pitch,
+            vel: value.min(127) as u8,
+            controller: true,
+            value,
+        }
+    }
+
+    #[test]
+    fn pitch_bend_pressure_and_sysex_reach_the_routed_port() {
+        let (mut sender, mut tx, log, _routes, _) = rig(vec![route("Synth", 2)]);
+        assert!(tx.push(ctl(0, PITCH_BEND, 16383)).is_ok());
+        assert!(tx.push(ctl(0, CHANNEL_PRESSURE, 90)).is_ok());
+        // A System Exclusive message is one byte per event; a stray byte with no start is ignored.
+        for b in [0xf0u8, 0x41, 0x10, 0xf7] {
+            assert!(tx.push(ctl(0, SYSEX_BYTE, u16::from(b))).is_ok());
+        }
+        assert!(tx.push(ctl(0, SYSEX_BYTE, 0x55)).is_ok());
+        pump(&mut sender);
+        assert_eq!(
+            sent(&log),
+            vec![
+                ("Synth".to_string(), vec![0xe1, 0x7f, 0x7f]),
+                ("Synth".to_string(), vec![0xd1, 90]),
+                ("Synth".to_string(), vec![0xf0, 0x41, 0x10, 0xf7]),
+            ]
         );
     }
 
