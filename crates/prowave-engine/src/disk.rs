@@ -525,6 +525,7 @@ enum Msg {
         shared: Arc<ClipShared>,
         out_rate: u32,
         out_len: u64,
+        offset: u64,
         edit: ClipEdit,
     },
     Quit,
@@ -751,8 +752,34 @@ impl DiskThread {
         edit: ClipEdit,
         ring_blocks: usize,
     ) -> AudioClip {
-        let out_len =
-            (file.frames as f64 * out_rate as f64 / file.sample_rate.max(1) as f64) as u64;
+        self.stream_range(
+            file,
+            out_rate,
+            track,
+            start_beat,
+            edit,
+            ring_blocks,
+            0.0,
+            None,
+        )
+    }
+
+    /// [`DiskThread::stream_with_ring`] for a trimmed region: the clip plays `length_secs` of
+    /// the file (to its end when `None`) starting `offset_secs` into it. Both are clamped to
+    /// the file, so a clip is never longer than what is left of it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stream_range(
+        &self,
+        file: &AudioFile,
+        out_rate: u32,
+        track: u16,
+        start_beat: f64,
+        edit: ClipEdit,
+        ring_blocks: usize,
+        offset_secs: f64,
+        length_secs: Option<f64>,
+    ) -> AudioClip {
+        let (offset, out_len) = trimmed_frames(file, out_rate, offset_secs, length_secs);
         let ring_blocks = ring_blocks.clamp(RING_BLOCKS, RING_BLOCKS_MAX);
         let (producer, consumer): (Producer<Block>, Consumer<Block>) = RingBuffer::new(ring_blocks);
         let shared = Arc::new(ClipShared::default());
@@ -763,6 +790,7 @@ impl DiskThread {
             shared: shared.clone(),
             out_rate,
             out_len,
+            offset,
             edit,
         };
         if self.tx.send(msg).is_err() {
@@ -770,6 +798,29 @@ impl DiskThread {
         }
         AudioClip::new(track, start_beat, out_len, edit, consumer, shared)
     }
+}
+
+/// The first frame and the length, in device-rate frames, of the part of `file` a trimmed
+/// region plays. A start past the end gives an empty clip; non-finite values count as 0 (the
+/// start) or "to the end" (the length).
+fn trimmed_frames(
+    file: &AudioFile,
+    out_rate: u32,
+    offset_secs: f64,
+    length_secs: Option<f64>,
+) -> (u64, u64) {
+    let total = (file.frames as f64 * out_rate as f64 / file.sample_rate.max(1) as f64) as u64;
+    let secs = |s: f64| (s.max(0.0) * out_rate as f64) as u64;
+    let offset = if offset_secs.is_finite() {
+        secs(offset_secs).min(total)
+    } else {
+        0
+    };
+    let left = total - offset;
+    let len = length_secs
+        .filter(|l| l.is_finite())
+        .map_or(left, |l| secs(l).min(left));
+    (offset, len)
 }
 
 impl Drop for DiskThread {
@@ -790,6 +841,7 @@ fn handle(msg: Msg, streams: &mut Vec<Stream>) -> bool {
             shared,
             out_rate,
             out_len,
+            offset,
             edit,
         } => {
             if producer.is_abandoned() {
@@ -803,6 +855,7 @@ fn handle(msg: Msg, streams: &mut Vec<Stream>) -> bool {
                     producer,
                     shared,
                     out_len,
+                    offset,
                     gen: None,
                     out_frame: 0,
                     buf: Vec::new(),
@@ -929,6 +982,7 @@ mod tests {
                 shared: Arc::new(ClipShared::default()),
                 out_rate: SRC_RATE,
                 out_len: file.frames,
+                offset: 0,
                 edit: ClipEdit::default(),
             })
             .unwrap();
@@ -959,6 +1013,7 @@ mod tests {
         assert!(handle(
             Msg::Register {
                 out_len: file.frames,
+                offset: 0,
                 file,
                 producer,
                 shared: Arc::new(ClipShared::default()),
@@ -1118,6 +1173,72 @@ mod tests {
     }
 
     #[test]
+    fn a_trimmed_clip_plays_only_its_part_of_the_file_forward_and_reversed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_sine_wav(dir.path());
+        let file = AudioFile::open(&path).unwrap();
+        let mut whole = Source::open(&path).unwrap();
+        let mut decoded = Vec::new();
+        while whole.next_stereo(&mut decoded).unwrap() {}
+        // Same rate in and out, so frames map one to one: 0.25 s in, 0.5 s long.
+        let (offset, len) = trimmed_frames(&file, SRC_RATE, 0.25, Some(0.5));
+        assert_eq!((offset, len), (SRC_RATE as u64 / 4, SRC_RATE as u64 / 2));
+        for reverse in [false, true] {
+            let (producer, _consumer) = RingBuffer::new(RING_BLOCKS);
+            let mut stream = Stream {
+                src: Source::open(&path).unwrap(),
+                idle_since: None,
+                producer,
+                shared: Arc::new(ClipShared::default()),
+                ratio: 1.0,
+                out_len: len,
+                offset,
+                gen: None,
+                out_frame: 0,
+                buf: Vec::new(),
+                buf_base: 0,
+                eof: false,
+                reverse,
+            };
+            stream.seek_out(0);
+            while stream.out_frame < len {
+                let block = stream.fill_block(0);
+                for i in 0..block.frames as usize {
+                    let at = block.start as usize + i;
+                    let src_frame = if reverse {
+                        offset as usize + len as usize - 1 - at
+                    } else {
+                        offset as usize + at
+                    };
+                    assert_eq!(
+                        block.data[i * 2],
+                        decoded[src_frame * 2],
+                        "reverse={reverse} frame {at}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn trimmed_frames_are_clamped_to_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = AudioFile::open(write_sine_wav(dir.path())).unwrap();
+        let rate = SRC_RATE as u64;
+        assert_eq!(trimmed_frames(&file, SRC_RATE, 0.0, None), (0, rate));
+        assert_eq!(
+            trimmed_frames(&file, SRC_RATE, 0.75, Some(9.0)),
+            (rate * 3 / 4, rate / 4)
+        );
+        assert_eq!(trimmed_frames(&file, SRC_RATE, 5.0, None), (rate, 0));
+        assert_eq!(
+            trimmed_frames(&file, SRC_RATE, f64::NAN, Some(f64::NAN)),
+            (0, rate)
+        );
+        assert_eq!(trimmed_frames(&file, SRC_RATE, -1.0, Some(-1.0)), (0, 0));
+    }
+
+    #[test]
     fn reverse_matches_forward_reference_across_cache_boundaries_and_seeks() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_sine_wav(dir.path());
@@ -1150,6 +1271,7 @@ mod tests {
                 shared: Arc::new(ClipShared::default()),
                 ratio,
                 out_len,
+                offset: 0,
                 gen: None,
                 out_frame: 0,
                 buf: Vec::new(),
@@ -1563,6 +1685,7 @@ mod tests {
         let mut stream = Stream {
             ratio: 1.0,
             out_len: 30_000,
+            offset: 0,
             src,
             idle_since: None,
             producer,

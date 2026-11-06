@@ -471,6 +471,31 @@ impl Engine {
         )
     }
 
+    /// [`Engine::stream_clip_in`] for a trimmed region: plays `length_secs` of the file (to its
+    /// end when `None`) from `offset_secs` into it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stream_clip_range(
+        &self,
+        file: &AudioFile,
+        track: u16,
+        start_beat: f64,
+        edit: ClipEdit,
+        clips_in_song: usize,
+        offset_secs: f64,
+        length_secs: Option<f64>,
+    ) -> AudioClip {
+        self.disk.stream_range(
+            file,
+            self.sample_rate,
+            track,
+            start_beat,
+            edit,
+            crate::disk::ring_blocks_for(clips_in_song),
+            offset_secs,
+            length_secs,
+        )
+    }
+
     /// Streams an audio region with non-destructive gain, beat-based fades, and reverse.
     /// It buffers the most ahead; for a song with many regions use [`Engine::stream_clip_in`].
     pub fn stream_clip_with(
