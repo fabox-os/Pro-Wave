@@ -327,6 +327,12 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    was. `region_edit.rs`, `tracks_area.rs` (`TracksView::extra`). Not done: Join or Split on audio,
    Pattern, Drummer and take-folder regions; Bounce and Join.
 
+✅ Done 2026-11-06: Tracks area Functions menu. Move to Playhead (the earliest selected region goes to
+   the playhead, the others keep their distances), Quantize (the notes of selected MIDI regions go to
+   the region's Quantize grid, 1/16 when Off; destructive), and Folder (the selected track goes into a
+   track stack, as Track > Create Track Stack; this is our reading of Logic's "Folder"). Not done:
+   Bounce in Place (needs offline rendering) and Convert to New Sampler Track (needs a sampler track).
+
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.
@@ -530,8 +536,8 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
   Bring All to Front
 - Help: Key Commands, About Pro Wave
-- Tracks area: Edit (Bounce and Join is not done), Functions (Folder, Quantize,
-  Bounce in Place, Convert to New Sampler Track, Move to Playhead), View (Show Global Tracks,
+- Tracks area: Edit (Bounce and Join is not done), Functions (Bounce in Place, Convert to New
+  Sampler Track), View (Show Global Tracks,
   every tool except Pointer and Fade, waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo
 - Mixer: Select Audio Channel Strips, Create New Output Channel Strip, Show Signal Flow

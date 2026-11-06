@@ -778,11 +778,39 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect, lanes_w: f32) {
             ui.close();
         }
         ui.separator();
-        todo_item(ui, tr("Folder"));
-        todo_item(ui, tr("Quantize"));
+        // Folder: the selected track goes into a track stack, as Track > Create Track Stack.
+        if ui
+            .add_enabled(
+                p.selected_track < p.tracks.len(),
+                egui::Button::new(tr("Folder")),
+            )
+            .clicked()
+        {
+            p.create_track_stack(p.selected_track);
+            // Track numbers shift, so the remembered selections may point at other tracks.
+            v.clear_selection();
+            s.piano.selected.clear();
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                crate::region_edit::can_quantize(p, v),
+                egui::Button::new(tr("Quantize")),
+            )
+            .clicked()
+        {
+            crate::region_edit::quantize_selected(p, v);
+            ui.close();
+        }
         todo_item(ui, tr("Bounce in Place…"));
         todo_item(ui, tr("Convert to New Sampler Track…"));
-        todo_item(ui, tr("Move to Playhead"));
+        if ui
+            .add_enabled(sel.is_some(), egui::Button::new(tr("Move to Playhead")))
+            .clicked()
+        {
+            crate::region_edit::move_to_playhead(p, v);
+            ui.close();
+        }
     });
     let (view, w) = menu_title(ui, &g, x, cy, tr("View"), id(("menu", "View")));
     x += w + 10.0;
