@@ -366,6 +366,20 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    its name for the next choice. Not done: SysEx for audio, Pattern and Drummer regions; the list's
    other columns for SysEx (the Length column is empty).
 
+## Status at release 0.2.2 (2026-11-06)
+
+The items below marked done are in 0.2.2 (see CHANGELOG.md for the full list, and its known
+limitations at the end of the section). Still open, in the order the work would take them:
+
+- Plug-in hosting (CLAP first, then VST3 and AU), with a sandboxed process per plug-in. Not started.
+- Audio output device and I/O buffer size in Project Settings > Audio (needs an engine stream restart).
+- Bounce in Place and Bounce and Join (offline rendering in the engine).
+- Convert to New Sampler Track (needs a sampler instrument).
+- Show Chord Track and Show Arrangement Track (new data models).
+- Split and Join on audio, Pattern and Drummer regions (audio needs a start offset into the file).
+- Hardware tests of MIDI output, MIDI clock and SysEx; native-speaker review of the translations.
+- Release 0.2.2 was tested on Ubuntu 26.04.1 LTS only; Windows and macOS builds are not tested for it.
+
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.
