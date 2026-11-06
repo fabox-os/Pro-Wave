@@ -44,6 +44,7 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
             slot,
             p.position_beats,
             id,
+            meters.fx_input.get(ti).copied().unwrap_or(0.0),
         );
         finish(p, s, ti, slot, insert, edited, edits, open);
         return;

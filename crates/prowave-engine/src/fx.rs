@@ -10,7 +10,7 @@ use crate::convolver::Convolver;
 use std::f32::consts::{PI, TAU};
 
 /// Most parameters one effect has.
-pub const MAX_FX_PARAMS: usize = 24;
+pub const MAX_FX_PARAMS: usize = 32;
 /// Most effects in one channel strip.
 pub const MAX_INSERTS: usize = 8;
 
@@ -113,13 +113,13 @@ const COMP_PARAMS: [ParamInfo; 5] = [
 ];
 /// Space Designer (Logic's own ranges and starting values): see [`crate::convolver::sd`] for
 /// where each one sits.
-const REVERB_PARAMS: [ParamInfo; 23] = [
+const REVERB_PARAMS: [ParamInfo; 30] = [
     p("Predelay", 0.0, 500.0, 15.0, "ms"),
     pl("Length", 0.1, 10.0, 4.52, "s"),
     pl("Size", 10.0, 1000.0, 100.0, "%"),
     pl("X-Over", 200.0, 16000.0, 710.0, "Hz"),
     p("Lo Spread", 0.0, 100.0, 100.0, "%"),
-    p("Hi Spread", 0.0, 100.0, 100.0, "%"),
+    p("Hi Spread", 0.0, 200.0, 100.0, "%"),
     p("Dry", -96.0, 6.0, -12.5, "dB"),
     p("Wet", -96.0, 6.0, -7.0, "dB"),
     p("Input", -96.0, 6.0, 0.0, "dB"),
@@ -136,7 +136,14 @@ const REVERB_PARAMS: [ParamInfo; 23] = [
     p("Volume Env", 0.0, 1.0, 1.0, ""),
     p("IR Type", 0.0, 1.0, 0.0, ""),
     p("IR", 0.0, 5.0, 0.0, ""),
-    p("Brightness", 0.0, 1.0, 0.6, ""),
+    p("Density", 0.0, 1.0, 0.5, ""),
+    p("Diffuse", 0.0, 1.0, 0.5, ""),
+    p("Early Reflections", 0.0, 1.0, 0.5, ""),
+    pl("Filter Start", 100.0, 20000.0, 20000.0, "Hz"),
+    pl("Filter End", 100.0, 20000.0, 5000.0, "Hz"),
+    p("Resonance", 0.0, 1.0, 0.1, ""),
+    p("Output EQ Low", -12.0, 12.0, -2.0, "dB"),
+    p("Output EQ High", -12.0, 12.0, -1.0, "dB"),
 ];
 const DELAY_PARAMS: [ParamInfo; 5] = [
     pl("Time", 1.0, 2000.0, 375.0, "ms"),
@@ -729,6 +736,15 @@ fn space_gains(pr: &[f32]) -> [f32; 3] {
     [db(pr[sd::DRY]), db(pr[sd::WET]), db(pr[sd::INPUT])]
 }
 
+/// The Output EQ of Space Designer: low shelf at 100 Hz, high shelf at 10 kHz.
+fn space_eq(pr: &[f32], sr: f32) -> [Biquad; 2] {
+    use crate::convolver::sd;
+    [
+        Biquad::make(Shape::LowShelf, 100.0, 0.707, pr[sd::OUT_LO], sr),
+        Biquad::make(Shape::HighShelf, 10_000.0, 0.707, pr[sd::OUT_HI], sr),
+    ]
+}
+
 /// Space Designer: the convolver and what goes around it. The response itself is made off
 /// the audio thread and handed over with [`Fx::set_convolver`].
 #[derive(Clone, Debug)]
@@ -738,8 +754,10 @@ struct SpaceState {
     /// convolver delays, so the two stay in time.
     pre: [Line; 2],
     dry: [Line; 2],
-    /// The Output EQ: a low cut and a high cut on the reverb.
+    /// The Output EQ on the reverb only: a low shelf at 100 Hz and a high shelf at 10 kHz.
     eq: [[Biquad; 2]; 2],
+    /// The input level (linear, falls slowly), for the Input meter.
+    in_peak: f32,
     /// The gain the Dry, Wet and Input settings make (linear), smoothed so a move does not
     /// click.
     gains: [f32; 3],
@@ -748,12 +766,7 @@ struct SpaceState {
 impl SpaceState {
     fn new(sr: f32, params: &[f32; MAX_FX_PARAMS]) -> Self {
         let pre_max = (0.5 * sr) as usize + 4;
-        let eq = |_: usize| {
-            [
-                Biquad::make(Shape::High, 60.0, 0.707, 0.0, sr),
-                Biquad::make(Shape::Low, 14_000.0, 0.707, 0.0, sr),
-            ]
-        };
+        let eq = |_: usize| space_eq(params, sr);
         Self {
             conv: Box::new(Convolver::for_params(params, sr)),
             pre: [Line::new(pre_max), Line::new(pre_max)],
@@ -763,6 +776,7 @@ impl SpaceState {
             ],
             eq: [eq(0), eq(1)],
             gains: space_gains(params),
+            in_peak: 0.0,
         }
     }
 }
@@ -1058,6 +1072,15 @@ impl Fx {
         }
     }
 
+    /// Space Designer: the level of the sound going into the convolver (linear, 0 for any other
+    /// effect or while bypassed), for the Input meter.
+    pub fn input_level(&self) -> f32 {
+        match &self.state {
+            State::Reverb(s) if !self.bypass => s.in_peak,
+            _ => 0.0,
+        }
+    }
+
     /// The parameter values being played.
     pub fn current(&self) -> [f32; MAX_FX_PARAMS] {
         self.params
@@ -1088,6 +1111,14 @@ impl Fx {
                             z2: old.z2,
                             ..n
                         };
+                    }
+                }
+            }
+            State::Reverb(s) => {
+                let new = space_eq(&pr, sr);
+                for ch in s.eq.iter_mut() {
+                    for (old, n) in ch.iter_mut().zip(new) {
+                        *old = old.retuned(n);
                     }
                 }
             }
@@ -1246,6 +1277,9 @@ impl Fx {
                 let (in_g, wet_g, dry_g) = (s.gains[2], s.gains[1], s.gains[0]);
                 // A damaged input must not get into the convolver, where it would stay.
                 let (l, r) = (finite_or_zero(l), finite_or_zero(r));
+                s.in_peak = (s.in_peak * 0.99997)
+                    .max((l * in_g).abs())
+                    .max((r * in_g).abs());
                 s.pre[0].push(l * in_g);
                 s.pre[1].push(r * in_g);
                 let d = (pr[sd::PREDELAY] * 0.001 * sr).max(1.0);
@@ -1528,6 +1562,11 @@ impl Chain {
         self.fx.iter().map(Fx::reduction_db).fold(0.0, f32::max)
     }
 
+    /// The loudest Space Designer input level in the chain (linear).
+    pub fn input_level(&self) -> f32 {
+        self.fx.iter().map(Fx::input_level).fold(0.0, f32::max)
+    }
+
     /// The delay of the whole chain, in samples.
     pub fn latency_samples(&self) -> usize {
         self.fx.iter().map(Fx::latency_samples).sum()
@@ -1786,6 +1825,30 @@ mod tests {
         assert!(tail > 5e-6, "no tail: {tail}");
         let (_, late) = space_response(&wet_only, 4.0, 3 * SR as usize + 4000);
         assert!(late < 1e-3, "the tail does not die: {late}");
+
+        // Output EQ: a big cut of the high shelf makes the reverb quieter in the highs, and the
+        // dry sound is not touched by it.
+        let mut eq_a = wet_only.to_vec();
+        eq_a.push((sd::OUTPUT_EQ, 1.0));
+        eq_a.push((sd::OUT_HI, 0.0));
+        eq_a.push((sd::OUT_LO, 0.0));
+        let mut eq_b = eq_a.clone();
+        eq_b.push((sd::OUT_HI, -12.0));
+        let energy = |settings: &[(usize, f32)]| {
+            let mut rv = with(FxKind::Reverb, settings);
+            let mut prev = 0.0f32;
+            let mut e = 0.0f32;
+            for i in 0..(0.5 * SR) as usize {
+                let (l, _) = rv.process(if i == 0 { 1.0 } else { 0.0 }, 0.0);
+                e += (l - prev) * (l - prev);
+                prev = l;
+            }
+            e
+        };
+        assert!(
+            energy(&eq_b) < energy(&eq_a) * 0.6,
+            "the high shelf does nothing"
+        );
 
         // Predelay moves the start of the reverb.
         let mut a = wet_only.to_vec();

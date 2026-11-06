@@ -642,6 +642,7 @@ impl eframe::App for App {
             Some(sync) => mixer::Meters {
                 tracks: sync.track_meters(self.project.tracks.len()),
                 reduction: sync.gain_reduction(self.project.tracks.len()),
+                fx_input: sync.fx_inputs(self.project.tracks.len()),
                 master: sync.master_peaks(),
             },
             None => mixer::Meters::default(),
@@ -1003,6 +1004,13 @@ fn shot_mixer_scene(app: &mut App, kind: &str) {
         "eq" => app.ui.mixer.fx_window = Some((piano_t, 1)),
         "multi" => app.ui.mixer.fx_window = Some((pad, 1)),
         "limiter" => app.ui.mixer.fx_window = Some((vocal, 1)),
+        "master" => {
+            // The Mastering Glue preset, on a strip (the Stereo Out strip has no effects yet).
+            let mut glue = Insert::new(FxKind::Reverb);
+            glue.params = space_designer_ui::mastering_preset(0);
+            app.project.tracks[bass].inserts = vec![glue];
+            app.ui.mixer.fx_window = Some((bass, 0));
+        }
         "space" => {
             app.project.tracks[bass].inserts = vec![Insert::new(FxKind::Reverb)];
             app.ui.mixer.fx_window = Some((bass, 0));

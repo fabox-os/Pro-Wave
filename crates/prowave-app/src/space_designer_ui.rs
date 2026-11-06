@@ -49,6 +49,8 @@ struct Memory {
     /// View: window size in percent (100 when unset).
     view: u32,
     link: bool,
+    /// The display edits the Filter Envelope, not the Volume Envelope.
+    filter_view: bool,
     /// The drawn response and what it was made for.
     preview: Option<Preview>,
 }
@@ -60,15 +62,17 @@ fn clipboard() -> &'static std::sync::Mutex<Option<[f32; MAX_FX_PARAMS]>> {
     CLIP.get_or_init(|| std::sync::Mutex::new(None))
 }
 
-/// The settings a preset of the Sampled IR tab sets: the response and its natural length.
-fn preset_params(base: &[f32; MAX_FX_PARAMS], index: usize) -> [f32; MAX_FX_PARAMS] {
+/// The settings a preset of the Sampled IR tab sets: the response and its natural length. The
+/// mix, the stereo and the output EQ stay as they are.
+pub(crate) fn preset_params(base: &[f32; MAX_FX_PARAMS], index: usize) -> [f32; MAX_FX_PARAMS] {
     let mut p = *base;
     let defaults = FxKind::Reverb.defaults();
+    let index = index.min(IR_NAMES.len() - 1);
+    let secs = prowave_engine::ir_seconds(index);
     p[sd::IR_TYPE] = 0.0;
     p[sd::IR_INDEX] = index as f32;
-    // The preset's own length and shape, the way Logic's presets set them.
-    let secs = [3.0, 1.5, 0.8, 6.0, 2.0, 0.4][index.min(5)];
-    p[sd::LENGTH] = secs;
+    // Length only cuts: it is left above the response, so the whole room is heard.
+    p[sd::LENGTH] = secs.max(defaults[sd::LENGTH]);
     p[sd::DECAY] = secs;
     p[sd::SIZE] = defaults[sd::SIZE];
     p[sd::INIT_LEVEL] = defaults[sd::INIT_LEVEL];
@@ -77,6 +81,75 @@ fn preset_params(base: &[f32; MAX_FX_PARAMS], index: usize) -> [f32; MAX_FX_PARA
     p[sd::IR_OFFSET] = 0.0;
     p[sd::REVERSE] = 0.0;
     p
+}
+
+/// The mastering presets: a little reverb on the master bus that glues and widens the mix.
+pub(crate) const MASTERING_PRESETS: [&str; 3] = [
+    "Mastering Glue - Small Room",
+    "Mastering Plate - Vocal Sheen",
+    "Mastering Wide Hall",
+];
+
+/// The settings of mastering preset `index`: a small wet level, the dry sound at 0 dB, a short
+/// exponential decay that ends near silence, and the Predelay that keeps transients clear.
+pub(crate) fn mastering_preset(index: usize) -> [f32; MAX_FX_PARAMS] {
+    let mut p = FxKind::Reverb.defaults();
+    p[sd::IR_TYPE] = 0.0;
+    p[sd::QUALITY] = 1.0;
+    p[sd::DRY] = 0.0;
+    p[sd::VOLUME_ENV] = 1.0;
+    p[sd::INIT_LEVEL] = 100.0;
+    p[sd::ATTACK] = 10.0;
+    p[sd::CURVE] = 1.0;
+    p[sd::END_LEVEL] = 5.0;
+    p[sd::OUTPUT_EQ] = 1.0;
+    match index {
+        0 => {
+            // Small Room, 0.5 s: tight and clean, the bass nearly mono and the air widened.
+            p[sd::IR_INDEX] = 2.0;
+            p[sd::PREDELAY] = 15.0;
+            p[sd::LENGTH] = 0.8;
+            p[sd::SIZE] = 100.0;
+            p[sd::XOVER] = 700.0;
+            p[sd::LO_SPREAD] = 60.0;
+            p[sd::HI_SPREAD] = 110.0;
+            p[sd::WET] = -20.0;
+            p[sd::DECAY] = 0.8;
+            p[sd::FILTER_ENV] = 1.0;
+            p[sd::FILTER_START] = 20_000.0;
+            p[sd::FILTER_END] = 8_000.0;
+            p[sd::OUT_LO] = -2.0;
+            p[sd::OUT_HI] = -1.0;
+        }
+        1 => {
+            // Plate: a sheen on the vocal, with the top of the reverb taken down 1 dB.
+            p[sd::IR_INDEX] = 3.0;
+            p[sd::PREDELAY] = 20.0;
+            p[sd::LENGTH] = 1.2;
+            p[sd::SIZE] = 110.0;
+            p[sd::WET] = -18.0;
+            p[sd::DECAY] = 1.2;
+            p[sd::OUT_LO] = 0.0;
+            p[sd::OUT_HI] = -1.0;
+        }
+        _ => {
+            // Hall, 2.0 s cut to 1.5 s: wide and very quiet.
+            p[sd::IR_INDEX] = 5.0;
+            p[sd::PREDELAY] = 15.0;
+            p[sd::LENGTH] = 1.5;
+            p[sd::SIZE] = 100.0;
+            p[sd::LO_SPREAD] = 70.0;
+            p[sd::HI_SPREAD] = 120.0;
+            p[sd::WET] = -25.0;
+            p[sd::DECAY] = 1.5;
+            p[sd::FILTER_ENV] = 1.0;
+            p[sd::FILTER_START] = 20_000.0;
+            p[sd::FILTER_END] = 8_000.0;
+            p[sd::OUT_LO] = -2.0;
+            p[sd::OUT_HI] = -1.0;
+        }
+    }
+    FxKind::Reverb.clamp_params(p)
 }
 
 fn value_of(insert: &Insert, track: &Track, slot: usize, param: usize, beat: f64) -> f32 {
@@ -103,6 +176,7 @@ pub(crate) fn window(
     slot: usize,
     beat: f64,
     id: egui::Id,
+    input_level: f32,
 ) -> (Insert, Vec<Edit>, bool) {
     let mut open = true;
     let mut edited = *insert;
@@ -124,7 +198,14 @@ pub(crate) fn window(
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             ui.set_width(BASE_W * k);
-            body(ui, &mut edited, &mut edits, &mut mem, track, slot, beat, k);
+            body(
+                ui,
+                &mut edited,
+                &mut edits,
+                &mut mem,
+                (track, slot, beat, input_level),
+                k,
+            );
         });
     // Undo and Redo: a gesture is one step.
     if edited.params != insert.params {
@@ -149,9 +230,7 @@ fn body(
     edited: &mut Insert,
     edits: &mut Vec<Edit>,
     mem: &mut Memory,
-    track: &Track,
-    slot: usize,
-    beat: f64,
+    (track, slot, beat, input_level): (&Track, usize, f64, f32),
     k: f32,
 ) {
     let w = BASE_W * k;
@@ -250,7 +329,11 @@ fn body(
         vec2(236.0 * k, 18.0 * k),
     );
     ui.scope_builder(egui::UiBuilder::new().max_rect(preset_rect), |ui| {
-        let name = if edited.params[sd::IR_TYPE] >= 0.5 {
+        let mastering =
+            (0..MASTERING_PRESETS.len()).find(|&i| mastering_preset(i) == edited.params);
+        let name = if let Some(i) = mastering {
+            MASTERING_PRESETS[i].to_string()
+        } else if edited.params[sd::IR_TYPE] >= 0.5 {
             tr("Synthesized IR").to_string()
         } else {
             IR_NAMES[index].to_string()
@@ -263,19 +346,25 @@ fn body(
             )
             .width(236.0 * k)
             .show_ui(ui, |ui| {
+                let all = |e: &Insert, edits: &mut Vec<Edit>| {
+                    edits.extend((0..params.len()).map(|p| Edit {
+                        param: p,
+                        value: e.params[p],
+                        ended: true,
+                    }));
+                };
                 for (i, n) in IR_NAMES.iter().enumerate() {
-                    if ui
-                        .selectable_label(i == index && edited.params[sd::IR_TYPE] < 0.5, *n)
-                        .clicked()
-                    {
+                    let on = mastering.is_none() && i == index && edited.params[sd::IR_TYPE] < 0.5;
+                    if ui.selectable_label(on, *n).clicked() {
                         edited.params = preset_params(&edited.params, i);
-                        for p in 0..params.len() {
-                            edits.push(Edit {
-                                param: p,
-                                value: edited.params[p],
-                                ended: true,
-                            });
-                        }
+                        all(edited, edits);
+                    }
+                }
+                ui.separator();
+                for (i, n) in MASTERING_PRESETS.iter().enumerate() {
+                    if ui.selectable_label(mastering == Some(i), *n).clicked() {
+                        edited.params = mastering_preset(i);
+                        all(edited, edits);
                     }
                 }
             });
@@ -466,14 +555,36 @@ fn body(
     let sub = next(SUB_H);
     let g = ui.painter_at(sub);
     g.rect_filled(sub, 0.0, Color32::from_rgb(0x16, 0x20, 0x2c));
-    let toggle = |ui: &mut Ui, x: f32, wd: f32, label: &str, on: bool| {
+    // A button with a power symbol: the symbol switches it on or off, the rest of the button
+    // shows its envelope in the display. Returns (power clicked, rest clicked).
+    let toggle = |ui: &mut Ui, x: f32, wd: f32, label: &str, on: bool, shown: bool| {
         let r = Rect::from_min_size(
             pos2(sub.left() + x * k, sub.top() + 6.0 * k),
             vec2(wd * k, 22.0 * k),
         );
-        let resp = ui.interact(r, ui.scope_id().with(("sd_toggle", label)), Sense::click());
+        let power = Rect::from_min_size(r.min, vec2(24.0 * k, r.height()));
+        let rest = Rect::from_min_max(pos2(power.right(), r.top()), r.max);
+        let pr = ui.interact(
+            power,
+            ui.scope_id().with(("sd_power_zone", label)),
+            Sense::click(),
+        );
+        let rr = ui.interact(
+            rest,
+            ui.scope_id().with(("sd_select_zone", label)),
+            Sense::click(),
+        );
         let g = ui.painter_at(sub);
         g.rect_filled(r, 3.0 * k, Color32::from_rgb(0x24, 0x30, 0x3e));
+        if shown {
+            g.line_segment(
+                [
+                    r.left_bottom() - vec2(0.0, 1.0),
+                    r.right_bottom() - vec2(0.0, 1.0),
+                ],
+                Stroke::new(2.0 * k, CURVE),
+            );
+        }
         // The power symbol at the left of the button.
         let c = pos2(r.left() + 12.0 * k, r.center().y);
         g.circle_stroke(
@@ -488,27 +599,37 @@ fn body(
             FontId::proportional(11.5 * k),
             if on { CURVE } else { Color32::from_gray(0x9a) },
         );
-        resp.clicked()
+        (pr.clicked(), rr.clicked())
     };
-    if toggle(
+    let (power, select) = toggle(
         ui,
         10.0,
         120.0,
         tr("Volume Env"),
         edited.params[sd::VOLUME_ENV] >= 0.5,
-    ) {
+        !mem.filter_view,
+    );
+    if power {
         let v = 1.0 - edited.params[sd::VOLUME_ENV].round();
         set(edited, edits, sd::VOLUME_ENV, v, true);
     }
-    if toggle(
+    if select || power {
+        mem.filter_view = false;
+    }
+    let (power, select) = toggle(
         ui,
         138.0,
         110.0,
         tr("Filter Env"),
         edited.params[sd::FILTER_ENV] >= 0.5,
-    ) {
+        mem.filter_view,
+    );
+    if power {
         let v = 1.0 - edited.params[sd::FILTER_ENV].round();
         set(edited, edits, sd::FILTER_ENV, v, true);
+    }
+    if select || power {
+        mem.filter_view = true;
     }
     let name_rect = Rect::from_min_size(
         pos2(sub.left() + 262.0 * k, sub.top() + 5.0 * k),
@@ -527,12 +648,16 @@ fn body(
             .show_ui(ui, |ui| {
                 for (i, n) in IR_NAMES.iter().enumerate() {
                     if ui.selectable_label(!synth && i == index, *n).clicked() {
-                        edited.params = preset_params(&edited.params, i);
-                        edits.extend((0..params.len()).map(|p| Edit {
-                            param: p,
-                            value: edited.params[p],
-                            ended: true,
-                        }));
+                        // Only the response changes; the envelope and the rest stay.
+                        edited.params[sd::IR_TYPE] = 0.0;
+                        edited.params[sd::IR_INDEX] = i as f32;
+                        for p in [sd::IR_TYPE, sd::IR_INDEX] {
+                            edits.push(Edit {
+                                param: p,
+                                value: edited.params[p],
+                                ended: true,
+                            });
+                        }
                     }
                 }
             });
@@ -544,13 +669,15 @@ fn body(
         FontId::proportional(11.5 * k),
         Color32::from_gray(0x9a),
     );
-    if toggle(
+    let (power, _) = toggle(
         ui,
         612.0,
         134.0,
         tr("Output EQ"),
         edited.params[sd::OUTPUT_EQ] >= 0.5,
-    ) {
+        false,
+    );
+    if power {
         let v = 1.0 - edited.params[sd::OUTPUT_EQ].round();
         set(edited, edits, sd::OUTPUT_EQ, v, true);
     }
@@ -561,7 +688,11 @@ fn body(
 
     // ---- Readout under the display -----------------------------------------------------
     let readout = next(READOUT_H);
-    g_readout(ui, readout, edited, edits, k, &editable, &mut set);
+    if mem.filter_view {
+        filter_readout(ui, readout, edited, edits, k, &editable, &mut set);
+    } else {
+        g_readout(ui, readout, edited, edits, k, &editable, &mut set);
+    }
 
     // ---- Options row: Quality, IR Offset, Reverse --------------------------------------
     let opt = next(OPTIONS_H);
@@ -659,6 +790,48 @@ fn body(
             true,
         );
     }
+    // Synthesized IR: its own three controls, in the space after Reverse.
+    if edited.params[sd::IR_TYPE] >= 0.5 {
+        for (n, (p, label)) in [
+            (sd::DENSITY, tr("Density")),
+            (sd::DIFFUSE, tr("Diffuse")),
+            (sd::EARLY, tr("Early Reflections")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let x = 404.0 + n as f32 * 112.0;
+            let v = shown(edited, p);
+            g.text(
+                pos2(opt.left() + x * k, opt.center().y),
+                Align2::LEFT_CENTER,
+                label,
+                FontId::proportional(10.5 * k),
+                INK,
+            );
+            let r = Rect::from_min_size(
+                pos2(
+                    opt.left() + (x + label.len() as f32 * 4.6 + 4.0) * k,
+                    opt.top() + 6.0 * k,
+                ),
+                vec2(44.0 * k, 22.0 * k),
+            );
+            if let Some(nv) = drag_value(
+                ui,
+                r,
+                &format!("sd_synth_{p}"),
+                &format!("{:.0} %", v * 100.0),
+                v,
+                0.0,
+                1.0,
+                0.004,
+                editable(p),
+                k,
+            ) {
+                set(edited, edits, p, nv, false);
+            }
+        }
+    }
     g.text(
         pos2(opt.right() - 20.0 * k, opt.center().y),
         Align2::CENTER_CENTER,
@@ -696,6 +869,26 @@ fn body(
         false,
     ) {
         set(edited, edits, sd::INPUT, n, false);
+    }
+    // The Input meter, next to the fader: the level going into the convolver.
+    {
+        let (mx, my, mh) = (x0 + 66.0 * k, top_y + 34.0 * k, 130.0 * k);
+        let bar = Rect::from_min_size(pos2(mx, my), vec2(6.0 * k, mh));
+        g.rect_filled(bar, 2.0 * k, Color32::from_gray(0xb8));
+        let db = 20.0 * input_level.max(1e-6).log10();
+        let frac = ((db + 60.0) / 66.0).clamp(0.0, 1.0);
+        let lit = Rect::from_min_max(
+            pos2(bar.left(), bar.bottom() - mh * frac),
+            bar.right_bottom(),
+        );
+        let colour = if db > -1.0 {
+            Color32::from_rgb(0xe0, 0x30, 0x30)
+        } else if db > -12.0 {
+            Color32::from_rgb(0xe6, 0xc2, 0x2e)
+        } else {
+            Color32::from_rgb(0x4c, 0xc0, 0x4c)
+        };
+        g.rect_filled(lit, 2.0 * k, colour);
     }
     for (n, sym) in ["═", "⊃", "✕"].into_iter().enumerate() {
         g.text(
@@ -913,6 +1106,48 @@ fn body(
     let foot = next(FOOT_H);
     let g = ui.painter_at(foot);
     g.rect_filled(foot, 0.0, Color32::from_rgb(0xdc, 0xdc, 0xdc));
+    // Output EQ: the two shelves, while it is on.
+    if edited.params[sd::OUTPUT_EQ] >= 0.5 {
+        g.text(
+            pos2(foot.left() + 18.0 * k, foot.center().y),
+            Align2::LEFT_CENTER,
+            tr("Output EQ"),
+            FontId::proportional(10.5 * k),
+            TEXT_DIM,
+        );
+        for (n, (p, label)) in [(sd::OUT_LO, tr("Low")), (sd::OUT_HI, tr("High"))]
+            .into_iter()
+            .enumerate()
+        {
+            let x = 88.0 + n as f32 * 104.0;
+            let v = shown(edited, p);
+            g.text(
+                pos2(foot.left() + x * k, foot.center().y),
+                Align2::LEFT_CENTER,
+                label,
+                FontId::proportional(10.5 * k),
+                INK,
+            );
+            let r = Rect::from_min_size(
+                pos2(foot.left() + (x + 30.0) * k, foot.top() + 7.0 * k),
+                vec2(58.0 * k, 22.0 * k),
+            );
+            if let Some(nv) = drag_value(
+                ui,
+                r,
+                &format!("sd_eq_{p}"),
+                &format!("{v:+.1} dB"),
+                v,
+                -12.0,
+                12.0,
+                0.05,
+                editable(p),
+                k,
+            ) {
+                set(edited, edits, p, nv, false);
+            }
+        }
+    }
     g.text(
         foot.center(),
         Align2::CENTER_CENTER,
@@ -1277,29 +1512,10 @@ fn draw_display(
         pos2(rect.right() - 30.0 * k, rect.bottom() - 28.0 * k),
     );
     // The response, made again when a setting that shapes it changes.
-    let key: Vec<u32> = [
-        sd::LENGTH,
-        sd::SIZE,
-        sd::XOVER,
-        sd::LO_SPREAD,
-        sd::HI_SPREAD,
-        sd::INIT_LEVEL,
-        sd::ATTACK,
-        sd::DECAY,
-        sd::CURVE,
-        sd::END_LEVEL,
-        sd::IR_OFFSET,
-        sd::REVERSE,
-        sd::QUALITY,
-        sd::FILTER_ENV,
-        sd::VOLUME_ENV,
-        sd::IR_TYPE,
-        sd::IR_INDEX,
-        sd::BRIGHTNESS,
-    ]
-    .iter()
-    .map(|&i| edited.params[i].to_bits())
-    .collect();
+    let key: Vec<u32> = prowave_engine::IR_PARAMS
+        .iter()
+        .map(|&i| edited.params[i].to_bits())
+        .collect();
     let bins = plot.width().max(8.0) as usize;
     if mem
         .preview
@@ -1326,7 +1542,7 @@ fn draw_display(
             Stroke::new(1.0, WAVE),
         );
     }
-    // The envelope: filled under the line, then the line.
+    // The envelope: filled under the line, then the line (the Filter Envelope has its own).
     let x_of = |t: f32| plot.left() + (t / secs).clamp(0.0, 1.0) * plot.width();
     let y_of = |a: f32| plot.bottom() - a.clamp(0.0, 1.0) * plot.height();
     let env_on = edited.params[sd::VOLUME_ENV] >= 0.5;
@@ -1345,12 +1561,14 @@ fn draw_display(
     let mut fill = pts.clone();
     fill.push(plot.right_bottom());
     fill.push(plot.left_bottom());
-    g.add(Shape::convex_polygon(
-        fill,
-        Color32::from_rgba_unmultiplied(0x4a, 0x7a, 0xa8, 36),
-        Stroke::NONE,
-    ));
-    g.add(Shape::line(pts, Stroke::new(1.8 * k, CURVE)));
+    if !mem.filter_view {
+        g.add(Shape::convex_polygon(
+            fill,
+            Color32::from_rgba_unmultiplied(0x4a, 0x7a, 0xa8, 36),
+            Stroke::NONE,
+        ));
+        g.add(Shape::line(pts, Stroke::new(1.8 * k, CURVE)));
+    }
 
     // The axes: seconds along the bottom.
     let mut t = 0.0;
@@ -1373,9 +1591,21 @@ fn draw_display(
                 Stroke::new(1.0, Color32::from_white_alpha(14)),
             );
         }
-        t += if secs > 6.0 { 2.0 } else { 1.0 };
+        t += if secs > 6.0 {
+            2.0
+        } else if secs > 2.5 {
+            1.0
+        } else if secs > 1.0 {
+            0.5
+        } else {
+            0.1
+        };
     }
 
+    if mem.filter_view {
+        filter_overlay(ui, plot, secs, edited, edits, k, editable, set);
+        return;
+    }
     if !env_on {
         return;
     }
@@ -1443,6 +1673,156 @@ fn draw_display(
     }
 }
 
+/// The Filter Envelope over the display: the cut-off along the response, from its start value to
+/// its end value (drawn on a log scale from 100 Hz to 20 kHz), with a handle at each end.
+#[allow(clippy::too_many_arguments)]
+fn filter_overlay(
+    ui: &mut Ui,
+    plot: Rect,
+    secs: f32,
+    edited: &mut Insert,
+    edits: &mut Vec<Edit>,
+    k: f32,
+    editable: &dyn Fn(usize) -> bool,
+    set: &mut SetFn,
+) {
+    let g = ui.painter_at(plot.expand(30.0 * k));
+    let on = edited.params[sd::FILTER_ENV] >= 0.5;
+    let hz_to_y =
+        |hz: f32| plot.bottom() - ((hz / 100.0).ln() / 200f32.ln()).clamp(0.0, 1.0) * plot.height();
+    let y_to_hz =
+        |y: f32| 100.0 * 200f32.powf(((plot.bottom() - y) / plot.height()).clamp(0.0, 1.0));
+    for (hz, label) in [(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")] {
+        let y = hz_to_y(hz);
+        g.line_segment(
+            [pos2(plot.left(), y), pos2(plot.right(), y)],
+            Stroke::new(1.0, Color32::from_white_alpha(14)),
+        );
+        g.text(
+            pos2(plot.left() - 6.0 * k, y),
+            Align2::RIGHT_CENTER,
+            label,
+            FontId::proportional(9.5 * k),
+            Color32::from_gray(0x80),
+        );
+    }
+    let (start, end) = (
+        edited.params[sd::FILTER_START],
+        edited.params[sd::FILTER_END],
+    );
+    let colour = if on { CURVE } else { CURVE.gamma_multiply(0.4) };
+    let n = plot.width() as usize;
+    let pts: Vec<egui::Pos2> = (0..=n)
+        .map(|i| {
+            let hz = start * (end / start).powf(i as f32 / n.max(1) as f32);
+            pos2(plot.left() + i as f32, hz_to_y(hz))
+        })
+        .collect();
+    g.add(Shape::line(pts, Stroke::new(1.8 * k, colour)));
+    let _ = secs;
+    for (which, c, p) in [
+        (0, pos2(plot.left(), hz_to_y(start)), sd::FILTER_START),
+        (1, pos2(plot.right(), hz_to_y(end)), sd::FILTER_END),
+    ] {
+        let resp = ui.interact(
+            Rect::from_center_size(c, vec2(18.0 * k, 18.0 * k)),
+            ui.scope_id().with(("sd_filter_dot", which)),
+            Sense::drag(),
+        );
+        g.circle_filled(c, 5.5 * k, colour);
+        g.circle_stroke(
+            c,
+            5.5 * k,
+            Stroke::new(1.0, Color32::from_rgb(0x1a, 0x3a, 0x5a)),
+        );
+        if resp.hovered() || resp.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        if resp.dragged() && editable(p) {
+            if let Some(pt) = resp.interact_pointer_pos() {
+                set(edited, edits, p, y_to_hz(pt.y), false);
+            }
+        } else if resp.drag_stopped() {
+            set(edited, edits, p, edited.params[p], true);
+        }
+    }
+}
+
+/// The row under the display while it shows the Filter Envelope: "Start: 20.0 kHz   End: 5.0 kHz
+/// Resonance: 10 %", each value dragged up and down.
+fn filter_readout(
+    ui: &mut Ui,
+    rect: Rect,
+    edited: &mut Insert,
+    edits: &mut Vec<Edit>,
+    k: f32,
+    editable: &dyn Fn(usize) -> bool,
+    set: &mut SetFn,
+) {
+    let g = ui.painter_at(rect);
+    g.rect_filled(rect, 0.0, Color32::from_rgb(0x16, 0x20, 0x2c));
+    let dim = Color32::from_rgb(0x7a, 0x9a, 0xb8);
+    let hz_text = |hz: f32| {
+        if hz >= 1000.0 {
+            format!("{:.1} kHz", hz / 1000.0)
+        } else {
+            format!("{hz:.0} Hz")
+        }
+    };
+    let info = FxKind::Reverb.params();
+    for (p, label, x) in [
+        (sd::FILTER_START, tr("Start:"), 10.0),
+        (sd::FILTER_END, tr("End:"), 210.0),
+        (sd::RESONANCE, tr("Resonance:"), 400.0),
+    ] {
+        let v = edited.params[p];
+        g.text(
+            pos2(rect.left() + x * k, rect.center().y),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::proportional(11.5 * k),
+            dim,
+        );
+        let r = Rect::from_min_size(
+            pos2(
+                rect.left() + (x + label.len() as f32 * 5.6 + 6.0) * k,
+                rect.top() + 4.0 * k,
+            ),
+            vec2(80.0 * k, 22.0 * k),
+        );
+        let text = if p == sd::RESONANCE {
+            format!("{:.0} %", v * 100.0)
+        } else {
+            hz_text(v)
+        };
+        g.text(
+            pos2(r.left(), r.center().y),
+            Align2::LEFT_CENTER,
+            text,
+            FontId::proportional(11.5 * k),
+            CURVE,
+        );
+        let resp = ui.interact(
+            r,
+            ui.scope_id().with(("sd_filter_read", p)),
+            Sense::click_and_drag(),
+        );
+        if editable(p) && resp.dragged() {
+            let n = info[p].to_norm(v) - resp.drag_delta().y * 0.004;
+            set(edited, edits, p, info[p].from_norm(n), false);
+        } else if resp.drag_stopped() {
+            set(edited, edits, p, v, true);
+        }
+    }
+    g.text(
+        pos2(rect.right() - 16.0 * k, rect.center().y),
+        Align2::RIGHT_CENTER,
+        tr("Low Pass"),
+        FontId::proportional(11.5 * k),
+        dim,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1453,8 +1833,8 @@ mod tests {
         base[sd::DRY] = -3.0;
         base[sd::WET] = -9.0;
         base[sd::REVERSE] = 1.0;
-        let p = preset_params(&base, 3);
-        assert_eq!(p[sd::IR_INDEX], 3.0);
+        let p = preset_params(&base, 4);
+        assert_eq!(p[sd::IR_INDEX], 4.0);
         assert_eq!(p[sd::IR_TYPE], 0.0);
         assert_eq!(p[sd::LENGTH], 6.0);
         assert_eq!(p[sd::REVERSE], 0.0);

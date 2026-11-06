@@ -536,6 +536,8 @@ pub struct EngineState {
     /// Gain reduction in dB (0 or more) of the compressors of each strip, for the mixer's
     /// Gain Reduction meter.
     pub gain_reduction: [f32; MAX_TRACKS],
+    /// Level (linear) going into the Space Designer of each strip, for its Input meter.
+    pub fx_input: [f32; MAX_TRACKS],
     /// Frames in the most recent device callback.
     pub block_frames: u32,
     /// Device-reported delay from callback to DAC, in microseconds (0 if unknown).
@@ -550,6 +552,7 @@ impl Default for EngineState {
             peaks: (0.0, 0.0),
             track_peaks: [(0.0, 0.0); MAX_TRACKS],
             gain_reduction: [0.0; MAX_TRACKS],
+            fx_input: [0.0; MAX_TRACKS],
             block_frames: 0,
             output_latency_us: 0,
         }
@@ -560,6 +563,11 @@ impl EngineState {
     /// Gain reduction in dB of the compressors of `track` (0 when there is none).
     pub fn gain_reduction(&self, track: usize) -> f32 {
         self.gain_reduction.get(track).copied().unwrap_or(0.0)
+    }
+
+    /// The level going into the Space Designer of `track` (linear; 0 when it has none).
+    pub fn fx_input(&self, track: usize) -> f32 {
+        self.fx_input.get(track).copied().unwrap_or(0.0)
     }
 
     /// Post-fader (left, right) peak of `track`, linear; silence for a track out of range.
@@ -2195,6 +2203,7 @@ impl EngineCore {
         for &t in self.complex.iter().chain(self.aux.iter()) {
             let t = t as usize;
             shown.gain_reduction[t] = self.chains[t].as_ref().map_or(0.0, |c| c.reduction_db());
+            shown.fx_input[t] = self.chains[t].as_ref().map_or(0.0, |c| c.input_level());
         }
         *self.state.input() = *shown;
         self.state.publish();

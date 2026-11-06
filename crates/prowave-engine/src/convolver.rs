@@ -47,29 +47,78 @@ pub mod sd {
     pub const IR_TYPE: usize = 20;
     /// Which built-in response the Sampled IR tab plays.
     pub const IR_INDEX: usize = 21;
-    /// How bright the Synthesized IR is, 0 to 1.
-    pub const BRIGHTNESS: usize = 22;
+    /// Synthesized IR: how many reflections there are (0 sparse, 1 dense).
+    pub const DENSITY: usize = 22;
+    /// Synthesized IR: how smeared the reflections are (0 distinct, 1 smooth).
+    pub const DIFFUSE: usize = 23;
+    /// Synthesized IR: the level of the early reflections, 0 to 1.
+    pub const EARLY: usize = 24;
+    /// Filter Env: the cut-off at the start and at the end of the response (Hz), and the
+    /// resonance, 0 to 1.
+    pub const FILTER_START: usize = 25;
+    pub const FILTER_END: usize = 26;
+    pub const RESONANCE: usize = 27;
+    /// Output EQ: the low shelf (100 Hz) and the high shelf (10 kHz), in dB.
+    pub const OUT_LO: usize = 28;
+    pub const OUT_HI: usize = 29;
+    /// Settings Space Designer has.
+    pub const COUNT: usize = 30;
 }
 
-/// The built-in impulse responses of the Sampled IR tab.
-pub const IR_NAMES: [&str; 6] = [
-    "03.0s Long Reverb",
-    "01.5s Medium Hall",
-    "00.8s Small Room",
-    "06.0s Cathedral",
-    "02.0s Bright Plate",
-    "00.4s Tight Booth",
+/// The settings that change the impulse response itself (the others, Predelay, Dry, Wet,
+/// Input, Output EQ and its two gains, the audio thread applies as they move).
+pub const IR_PARAMS: [usize; 23] = [
+    sd::LENGTH,
+    sd::SIZE,
+    sd::XOVER,
+    sd::LO_SPREAD,
+    sd::HI_SPREAD,
+    sd::INIT_LEVEL,
+    sd::ATTACK,
+    sd::DECAY,
+    sd::CURVE,
+    sd::END_LEVEL,
+    sd::IR_OFFSET,
+    sd::REVERSE,
+    sd::QUALITY,
+    sd::FILTER_ENV,
+    sd::VOLUME_ENV,
+    sd::IR_TYPE,
+    sd::IR_INDEX,
+    sd::DENSITY,
+    sd::DIFFUSE,
+    sd::EARLY,
+    sd::FILTER_START,
+    sd::FILTER_END,
+    sd::RESONANCE,
 ];
 
-/// Length of each built-in IR in seconds, and how dark it gets (0 bright, 1 dark).
-const IR_SHAPE: [(f32, f32); 6] = [
-    (3.0, 0.45),
-    (1.5, 0.4),
-    (0.8, 0.3),
-    (6.0, 0.7),
-    (2.0, 0.1),
-    (0.4, 0.5),
+/// The built-in impulse responses of the Sampled IR tab. They are made in code (noise with a
+/// decay and early reflections), so no recording is shipped.
+pub const IR_NAMES: [&str; 6] = [
+    "03.0s Long Reverb",
+    "01.2s Medium Hall",
+    "00.5s Small Room",
+    "Plate",
+    "Church",
+    "02.0s Hall",
 ];
+
+/// Length of each built-in IR in seconds, how dark it gets (0 bright, 1 dark) and the level of
+/// its early reflections (a plate has none).
+const IR_SHAPE: [(f32, f32, f32); 6] = [
+    (3.0, 0.45, 0.6),
+    (1.2, 0.4, 0.6),
+    (0.5, 0.3, 0.7),
+    (2.0, 0.05, 0.0),
+    (6.0, 0.7, 0.5),
+    (2.0, 0.4, 0.6),
+];
+
+/// The natural length of built-in IR `index`, in seconds.
+pub fn ir_seconds(index: usize) -> f32 {
+    IR_SHAPE[index.min(IR_SHAPE.len() - 1)].0
+}
 
 /// A radix-2 FFT of a fixed size.
 #[derive(Clone, Debug)]
@@ -156,7 +205,7 @@ impl Noise {
 
 /// A built-in response: noise with an exponential decay that gets darker, a few early
 /// reflections, different on each side.
-fn base_ir(seconds: f32, dark: f32, sr: f32) -> Vec<[f32; 2]> {
+fn base_ir(seconds: f32, dark: f32, early: f32, sr: f32) -> Vec<[f32; 2]> {
     let n = ((seconds * sr) as usize).max(64);
     let mut out = vec![[0.0f32; 2]; n];
     for ch in 0..2 {
@@ -176,7 +225,43 @@ fn base_ir(seconds: f32, dark: f32, sr: f32) -> Vec<[f32; 2]> {
         // Early reflections in the first 90 ms.
         for _ in 0..14 {
             let at = ((rng.next().abs() * 0.09 + 0.004) * sr) as usize;
-            let amp = rng.next() * 0.6;
+            let amp = rng.next() * early;
+            if let Some(o) = out.get_mut(at) {
+                o[ch] += amp;
+            }
+        }
+    }
+    out
+}
+
+/// A synthesized response (no recording): reflections that get denser with time, smeared by
+/// the Diffuse amount, with a cluster of early reflections. `secs` is the time to -60 dB.
+fn synth_ir(secs: f32, density: f32, diffuse: f32, early: f32, sr: f32) -> Vec<[f32; 2]> {
+    let n = ((secs * sr) as usize).max(64);
+    let mut out = vec![[0.0f32; 2]; n];
+    for ch in 0..2 {
+        let mut rng = Noise(0x2545_f491 ^ (ch as u32 + 1).wrapping_mul(0x9e37_79b1));
+        let mut smooth = 0.0f32;
+        // Diffuse: the lower the cut-off the smoother the tail.
+        let cutoff = 16_000.0 * (1.0 - 0.9 * diffuse) + 500.0;
+        let k = 1.0 - (-TAU * cutoff / sr).exp();
+        for (i, o) in out.iter_mut().enumerate() {
+            let t = i as f32 / sr;
+            let env = (-6.9 * t / secs).exp();
+            // The chance of a reflection in this sample: a few per millisecond at first,
+            // more as time goes on, and always some for a dense setting.
+            let p = (0.002 + 0.9 * density * density) * (1.0 + 30.0 * t / secs).min(30.0) / 30.0;
+            let pulse = if (rng.next() * 0.5 + 0.5) < p {
+                rng.next()
+            } else {
+                0.0
+            };
+            smooth += (pulse - smooth) * k;
+            o[ch] = smooth * env * (t / 0.002).min(1.0);
+        }
+        for _ in 0..14 {
+            let at = ((rng.next().abs() * 0.08 + 0.003) * sr) as usize;
+            let amp = rng.next() * early * 2.0;
             if let Some(o) = out.get_mut(at) {
                 o[ch] += amp;
             }
@@ -216,35 +301,32 @@ pub fn ir_samples(params: &[f32], sr: f32) -> Vec<[f32; 2]> {
         .map(|x| if x.is_finite() { *x } else { 0.0 })
         .collect();
     let params = &clean[..];
-    if params.len() <= sd::BRIGHTNESS {
+    if params.len() < sd::COUNT {
         return vec![[0.0; 2]; 64];
     }
     let sr = sr.clamp(8_000.0, 384_000.0);
     let synth = params[sd::IR_TYPE] >= 0.5;
-    let (secs, dark) = if synth {
-        (
+    let mut ir = if synth {
+        synth_ir(
             params[sd::LENGTH].clamp(0.1, 10.0),
-            1.0 - params[sd::BRIGHTNESS],
+            params[sd::DENSITY].clamp(0.0, 1.0),
+            params[sd::DIFFUSE].clamp(0.0, 1.0),
+            params[sd::EARLY].clamp(0.0, 1.0),
+            sr,
         )
     } else {
         let i = (params[sd::IR_INDEX].round().max(0.0) as usize).min(IR_NAMES.len() - 1);
-        IR_SHAPE[i]
+        let (secs, dark, early) = IR_SHAPE[i];
+        base_ir(secs, dark, early, sr)
     };
-    let mut ir = base_ir(secs, dark, sr);
 
     // IR Offset: the response starts later into itself.
     let skip = ((params[sd::IR_OFFSET].max(0.0) * sr) as usize).min(ir.len().saturating_sub(64));
     ir.drain(..skip);
 
-    // Length and Size stretch the response in time.
+    // Size: the response is played slower or faster, which makes the room bigger or smaller.
     let size = (params[sd::SIZE] / 100.0).clamp(0.1, 10.0);
-    let target = if synth {
-        1.0
-    } else {
-        params[sd::LENGTH] / secs.max(0.1)
-    };
-    let factor = (target * size).max(0.01);
-    let out_len = (((ir.len() as f32) * factor) as usize).clamp(64, (MAX_IR_SECONDS * sr) as usize);
+    let out_len = (((ir.len() as f32) * size) as usize).clamp(64, (MAX_IR_SECONDS * sr) as usize);
     if out_len != ir.len() {
         let mut stretched = Vec::with_capacity(out_len);
         let last = ir.len() - 1;
@@ -260,6 +342,11 @@ pub fn ir_samples(params: &[f32], sr: f32) -> Vec<[f32; 2]> {
         }
         ir = stretched;
     }
+    // Length: the response is cut to this many seconds (the end fades out below).
+    if !synth {
+        let cut = ((params[sd::LENGTH].clamp(0.1, 10.0) * sr) as usize).max(64);
+        ir.truncate(cut);
+    }
 
     if params[sd::REVERSE] >= 0.5 {
         ir.reverse();
@@ -273,22 +360,37 @@ pub fn ir_samples(params: &[f32], sr: f32) -> Vec<[f32; 2]> {
         }
     }
 
-    // Filter Envelope: the highs fade faster, from 18 kHz down to 1.5 kHz over the response.
+    // Filter Envelope: a low pass whose cut-off moves from the start to the end value over the
+    // response (a state variable filter, so the resonance is real), so the highs fade faster.
     if params[sd::FILTER_ENV] >= 0.5 {
         let n = ir.len().max(1) as f32;
-        let mut lp = [0.0f32; 2];
+        let (start, end) = (
+            params[sd::FILTER_START].clamp(100.0, 20_000.0),
+            params[sd::FILTER_END].clamp(100.0, 20_000.0),
+        );
+        let q = 0.5 + params[sd::RESONANCE].clamp(0.0, 1.0) * 6.0;
+        let kk = 1.0 / q;
+        let mut state = [[0.0f32; 2]; 2];
         for (i, f) in ir.iter_mut().enumerate() {
-            let cutoff = 18_000.0 * (1500.0f32 / 18_000.0).powf(i as f32 / n);
-            let k = 1.0 - (-TAU * cutoff / sr).exp();
+            let cutoff = (start * (end / start).powf(i as f32 / n)).min(sr * 0.45);
+            let g = (std::f32::consts::PI * cutoff / sr).tan();
+            let a1 = 1.0 / (1.0 + g * (g + kk));
             for ch in 0..2 {
-                lp[ch] += (f[ch] - lp[ch]) * k;
-                f[ch] = lp[ch];
+                let [ic1, ic2] = state[ch];
+                let v3 = f[ch] - ic2;
+                let v1 = a1 * (ic1 + g * v3);
+                let v2 = ic2 + g * v1;
+                state[ch] = [2.0 * v1 - ic1, 2.0 * v2 - ic2];
+                f[ch] = v2;
             }
         }
     }
 
     // X-Over, Lo Spread and Hi Spread: the stereo width of the lows and of the highs.
-    let (lo, hi) = (params[sd::LO_SPREAD] / 100.0, params[sd::HI_SPREAD] / 100.0);
+    let (lo, hi) = (
+        params[sd::LO_SPREAD].clamp(0.0, 200.0) / 100.0,
+        params[sd::HI_SPREAD].clamp(0.0, 200.0) / 100.0,
+    );
     if (lo - 1.0).abs() > 1e-3 || (hi - 1.0).abs() > 1e-3 {
         let k = 1.0 - (-TAU * params[sd::XOVER].clamp(20.0, sr * 0.4) / sr).exp();
         let mut s1 = [0.0f32; 2];
@@ -568,10 +670,10 @@ impl Convolver {
 mod tests {
     use super::*;
 
-    fn defaults() -> [f32; 24] {
-        let mut p = [0.0; 24];
+    fn defaults() -> [f32; 32] {
+        let mut p = [0.0; 32];
         p[sd::PREDELAY] = 15.0;
-        p[sd::LENGTH] = 3.0;
+        p[sd::LENGTH] = 4.52;
         p[sd::SIZE] = 100.0;
         p[sd::XOVER] = 710.0;
         p[sd::LO_SPREAD] = 100.0;
@@ -582,7 +684,12 @@ mod tests {
         p[sd::END_LEVEL] = 18.0;
         p[sd::QUALITY] = 1.0;
         p[sd::VOLUME_ENV] = 1.0;
-        p[sd::BRIGHTNESS] = 0.6;
+        p[sd::DENSITY] = 0.5;
+        p[sd::DIFFUSE] = 0.5;
+        p[sd::EARLY] = 0.5;
+        p[sd::FILTER_START] = 20_000.0;
+        p[sd::FILTER_END] = 5_000.0;
+        p[sd::RESONANCE] = 0.1;
         p
     }
 
@@ -666,22 +773,39 @@ mod tests {
         );
     }
 
+    fn secs(p: &[f32; 32]) -> f32 {
+        ir_samples(p, 48_000.0).len() as f32 / 48_000.0
+    }
+
     #[test]
-    fn the_settings_shape_the_response() {
-        let sr = 48_000.0;
+    fn length_cuts_the_response_and_size_stretches_it() {
         let base = defaults();
-        let long = ir_samples(&base, sr).len() as f32 / sr;
-        assert!((long - 3.0).abs() < 0.05, "{long}");
-        let mut stretched = base;
-        stretched[sd::LENGTH] = 6.0;
-        let l2 = ir_samples(&stretched, sr).len() as f32 / sr;
-        assert!((l2 - 6.0).abs() < 0.05, "{l2}");
+        // The first response is 3.0 s; a Length above that leaves it whole.
+        assert!((secs(&base) - 3.0).abs() < 0.05, "{}", secs(&base));
+        let mut short = base;
+        short[sd::LENGTH] = 0.8;
+        assert!((secs(&short) - 0.8).abs() < 0.05);
+        // Size 200 % doubles it (Length 10 s does not cut it); 50 % halves it.
         let mut big = base;
         big[sd::SIZE] = 200.0;
-        let l3 = ir_samples(&big, sr).len() as f32 / sr;
-        assert!((l3 - 6.0).abs() < 0.05, "{l3}");
-        // Reverse puts the loud part at the end.
-        let mut rev = base;
+        big[sd::LENGTH] = 10.0;
+        assert!((secs(&big) - 6.0).abs() < 0.05);
+        let mut small = base;
+        small[sd::SIZE] = 50.0;
+        assert!((secs(&small) - 1.5).abs() < 0.05);
+        // Length also cuts a bigger room.
+        big[sd::LENGTH] = 2.0;
+        assert!((secs(&big) - 2.0).abs() < 0.05);
+        // Offset starts later into the response.
+        let mut off = base;
+        off[sd::IR_OFFSET] = 1.0;
+        assert!((secs(&off) - 2.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn reverse_envelope_and_loudness_follow_the_settings() {
+        let sr = 48_000.0;
+        let mut rev = defaults();
         rev[sd::REVERSE] = 1.0;
         rev[sd::VOLUME_ENV] = 0.0;
         let mut fwd = rev;
@@ -696,19 +820,15 @@ mod tests {
         };
         assert!(early(&a) > late(&a) * 4.0);
         assert!(late(&b) > early(&b) * 4.0);
-        // The volume envelope makes the end quieter.
-        let mut flat = base;
+        // A short decay to a low end level makes the tail quieter.
+        let mut flat = defaults();
         flat[sd::VOLUME_ENV] = 0.0;
-        let mut steep = base;
+        let mut steep = defaults();
         steep[sd::END_LEVEL] = 0.0;
         steep[sd::DECAY] = 0.5;
         let (f, s) = (ir_samples(&flat, sr), ir_samples(&steep, sr));
         let tail = |v: &[[f32; 2]]| v[v.len() / 2..].iter().map(|x| x[0] * x[0]).sum::<f32>();
         assert!(tail(&s) < tail(&f) * 0.2);
-        // Offset starts later; Lo Spread 0 makes the lows mono.
-        let mut off = base;
-        off[sd::IR_OFFSET] = 1.0;
-        assert!(((ir_samples(&off, sr).len() as f32 / sr) - 2.0).abs() < 0.05);
         // Every response has the same loudness.
         for ir in [&a, &b, &f, &s] {
             let pw: f32 = ir.iter().map(|x| (x[0] * x[0] + x[1] * x[1]) * 0.5).sum();
@@ -716,11 +836,97 @@ mod tests {
         }
     }
 
+    /// Energy of the part of channel 0 above `hz`, for judging brightness.
+    fn highs(ir: &[[f32; 2]]) -> f32 {
+        ir.windows(2)
+            .map(|w| {
+                let d = w[1][0] - w[0][0];
+                d * d
+            })
+            .sum::<f32>()
+    }
+
+    #[test]
+    fn the_filter_envelope_darkens_the_tail_and_the_resonance_is_heard() {
+        let sr = 48_000.0;
+        let mut off = defaults();
+        off[sd::FILTER_ENV] = 0.0;
+        let mut on = off;
+        on[sd::FILTER_ENV] = 1.0;
+        on[sd::FILTER_START] = 20_000.0;
+        on[sd::FILTER_END] = 500.0;
+        let (a, b) = (ir_samples(&off, sr), ir_samples(&on, sr));
+        let late = |v: &[[f32; 2]]| highs(&v[v.len() / 2..]);
+        assert!(late(&b) < late(&a) * 0.3, "{} vs {}", late(&b), late(&a));
+        // Resonance changes the sound.
+        let mut res = on;
+        res[sd::RESONANCE] = 1.0;
+        let c = ir_samples(&res, sr);
+        let diff: f32 = b.iter().zip(&c).map(|(x, y)| (x[0] - y[0]).abs()).sum();
+        assert!(diff > 1.0, "{diff}");
+    }
+
+    #[test]
+    fn spread_zero_makes_both_sides_the_same_and_wider_than_100_widens() {
+        let sr = 48_000.0;
+        let mut mono = defaults();
+        mono[sd::LO_SPREAD] = 0.0;
+        mono[sd::HI_SPREAD] = 0.0;
+        let m = ir_samples(&mono, sr);
+        assert!(m.iter().all(|f| (f[0] - f[1]).abs() < 1e-5), "not mono");
+        // Only the lows mono: the bass in the difference between the sides is gone.
+        let side = |v: &[[f32; 2]]| v.iter().map(|f| (f[0] - f[1]).powi(2)).sum::<f32>();
+        let bass_side = |v: &[[f32; 2]]| {
+            let k = 1.0 - (-TAU * 100.0 / 48_000.0).exp();
+            let (mut a, mut b) = (0.0f32, 0.0f32);
+            v.iter()
+                .map(|f| {
+                    a += ((f[0] - f[1]) - a) * k;
+                    b += (a - b) * k;
+                    b * b
+                })
+                .sum::<f32>()
+        };
+        let mut lo0 = defaults();
+        lo0[sd::LO_SPREAD] = 0.0;
+        let (full, lows_mono) = (ir_samples(&defaults(), sr), ir_samples(&lo0, sr));
+        assert!(
+            bass_side(&lows_mono) < bass_side(&full) * 0.25,
+            "{} vs {}",
+            bass_side(&lows_mono),
+            bass_side(&full)
+        );
+        let mut wide = defaults();
+        wide[sd::HI_SPREAD] = 150.0;
+        assert!(side(&ir_samples(&wide, sr)) > side(&full));
+    }
+
+    #[test]
+    fn the_synthesized_response_follows_density_diffuse_and_early_reflections() {
+        let sr = 48_000.0;
+        let mut base = defaults();
+        base[sd::IR_TYPE] = 1.0;
+        base[sd::LENGTH] = 1.5;
+        let reference = ir_samples(&base, sr);
+        assert!((reference.len() as f32 / sr - 1.5).abs() < 0.05);
+        for (idx, v) in [(sd::DENSITY, 0.05), (sd::DIFFUSE, 0.95), (sd::EARLY, 0.0)] {
+            let mut p = base;
+            p[idx] = v;
+            let ir = ir_samples(&p, sr);
+            let diff: f32 = reference
+                .iter()
+                .zip(&ir)
+                .map(|(a, b)| (a[0] - b[0]).abs())
+                .sum();
+            assert!(diff > 0.5, "setting {idx} does nothing: {diff}");
+        }
+    }
+
     #[test]
     fn no_setting_can_make_a_non_finite_or_huge_response() {
         let sr = 48_000.0;
         for v in [0.0f32, 1.0, 5000.0] {
-            let mut p = [v; 24];
+            let mut p = [v; 32];
             p[sd::SIZE] = 1000.0;
             p[sd::LENGTH] = 10.0;
             p[sd::IR_INDEX] = 3.0;

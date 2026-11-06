@@ -116,6 +116,8 @@ pub struct Meters {
     pub tracks: Vec<(f32, f32)>,
     /// Gain reduction in dB of each track's compressors.
     pub reduction: Vec<f32>,
+    /// Level going into each track's Space Designer (linear).
+    pub fx_input: Vec<f32>,
     pub master: (f32, f32),
 }
 
@@ -2296,6 +2298,7 @@ mod tests {
         let meters = Meters {
             tracks: vec![(0.5, 0.4), (0.0, 0.0)],
             reduction: vec![6.0, 0.0],
+            fx_input: vec![],
             master: (0.3, 0.3),
         };
         for _ in 0..3 {

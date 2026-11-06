@@ -94,7 +94,15 @@ const SUBMENUS: &[(&str, &[&str])] = &[
     ),
     ("Share", &["Song to File…", "Song to Mobile Device…"]),
     ("Language", LANGUAGE),
-    ("Space Designer", &["Show"]),
+    (
+        "Space Designer",
+        &[
+            "Show",
+            "Mastering Glue - Small Room",
+            "Mastering Plate - Vocal Sheen",
+            "Mastering Wide Hall",
+        ],
+    ),
 ];
 
 /// What is in the submenu opened by `label`, if it opens one.
@@ -438,6 +446,54 @@ fn shortcut(label: &str) -> Option<KeyboardShortcut> {
     Some(KeyboardShortcut::new(Modifiers::NONE, key))
 }
 
+/// Whether track `t` has a Space Designer or has room for one.
+fn space_designer_room(t: &crate::model::Track) -> bool {
+    t.kind != TrackKind::Vca
+        && (t.inserts.len() < prowave_engine::MAX_INSERTS
+            || t.inserts
+                .iter()
+                .any(|i| i.kind == prowave_engine::FxKind::Reverb))
+}
+
+/// The strip the mastering presets go on: Stereo Out, else the selected track.
+fn mastering_target(p: &Project) -> Option<usize> {
+    let out = p
+        .tracks
+        .iter()
+        .position(|t| t.kind == TrackKind::Output && space_designer_room(t));
+    out.or_else(|| {
+        p.tracks
+            .get(p.selected_track)
+            .filter(|t| space_designer_room(t))
+            .map(|_| p.selected_track)
+    })
+}
+
+/// Opens the Space Designer of track `ti` (adding one when it has none), set to mastering
+/// preset `preset` if given.
+fn show_space_designer(p: &mut Project, s: &mut crate::UiState, ti: usize, preset: Option<usize>) {
+    use prowave_engine::FxKind;
+    let Some(t) = p.tracks.get_mut(ti) else {
+        return;
+    };
+    let slot = t
+        .inserts
+        .iter()
+        .position(|i| i.kind == FxKind::Reverb)
+        .or_else(|| {
+            (t.inserts.len() < prowave_engine::MAX_INSERTS).then(|| {
+                t.inserts.push(crate::model::Insert::new(FxKind::Reverb));
+                t.inserts.len() - 1
+            })
+        });
+    if let Some(slot) = slot {
+        if let Some(i) = preset {
+            t.inserts[slot].params = crate::space_designer_ui::mastering_preset(i);
+        }
+        s.mixer.fx_window = Some((ti, slot));
+    }
+}
+
 /// Whether `label` can be chosen now. Entries that are not implemented yet are greyed out,
 /// so a click never silently does nothing; others are greyed while there is nothing to act on.
 pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
@@ -456,15 +512,15 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             p.tracks.get(p.selected_track).is_some()
         }
         "Configure Track Header…" | "Show Master Track" => true,
-        // Opens the Space Designer on the selected track (adding one when it has none).
-        "Show" => p.tracks.get(p.selected_track).is_some_and(|t| {
-            t.kind != TrackKind::Output
-                && (t.kind != TrackKind::Vca)
-                && (t.inserts.len() < prowave_engine::MAX_INSERTS
-                    || t.inserts
-                        .iter()
-                        .any(|i| i.kind == prowave_engine::FxKind::Reverb))
-        }),
+        // Opens the Space Designer on the selected track (adding one when it has none). The
+        // mastering presets go on the Stereo Out strip.
+        "Show" => p
+            .tracks
+            .get(p.selected_track)
+            .is_some_and(space_designer_room),
+        "Mastering Glue - Small Room" | "Mastering Plate - Vocal Sheen" | "Mastering Wide Hall" => {
+            mastering_target(p).is_some()
+        }
         "Paste" => crate::region_edit::can_paste(p, &s.region_clip),
         "Select All" => p.tracks.iter().any(|t| !t.regions.is_empty()),
         "Join" => crate::region_edit::can_join(p, &s.tracks),
@@ -654,21 +710,14 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         // Mix > Space Designer > Show: the window of the selected track's Space Designer.
         "Show" => {
             let ti = p.selected_track;
-            if let Some(t) = p.tracks.get_mut(ti) {
-                let slot = t
-                    .inserts
+            show_space_designer(p, s, ti, None);
+        }
+        "Mastering Glue - Small Room" | "Mastering Plate - Vocal Sheen" | "Mastering Wide Hall" => {
+            if let Some(ti) = mastering_target(p) {
+                let preset = crate::space_designer_ui::MASTERING_PRESETS
                     .iter()
-                    .position(|i| i.kind == prowave_engine::FxKind::Reverb)
-                    .or_else(|| {
-                        (t.inserts.len() < prowave_engine::MAX_INSERTS).then(|| {
-                            t.inserts
-                                .push(crate::model::Insert::new(prowave_engine::FxKind::Reverb));
-                            t.inserts.len() - 1
-                        })
-                    });
-                if let Some(slot) = slot {
-                    s.mixer.fx_window = Some((ti, slot));
-                }
+                    .position(|n| *n == label);
+                show_space_designer(p, s, ti, preset);
             }
         }
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
@@ -1217,6 +1266,43 @@ mod tests {
         );
         apply("Go to Previous Region", &mut p, &mut s);
         assert_eq!(p.position_beats, 0.0);
+    }
+
+    #[test]
+    fn space_designer_entries_open_its_window_and_the_mastering_presets_set_it() {
+        use prowave_engine::{sd, FxKind};
+        let (mut p, mut s) = (Project::demo(), crate::UiState::new());
+        p.selected_track = 1;
+        assert!(enabled("Show", &p, &s));
+        apply("Show", &mut p, &mut s);
+        let slot = p.tracks[1]
+            .inserts
+            .iter()
+            .position(|i| i.kind == FxKind::Reverb);
+        assert!(
+            slot.is_some(),
+            "Show adds a Space Designer when there is none"
+        );
+        assert_eq!(s.mixer.fx_window, slot.map(|k| (1, k)));
+        // A mastering preset sets the whole effect: a quiet wet level, the dry sound at 0 dB.
+        for (i, label) in crate::space_designer_ui::MASTERING_PRESETS
+            .iter()
+            .enumerate()
+        {
+            assert!(enabled(label, &p, &s));
+            apply(label, &mut p, &mut s);
+            let k = p.tracks[1]
+                .inserts
+                .iter()
+                .position(|x| x.kind == FxKind::Reverb)
+                .unwrap_or(0);
+            let params = p.tracks[1].inserts[k].params;
+            assert_eq!(params, crate::space_designer_ui::mastering_preset(i));
+            assert!(
+                params[sd::WET] <= -18.0 && params[sd::DRY] == 0.0,
+                "{label}"
+            );
+        }
     }
 
     #[test]

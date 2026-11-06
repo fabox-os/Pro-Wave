@@ -40,8 +40,8 @@ pub use crate::capture::{
 };
 pub use crate::clock::{song_position, tick_index, ClockMessage, TICKS_PER_BEAT};
 pub use crate::convolver::{
-    ir_preview, ir_samples, sd, volume_env, Convolver, BLOCK as CONVOLVER_BLOCK, IR_NAMES,
-    MAX_IR_SECONDS,
+    ir_preview, ir_samples, ir_seconds, sd, volume_env, Convolver, BLOCK as CONVOLVER_BLOCK,
+    IR_NAMES, IR_PARAMS, MAX_IR_SECONDS,
 };
 pub use crate::core::{
     dsp_load, AudioClip, ClipEdit, Command, ControlEvent, EngineCore, EngineState, FadeCurve,

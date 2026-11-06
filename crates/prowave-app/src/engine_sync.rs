@@ -76,30 +76,10 @@ pub struct EngineSync {
 /// The settings that change the impulse response of a Space Designer (not Predelay, Dry, Wet,
 /// Input or Output EQ, which the audio thread applies as they move).
 fn ir_key(params: &[f32; prowave_engine::MAX_FX_PARAMS]) -> Vec<u32> {
-    use prowave_engine::sd;
-    [
-        sd::LENGTH,
-        sd::SIZE,
-        sd::XOVER,
-        sd::LO_SPREAD,
-        sd::HI_SPREAD,
-        sd::INIT_LEVEL,
-        sd::ATTACK,
-        sd::DECAY,
-        sd::CURVE,
-        sd::END_LEVEL,
-        sd::IR_OFFSET,
-        sd::REVERSE,
-        sd::QUALITY,
-        sd::FILTER_ENV,
-        sd::VOLUME_ENV,
-        sd::IR_TYPE,
-        sd::IR_INDEX,
-        sd::BRIGHTNESS,
-    ]
-    .iter()
-    .map(|&i| params[i].to_bits())
-    .collect()
+    prowave_engine::IR_PARAMS
+        .iter()
+        .map(|&i| params[i].to_bits())
+        .collect()
 }
 
 /// A Space Designer response being made on a background thread. Settings that change while it
@@ -981,6 +961,13 @@ impl EngineSync {
     pub fn gain_reduction(&mut self, n: usize) -> Vec<f32> {
         let state = self.engine.state();
         (0..n).map(|i| state.gain_reduction(i)).collect()
+    }
+
+    /// The level going into the Space Designer of the first `n` tracks (linear), for its Input
+    /// meter.
+    pub fn fx_inputs(&mut self, n: usize) -> Vec<f32> {
+        let state = self.engine.state();
+        (0..n).map(|i| state.fx_input(i)).collect()
     }
 
     /// Highest audio-callback DSP load since the last call (1.0 = full budget).
