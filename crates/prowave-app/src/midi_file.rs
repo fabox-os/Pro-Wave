@@ -6,7 +6,10 @@
 //! takes the tempo and signature changes when the project has no regions yet. The export
 //! writes what plays: the notes after region transpose, quantize, mute and MIDI FX, a
 //! tempo track with every tempo change and signature, and the sustain pedal.
-use crate::model::{Control, Note, Project, Region, RegionParams, TrackKind};
+use crate::model::{
+    Control, Note, Project, Region, RegionParams, TrackKind, CHANNEL_PRESSURE, PITCH_BEND,
+    SYSEX_BYTE,
+};
 use std::collections::VecDeque;
 
 /// Ticks to a quarter note in the files written.
@@ -21,6 +24,8 @@ const MAX_TEMPO_CHANGES: usize = 4096;
 const MAX_SIGNATURE_CHANGES: usize = 1024;
 /// The furthest bar a region of an imported file may reach (the project's own limit).
 const MAX_BAR: f64 = 9999.0;
+/// The most bytes of SysEx a file's tracks may carry in all (a huge message is dropped).
+const MAX_SYSEX_BYTES: usize = 65536;
 /// The MIDI channel (0-based) drums are on.
 pub const DRUM_CHANNEL: u8 = 9;
 
@@ -33,15 +38,25 @@ pub struct FileNote {
     pub vel: u8,
 }
 
-/// The notes of one channel of one track of a file.
+/// A controller, pitch bend, channel pressure or SysEx byte of a file, at a tick. The kinds are
+/// the same `num` values as a region's [`Control`]s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileControl {
+    pub tick: u64,
+    pub num: u8,
+    pub val: u16,
+}
+
+/// The notes of one channel of one track of a file, and what else it plays.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct FileTrack {
     pub name: String,
     /// 0-based.
     pub channel: u8,
     pub notes: Vec<FileNote>,
-    /// Sustain pedal (controller 64) events: (tick, value).
-    pub sustain: Vec<(u64, u8)>,
+    /// Controllers (the sustain pedal is 64), pitch bend, channel pressure and the bytes of
+    /// SysEx messages, in tick order.
+    pub controls: Vec<FileControl>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -152,6 +167,8 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
     // Notes sounding: per channel and pitch the start tick and velocity.
     let mut open: Vec<VecDeque<(u64, u8)>> = vec![VecDeque::new(); 16 * 128];
     let mut channels: Vec<FileTrack> = Vec::new();
+    // SysEx has no channel: its bytes go to the first channel of this track that has notes.
+    let mut sysex: Vec<FileControl> = Vec::new();
     let slot = |ch: u8, channels: &mut Vec<FileTrack>| -> usize {
         match channels.iter().position(|t| t.channel == ch) {
             Some(i) => i,
@@ -198,7 +215,27 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
                     _ => {}
                 }
             }
-            0xf0 | 0xf7 => {
+            0xf0 => {
+                // A System Exclusive message: F0, its length, then the rest, usually ending with
+                // F7. Kept whole (F0 first; F7 added when the file leaves it out).
+                let len = r.vlq()? as usize;
+                let rest = r.bytes(len)?;
+                let mut message = vec![0xf0];
+                message.extend_from_slice(rest);
+                if message.last() != Some(&0xf7) {
+                    message.push(0xf7);
+                }
+                if sysex.len() + message.len() <= MAX_SYSEX_BYTES {
+                    sysex.extend(message.into_iter().map(|b| FileControl {
+                        tick,
+                        num: SYSEX_BYTE,
+                        val: u16::from(b),
+                    }));
+                }
+                status = 0;
+            }
+            0xf7 => {
+                // An escape (a continuation of a SysEx message, or a special byte): skipped.
                 let len = r.vlq()? as usize;
                 r.bytes(len)?;
                 status = 0;
@@ -229,9 +266,30 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
                             }
                         }
                     }
-                    0xb0 if a == 64 => {
+                    0xb0 => {
                         let i = slot(ch, &mut channels);
-                        channels[i].sustain.push((tick, b));
+                        channels[i].controls.push(FileControl {
+                            tick,
+                            num: a,
+                            val: u16::from(b),
+                        });
+                    }
+                    0xe0 => {
+                        // Pitch bend: the least significant 7 bits come first.
+                        let i = slot(ch, &mut channels);
+                        channels[i].controls.push(FileControl {
+                            tick,
+                            num: PITCH_BEND,
+                            val: u16::from(a) | (u16::from(b) << 7),
+                        });
+                    }
+                    0xd0 => {
+                        let i = slot(ch, &mut channels);
+                        channels[i].controls.push(FileControl {
+                            tick,
+                            num: CHANNEL_PRESSURE,
+                            val: u16::from(a),
+                        });
                     }
                     _ => {}
                 }
@@ -252,12 +310,16 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
             });
         }
     }
+    if let Some(first) = channels.iter_mut().find(|t| !t.notes.is_empty()) {
+        first.controls.extend(sysex);
+    }
     let many = channels.len() > 1;
     for mut t in channels {
         if t.notes.is_empty() {
             continue;
         }
         t.notes.sort_by_key(|n| (n.start, n.pitch));
+        t.controls.sort_by_key(|c| c.tick);
         t.name = if many {
             format!("{name} {}", t.channel + 1).trim().to_string()
         } else {
@@ -269,6 +331,13 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
 }
 
 // ------------------------------------------------------------------------- writing
+
+/// The variable-length quantity of `v`, as bytes.
+fn vlq_bytes(v: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    vlq(&mut out, v);
+    out
+}
 
 fn vlq(out: &mut Vec<u8>, mut v: u64) {
     let mut bytes = vec![(v & 0x7f) as u8];
@@ -354,8 +423,42 @@ pub fn write(file: &MidiFile) -> Vec<u8> {
                 vec![0x80 | ch, n.pitch.min(127), 0],
             );
         }
-        for &(tick, val) in &t.sustain {
-            ev.push(tick, 0, vec![0xb0 | ch, 64, val.min(127)]);
+        let mut sysex: Vec<u8> = Vec::new();
+        let mut sysex_tick = 0u64;
+        for c in &t.controls {
+            match c.num {
+                PITCH_BEND => {
+                    let v = c.val.min(16383);
+                    ev.push(c.tick, 0, vec![0xe0 | ch, (v & 0x7f) as u8, (v >> 7) as u8]);
+                }
+                CHANNEL_PRESSURE => {
+                    ev.push(c.tick, 0, vec![0xd0 | ch, c.val.min(127) as u8]);
+                }
+                SYSEX_BYTE => {
+                    // The bytes of a message are gathered until F7 and written as one message.
+                    let b = c.val.min(255) as u8;
+                    if b == 0xf0 {
+                        sysex.clear();
+                        sysex_tick = c.tick;
+                        sysex.push(b);
+                    } else if !sysex.is_empty() {
+                        sysex.push(b);
+                    }
+                    if b == 0xf7 && sysex.len() > 1 {
+                        // F0, the length of the rest, then the rest (which ends with F7).
+                        let mut msg = vec![0xf0];
+                        msg.extend(vlq_bytes(sysex.len() as u64 - 1));
+                        msg.extend_from_slice(&sysex[1..]);
+                        ev.push(sysex_tick, 0, msg);
+                        sysex.clear();
+                    }
+                }
+                num => ev.push(
+                    c.tick,
+                    0,
+                    vec![0xb0 | ch, num.min(127), c.val.min(127) as u8],
+                ),
+            }
         }
         chunk(&mut out, b"MTrk", &ev.finish());
     }
@@ -426,10 +529,12 @@ pub fn export(p: &Project, only: Option<(usize, usize)>) -> MidiFile {
             }
             let origin = p.region_start_beats(r);
             played.extend(crate::engine_sync::region_notes(t, r, origin, ti as u16));
-            for c in r.controls.iter().filter(|c| c.num == 64) {
-                track
-                    .sustain
-                    .push((ticks(origin + f64::from(c.start), ppq), c.val));
+            for c in &r.controls {
+                track.controls.push(FileControl {
+                    tick: ticks(origin + f64::from(c.start), ppq),
+                    num: c.num,
+                    val: c.val,
+                });
             }
         }
         // What the track's MIDI FX make of them.
@@ -445,7 +550,7 @@ pub fn export(p: &Project, only: Option<(usize, usize)>) -> MidiFile {
         }
         if !track.notes.is_empty() {
             track.notes.sort_by_key(|n| (n.start, n.pitch));
-            track.sustain.sort_by_key(|s| s.0);
+            track.controls.sort_by_key(|c| c.tick);
             file.tracks.push(track);
         }
     }
@@ -501,12 +606,12 @@ pub fn import(p: &mut Project, file: &MidiFile) -> usize {
             })
             .collect();
         let controls: Vec<Control> = ft
-            .sustain
+            .controls
             .iter()
-            .map(|&(t, v)| Control {
-                start: (t as f64 / ppq - origin).max(0.0) as f32,
-                num: 64,
-                val: v.min(127),
+            .map(|c| Control {
+                start: (c.tick as f64 / ppq - origin).max(0.0) as f32,
+                num: c.num,
+                val: c.val,
             })
             .collect();
         let name = if ft.name.is_empty() {
@@ -639,7 +744,18 @@ mod tests {
                             vel: 90,
                         },
                     ],
-                    sustain: vec![(0, 127), (960, 0)],
+                    controls: vec![
+                        FileControl {
+                            tick: 0,
+                            num: 64,
+                            val: 127,
+                        },
+                        FileControl {
+                            tick: 960,
+                            num: 64,
+                            val: 0,
+                        },
+                    ],
                 },
                 FileTrack {
                     name: "Drums".into(),
@@ -650,7 +766,7 @@ mod tests {
                         pitch: 36,
                         vel: 120,
                     }],
-                    sustain: vec![],
+                    controls: vec![],
                 },
             ],
         }
@@ -943,7 +1059,24 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(t.sustain, [(0, 127), (480, 0)]);
+        let got: Vec<(u64, u8, u16)> = t.controls.iter().map(|c| (c.tick, c.num, c.val)).collect();
+        // Everything the file plays besides its notes is kept, in order: a pitch bend, a volume
+        // controller, the sustain pedal, a universal SysEx message, and channel pressure.
+        assert_eq!(
+            got,
+            [
+                (0, PITCH_BEND, 10240),
+                (0, 7, 100),
+                (0, 64, 127),
+                (0, SYSEX_BYTE, 0xf0),
+                (0, SYSEX_BYTE, 0x7e),
+                (0, SYSEX_BYTE, 0x7f),
+                (0, SYSEX_BYTE, 0x09),
+                (0, SYSEX_BYTE, 0xf7),
+                (480, 64, 0),
+                (480, CHANNEL_PRESSURE, 22),
+            ]
+        );
         // Into a project: 6/8 from the start, a tempo change after 8 beats, a region.
         let mut p = Project::empty();
         p.tracks.clear();
@@ -1109,5 +1242,92 @@ mod tests {
             .unwrap();
         let mut q = Project::empty();
         assert!(import_path(&mut q, &big).is_err());
+    }
+
+    /// Pitch bend, channel pressure and SysEx survive writing and reading.
+    #[test]
+    fn pitch_bend_pressure_and_sysex_are_written_and_read_back() {
+        let sysex = [0xf0u8, 0x41, 0x10, 0x42, 0xf7];
+        let mut controls = vec![
+            FileControl {
+                tick: 0,
+                num: PITCH_BEND,
+                val: 8192,
+            },
+            FileControl {
+                tick: 100,
+                num: PITCH_BEND,
+                val: 16383,
+            },
+            FileControl {
+                tick: 200,
+                num: CHANNEL_PRESSURE,
+                val: 90,
+            },
+        ];
+        controls.extend(sysex.iter().map(|&b| FileControl {
+            tick: 300,
+            num: SYSEX_BYTE,
+            val: u16::from(b),
+        }));
+        let file = MidiFile {
+            ppq: 480,
+            tracks: vec![FileTrack {
+                name: "Keys".into(),
+                channel: 2,
+                notes: vec![FileNote {
+                    start: 0,
+                    len: 480,
+                    pitch: 60,
+                    vel: 90,
+                }],
+                controls: controls.clone(),
+            }],
+            ..MidiFile::default()
+        };
+        let back = parse(&write(&file)).expect("the written file reads");
+        assert_eq!(back.tracks[0].controls, controls);
+    }
+
+    /// A SysEx message the file leaves without its F7 is completed, and the bytes of a bend
+    /// come back in the right order (least significant 7 bits first).
+    #[test]
+    fn a_file_with_bend_pressure_and_an_open_sysex_is_read() {
+        let mut body = Vec::new();
+        body.extend([0, 0xe0, 0x00, 0x40]); // bend centre
+        body.extend([0, 0xd0, 100]); // pressure 100
+        body.extend([0, 0xf0, 3, 0x41, 0x10, 0x42]); // SysEx with no F7
+        body.extend([0, 0x90, 60, 100]);
+        body.extend([96, 0x80, 60, 0]);
+        body.extend([0, 0xff, 0x2f, 0]);
+        let mut file = Vec::new();
+        chunk(&mut file, b"MThd", &[0, 0, 0, 1, 0, 1, 1, 0xe0]);
+        chunk(&mut file, b"MTrk", &body);
+        let parsed = parse(&file).expect("the file reads");
+        let t = &parsed.tracks[0];
+        let got: Vec<(u64, u8, u16)> = t.controls.iter().map(|c| (c.tick, c.num, c.val)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (0, PITCH_BEND, 8192),
+                (0, CHANNEL_PRESSURE, 100),
+                (0, SYSEX_BYTE, 0xf0),
+                (0, SYSEX_BYTE, 0x41),
+                (0, SYSEX_BYTE, 0x10),
+                (0, SYSEX_BYTE, 0x42),
+                (0, SYSEX_BYTE, 0xf7),
+            ]
+        );
+        // A bend is sent least significant 7 bits first: 0x7f then 0x7f is the top value.
+        let mut top = Vec::new();
+        top.extend([0, 0x90, 60, 100]);
+        top.extend([0, 0xe0, 0x7f, 0x7f]);
+        top.extend([96, 0x80, 60, 0]);
+        top.extend([0, 0xff, 0x2f, 0]);
+        let mut f2 = Vec::new();
+        chunk(&mut f2, b"MThd", &[0, 0, 0, 1, 0, 1, 1, 0xe0]);
+        chunk(&mut f2, b"MTrk", &top);
+        let got = parse(&f2).expect("reads");
+        assert_eq!(got.tracks[0].controls[0].val, 16383);
     }
 }

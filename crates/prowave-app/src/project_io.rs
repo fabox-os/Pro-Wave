@@ -6,9 +6,10 @@
 use crate::import::audio_region;
 use crate::library::CATEGORIES;
 use crate::model::{
-    CompSegment, Control, Generated, Generator, Marker, Note, Project, Region, RegionParams,
-    SendSlot, SigChange, Take, TakeFolder, TempoPoint, Track, TrackKind, TrackParams,
-    MAX_REGION_GAIN, MIN_REGION_GAIN,
+    CompSegment, Control, Generated, Generator, HeaderPart, Marker, Note, Project, Region,
+    RegionParams, SendSlot, SigChange, Take, TakeFolder, TempoPoint, Track, TrackKind, TrackParams,
+    DEFAULT_CLICK_DB, MAX_COUNT_IN_BARS, MAX_REGION_GAIN, MAX_TUNING_HZ, MIN_CLICK_DB,
+    MIN_REGION_GAIN, MIN_TUNING_HZ,
 };
 use crate::pattern::{
     Direction, DrumStyle, DrummerParams, PatternParams, PatternRow, StepRate, MAX_ROWS, MAX_STEPS,
@@ -376,9 +377,12 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             vca: t.vca,
             midi_port: t.midi_port.clone(),
             midi_channel: t.midi_channel,
+            midi_program: t.midi_program,
+            midi_bank: t.midi_bank,
             soundfont: t.soundfont.as_ref().map(|s| s.path.clone()),
             soundfont_bank: t.soundfont.as_ref().map_or(0, |s| s.bank),
             soundfont_program: t.soundfont.as_ref().map_or(0, |s| s.program),
+            icon: t.icon.map(|k| k.name().to_string()),
             input: match t.input {
                 InputSource::Mono(c) | InputSource::Stereo(c) => c,
             },
@@ -554,6 +558,19 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         smpte_start: p.smpte_start,
         mtc_out: p.mtc_out.clone(),
         mtc_in: p.mtc_in.clone(),
+        click_volume_db: Some(p.click_volume_db),
+        click_accent: Some(p.click_accent),
+        count_in_bars: p.count_in_bars,
+        tuning_hz: Some(p.tuning_hz),
+        midi_in_port: p.midi_in_port.clone(),
+        midi_clock_out: p.midi_clock_out.clone(),
+        midi_clock_in: p.midi_clock_in.clone(),
+        show_master_track: p.show_master_track,
+        header_hidden: p
+            .header_hidden
+            .iter()
+            .map(|h| h.name().to_string())
+            .collect(),
         sig_changes: p
             .sig_changes
             .iter()
@@ -745,7 +762,13 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             vca: t.vca,
             midi_port: port_name(&t.midi_port),
             midi_channel: t.midi_channel.clamp(1, 16),
+            midi_program: t.midi_program.map(|p| p.min(127)),
+            midi_bank: t.midi_bank.map(|b| b.min(16383)),
             soundfont: soundfont_of(t),
+            icon: t
+                .icon
+                .as_deref()
+                .and_then(crate::track_icons::IconKind::from_name),
             input: input_source(t.input, t.input_stereo),
             output: if usize::from(t.output) <= prowave_engine::MAX_BUSES {
                 t.output
@@ -783,6 +806,26 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
     p.smpte_start = valid_smpte_start(doc.smpte_start, p.smpte_rate);
     p.mtc_out = port_name(&doc.mtc_out);
     p.mtc_in = port_name(&doc.mtc_in);
+    p.midi_in_port = port_name(&doc.midi_in_port);
+    p.midi_clock_out = port_name(&doc.midi_clock_out);
+    p.midi_clock_in = port_name(&doc.midi_clock_in);
+    p.show_master_track = doc.show_master_track;
+    p.header_hidden = doc
+        .header_hidden
+        .iter()
+        .filter_map(|n| HeaderPart::from_name(n))
+        .collect();
+    // A file is not trusted: out-of-range or non-finite values fall back or are held in range.
+    p.click_volume_db = match doc.click_volume_db {
+        Some(db) if db.is_finite() => db.clamp(MIN_CLICK_DB, 0.0),
+        _ => DEFAULT_CLICK_DB,
+    };
+    p.click_accent = doc.click_accent.unwrap_or(true);
+    p.count_in_bars = doc.count_in_bars.clamp(1, MAX_COUNT_IN_BARS);
+    p.tuning_hz = match doc.tuning_hz {
+        Some(hz) if hz.is_finite() => hz.clamp(MIN_TUNING_HZ, MAX_TUNING_HZ),
+        _ => 440.0,
+    };
     p.markers = doc
         .markers
         .iter()
@@ -1121,6 +1164,121 @@ pub(crate) mod tests {
         b.extend_from_slice(&(n * 2).to_le_bytes());
         b.resize(b.len() + (n * 2) as usize, 0);
         std::fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn midi_outputs_are_saved_and_a_bad_file_is_repaired() {
+        let mut p = Project::demo();
+        p.midi_clock_out = Some("Clock Box".into());
+        p.tracks[0].midi_program = Some(40);
+        p.tracks[0].midi_bank = Some(3);
+        let (doc, _) = to_doc(&p);
+        assert_eq!(doc.midi_clock_out.as_deref(), Some("Clock Box"));
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.midi_clock_out.as_deref(), Some("Clock Box"));
+        assert_eq!(
+            (q.tracks[0].midi_program, q.tracks[0].midi_bank),
+            (Some(40), Some(3))
+        );
+        // Out-of-range values in a hand-edited file are held in range.
+        let mut bad = doc.clone();
+        bad.tracks[0].midi_program = Some(200);
+        bad.tracks[0].midi_bank = Some(60000);
+        bad.midi_clock_out = Some(String::new());
+        let (r, _) = from_doc(&bad, Path::new("."), &egui::Context::default());
+        assert_eq!(
+            (r.tracks[0].midi_program, r.tracks[0].midi_bank),
+            (Some(127), Some(16383))
+        );
+        assert_eq!(r.midi_clock_out, None, "an empty port name is no port");
+        p.midi_clock_in = Some("Clock Source".into());
+        let (doc2, _) = to_doc(&p);
+        let (q2, _) = from_doc(&doc2, Path::new("."), &egui::Context::default());
+        assert_eq!(q2.midi_clock_in.as_deref(), Some("Clock Source"));
+    }
+
+    #[test]
+    fn track_icons_the_master_strip_and_hidden_header_parts_are_saved() {
+        use crate::model::HeaderPart;
+        use crate::track_icons::IconKind;
+        let mut p = Project::demo();
+        p.tracks[0].icon = Some(IconKind::Guitar);
+        p.show_master_track = true;
+        p.header_hidden = vec![HeaderPart::Pan, HeaderPart::Volume];
+        let (doc, _) = to_doc(&p);
+        assert_eq!(doc.tracks[0].icon.as_deref(), Some("guitar"));
+        assert_eq!(
+            doc.header_hidden,
+            vec!["pan".to_string(), "volume".to_string()]
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].icon, Some(IconKind::Guitar));
+        assert!(q.show_master_track);
+        assert_eq!(q.header_hidden, vec![HeaderPart::Pan, HeaderPart::Volume]);
+        assert_eq!(
+            q.tracks[1].icon, None,
+            "tracks without an icon stay automatic"
+        );
+
+        // A file from before these settings, or with names this version does not know.
+        let mut odd = doc.clone();
+        odd.tracks[0].icon = Some("spaceship".into());
+        odd.header_hidden = vec!["volume".into(), "nonsense".into()];
+        odd.show_master_track = false;
+        let (r, _) = from_doc(&odd, Path::new("."), &egui::Context::default());
+        assert_eq!(r.tracks[0].icon, None);
+        assert_eq!(r.header_hidden, vec![HeaderPart::Volume]);
+        assert!(!r.show_master_track);
+        let (old, _) = from_doc(
+            &ProjectDoc::default(),
+            Path::new("."),
+            &egui::Context::default(),
+        );
+        assert!(!old.show_master_track && old.header_hidden.is_empty());
+    }
+
+    #[test]
+    fn project_settings_are_saved_and_a_hostile_file_is_held_in_range() {
+        let mut p = Project::empty();
+        p.click_volume_db = -20.0;
+        p.click_accent = false;
+        p.count_in_bars = 3;
+        p.tuning_hz = 432.0;
+        p.midi_in_port = Some("Keys".into());
+        let (doc, _) = to_doc(&p);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.click_volume_db, -20.0);
+        assert!(!q.click_accent);
+        assert_eq!(q.count_in_bars, 3);
+        assert_eq!(q.tuning_hz, 432.0);
+        assert_eq!(q.midi_in_port.as_deref(), Some("Keys"));
+
+        // A file from before these settings has the old behaviour.
+        let (old, _) = from_doc(
+            &ProjectDoc {
+                count_in_bars: 0,
+                ..ProjectDoc::default()
+            },
+            Path::new("."),
+            &egui::Context::default(),
+        );
+        assert_eq!(old.click_volume_db, DEFAULT_CLICK_DB);
+        assert!(old.click_accent);
+        assert_eq!((old.count_in_bars, old.tuning_hz), (1, 440.0));
+
+        // Hand-edited values are held in range; not-a-number falls back.
+        let mut bad = doc.clone();
+        bad.click_volume_db = Some(f32::NAN);
+        bad.tuning_hz = Some(9000.0);
+        bad.count_in_bars = 200;
+        let (r, _) = from_doc(&bad, Path::new("."), &egui::Context::default());
+        assert_eq!(r.click_volume_db, DEFAULT_CLICK_DB);
+        assert_eq!(r.tuning_hz, MAX_TUNING_HZ);
+        assert_eq!(r.count_in_bars, MAX_COUNT_IN_BARS);
+        bad.click_volume_db = Some(50.0);
+        bad.tuning_hz = Some(f32::INFINITY);
+        let (r, _) = from_doc(&bad, Path::new("."), &egui::Context::default());
+        assert_eq!((r.click_volume_db, r.tuning_hz), (0.0, 440.0));
     }
 
     #[test]
@@ -1957,7 +2115,7 @@ pub(crate) mod tests {
         let pedal = |val: u8| Control {
             start: 0.0,
             num: 64,
-            val,
+            val: u16::from(val),
         };
         let takes = vec![
             Take {

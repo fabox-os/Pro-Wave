@@ -41,6 +41,9 @@ pub struct EngineSync {
     /// Tempo, tempo changes and signature last sent.
     tempo: Option<TempoKey>,
     metronome: bool,
+    /// The click level in dB and accent, and the reference pitch, as last sent.
+    click: Option<(f32, bool)>,
+    tuning: Option<f32>,
     cycle: (bool, f64, f64),
     master: Option<f32>,
     position: Option<f64>,
@@ -68,7 +71,8 @@ pub struct EngineSync {
     retry: bool,
 }
 
-/// Play, or with Record and Count-in on, one bar of clicks first.
+/// Play, or with Record and Count-in on, the bars of clicks set in Project Settings >
+/// Recording first.
 fn start_command(p: &Project) -> Command {
     if !(p.recording && p.count_in) {
         return Command::Play;
@@ -76,7 +80,7 @@ fn start_command(p: &Project) -> Command {
     let bar = p.beats_to_bar(p.position_beats).floor().max(0.0) as u32;
     let (clicks, unit) = p.signature_of_bar(bar);
     Command::CountIn {
-        clicks,
+        clicks: clicks.saturating_mul(p.count_in_bars.clamp(1, 4)),
         beats_per_click: 4.0 / f64::from(unit.max(1)),
     }
 }
@@ -352,7 +356,7 @@ fn song_controls(p: &Project) -> Vec<ControlEvent> {
                         beat: m.beat,
                         track,
                         number: m.number,
-                        value: m.value,
+                        value: u16::from(m.value),
                     }),
             );
             out
@@ -470,6 +474,14 @@ fn tempo_key(p: &Project) -> TempoKey {
 }
 
 impl EngineSync {
+    /// The output the engine plays on: the device's name and the sample rate.
+    pub fn audio_info(&self) -> (String, u32) {
+        (
+            self.engine.device_name().to_string(),
+            self.engine.sample_rate(),
+        )
+    }
+
     pub fn new(engine: Engine, p: &Project) -> Self {
         let mut sync = Self {
             engine,
@@ -477,6 +489,8 @@ impl EngineSync {
             monitors: Vec::new(),
             tempo: None,
             metronome: false,
+            click: None,
+            tuning: None,
             cycle: (false, 0.0, 0.0),
             master: None,
             position: None,
@@ -590,6 +604,19 @@ impl EngineSync {
         }
         if p.metronome != self.metronome && self.send(Command::SetMetronome { on: p.metronome }) {
             self.metronome = p.metronome;
+        }
+        let click = (p.click_volume_db, p.click_accent);
+        if self.click != Some(click)
+            && self.send(Command::SetClick {
+                gain_db: click.0,
+                accent: click.1,
+            })
+        {
+            self.click = Some(click);
+        }
+        if self.tuning != Some(p.tuning_hz) && self.send(Command::SetTuning { a4_hz: p.tuning_hz })
+        {
+            self.tuning = Some(p.tuning_hz);
         }
         let cycle = (p.cycle, p.cycle_start, p.cycle_end);
         if cycle != self.cycle
@@ -807,6 +834,11 @@ impl EngineSync {
         self.engine.take_midi_out()
     }
 
+    /// The MIDI Clock the engine sends (once).
+    pub fn take_clock_out(&mut self) -> Option<rtrb::Consumer<prowave_engine::ClockMessage>> {
+        self.engine.take_clock_out()
+    }
+
     /// The MIDI Time Code the engine sends (once).
     pub fn take_mtc_out(&mut self) -> Option<rtrb::Consumer<prowave_engine::MtcMessage>> {
         self.engine.take_mtc_out()
@@ -886,10 +918,13 @@ mod tests {
             height: 1.0,
             indent: 0,
             folded: false,
+            icon: None,
             vca: None,
             midi_port: None,
             soundfont: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             midi_fx: Vec::new(),
         }
     }
@@ -1281,6 +1316,12 @@ mod tests {
                 clicks,
                 beats_per_click,
             } => assert_eq!((clicks, beats_per_click), (6, 0.5)),
+            _ => panic!("no count-in"),
+        }
+        // Two bars of count-in: twice the clicks.
+        p.count_in_bars = 2;
+        match start_command(&p) {
+            Command::CountIn { clicks, .. } => assert_eq!(clicks, 12),
             _ => panic!("no count-in"),
         }
     }

@@ -720,14 +720,17 @@ fn meter_frac(peak: f32) -> f32 {
 
 /// Master volume as in Logic Pro: a dark pill holding two thin stereo meter bars (green, yellow
 /// above -6 dB, red above 0 dB) with a translucent round knob sliding over them.
-fn master_volume(ui: &Ui, g: &Painter, p: &mut Project, rect: Rect, peaks: Option<(f32, f32)>) {
+pub(crate) fn master_volume(
+    ui: &Ui,
+    g: &Painter,
+    p: &mut Project,
+    rect: Rect,
+    peaks: Option<(f32, f32)>,
+    id: egui::Id,
+) {
     const RAD: f32 = 10.0;
     let travel = (rect.left() + RAD + 1.0, rect.right() - RAD - 1.0);
-    let resp = ui.interact(
-        rect.expand2(vec2(4.0, 4.0)),
-        egui::Id::unique(("control_bar", "master")),
-        Sense::click_and_drag(),
-    );
+    let resp = ui.interact(rect.expand2(vec2(4.0, 4.0)), id, Sense::click_and_drag());
     if let Some(pt) = resp.interact_pointer_pos() {
         p.master_vol = ((pt.x - travel.0) / (travel.1 - travel.0)).clamp(0.0, 1.0);
     }
@@ -977,7 +980,14 @@ pub fn control_bar(
     let (vol_left, vol_w) = volume_span(rx(156.0).x, bar.right());
     if vol_w > 0.0 {
         let vol = Rect::from_min_size(pos2(vol_left, cy - 11.0), vec2(vol_w, 22.0));
-        master_volume(ui, &g, p, vol, master_peaks);
+        master_volume(
+            ui,
+            &g,
+            p,
+            vol,
+            master_peaks,
+            egui::Id::unique(("control_bar", "master")),
+        );
     }
     let right: [IconFn; 4] = [icon_list_editors, icon_note_pad, icon_loops, icon_browsers];
     for (i, draw) in right.iter().enumerate() {

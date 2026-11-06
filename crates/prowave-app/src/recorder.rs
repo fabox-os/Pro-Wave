@@ -4,7 +4,10 @@
 //! arrive. When playback stops the region takes the track's colour and the song is rebuilt so
 //! the new notes play back.
 
-use crate::model::{Control, Note, Project, Region, RegionParams, Take, TakeFolder, TrackKind};
+use crate::model::{
+    Control, Note, Project, Region, RegionParams, Take, TakeFolder, TrackKind, CHANNEL_PRESSURE,
+    PITCH_BEND,
+};
 use std::collections::HashMap;
 
 /// A note played live, from a MIDI keyboard.
@@ -19,6 +22,14 @@ pub enum LiveNote {
     },
     /// The sustain pedal (controller 64).
     Sustain {
+        val: u8,
+    },
+    /// Pitch bend, 0-16383 (centre 8192).
+    Bend {
+        val: u16,
+    },
+    /// Channel pressure, 0-127.
+    Pressure {
         val: u8,
     },
 }
@@ -148,6 +159,7 @@ pub fn capture(rec: &mut Recorder, p: &mut Project) -> Option<(usize, usize)> {
     let start = p.bar_to_beats(bar);
     let last = played.last().map_or(first, |(at, _)| *at);
     let mut notes: Vec<Note> = Vec::new();
+    let mut controls: Vec<Control> = Vec::new();
     let mut open: HashMap<u8, usize> = HashMap::new();
     for (at, note) in played {
         let now = at - start;
@@ -168,7 +180,21 @@ pub fn capture(rec: &mut Recorder, p: &mut Project) -> Option<(usize, usize)> {
                     close(&mut notes[i], now);
                 }
             }
-            LiveNote::Sustain { .. } => {}
+            LiveNote::Sustain { val } => controls.push(Control {
+                start: now as f32,
+                num: SUSTAIN,
+                val: u16::from(val),
+            }),
+            LiveNote::Bend { val } => controls.push(Control {
+                start: now as f32,
+                num: PITCH_BEND,
+                val,
+            }),
+            LiveNote::Pressure { val } => controls.push(Control {
+                start: now as f32,
+                num: CHANNEL_PRESSURE,
+                val: u16::from(val),
+            }),
         }
     }
     for i in open.into_values() {
@@ -184,7 +210,7 @@ pub fn capture(rec: &mut Recorder, p: &mut Project) -> Option<(usize, usize)> {
         start_bar: bar as f32 + 1.0,
         len_bars: bars as f32,
         notes,
-        controls: Vec::new(),
+        controls,
         folder: None,
         generated: None,
         audio: None,
@@ -233,7 +259,7 @@ fn start(rec: &mut Recorder, p: &mut Project, pedal: u8) -> Outcome {
         controls: vec![Control {
             start: 0.0,
             num: SUSTAIN,
-            val: pedal,
+            val: u16::from(pedal),
         }],
         folder: None,
         generated: None,
@@ -276,7 +302,7 @@ fn record(rec: &mut Recorder, p: &mut Project, t: usize, r: usize, input: &[Live
             region.controls.push(Control {
                 start: 0.0,
                 num: SUSTAIN,
-                val: rec.pedal,
+                val: u16::from(rec.pedal),
             });
         }
     }
@@ -308,7 +334,17 @@ fn record(rec: &mut Recorder, p: &mut Project, t: usize, r: usize, input: &[Live
             LiveNote::Sustain { val } => region.controls.push(Control {
                 start: now as f32,
                 num: SUSTAIN,
+                val: u16::from(val),
+            }),
+            LiveNote::Bend { val } => region.controls.push(Control {
+                start: now as f32,
+                num: PITCH_BEND,
                 val,
+            }),
+            LiveNote::Pressure { val } => region.controls.push(Control {
+                start: now as f32,
+                num: CHANNEL_PRESSURE,
+                val: u16::from(val),
             }),
         }
     }

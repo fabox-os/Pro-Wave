@@ -30,11 +30,61 @@ pub enum IconKind {
     ExternalMidi,
 }
 
+impl IconKind {
+    /// Every icon, in the order the Assign Track Icon window shows them.
+    pub const ALL: [IconKind; 15] = [
+        IconKind::Note,
+        IconKind::Waveform,
+        IconKind::DrumKit,
+        IconKind::DrummerTile,
+        IconKind::Piano,
+        IconKind::WoodKeys,
+        IconKind::Synth,
+        IconKind::Bass,
+        IconKind::Guitar,
+        IconKind::Mic,
+        IconKind::Strings,
+        IconKind::Aux,
+        IconKind::Folder,
+        IconKind::Vca,
+        IconKind::ExternalMidi,
+    ];
+
+    /// The name the project file stores this icon under.
+    pub fn name(self) -> &'static str {
+        match self {
+            IconKind::Note => "note",
+            IconKind::Waveform => "waveform",
+            IconKind::DrumKit => "drum_kit",
+            IconKind::DrummerTile => "drummer",
+            IconKind::Piano => "piano",
+            IconKind::WoodKeys => "wood_keys",
+            IconKind::Synth => "synth",
+            IconKind::Bass => "bass",
+            IconKind::Guitar => "guitar",
+            IconKind::Mic => "mic",
+            IconKind::Strings => "strings",
+            IconKind::Aux => "aux",
+            IconKind::Folder => "folder",
+            IconKind::Vca => "vca",
+            IconKind::ExternalMidi => "external_midi",
+        }
+    }
+
+    /// The icon a project file's name stands for (`None` for an unknown name).
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+}
+
 /// Icon drawn for a track (header, Library, inspector). As in Logic, a software instrument
 /// track shows the generic green note tile until a Library patch is loaded; other tracks use
 /// [`icon_kind`]. (The sound is still chosen from the name, see `patches::synth_patch`.)
 pub fn track_icon(t: &Track) -> IconKind {
-    if t.kind == TrackKind::Aux {
+    // An icon the user picked (Track > Assign Track Icon) wins over the automatic one.
+    if let Some(icon) = t.icon {
+        icon
+    } else if t.kind == TrackKind::Aux {
         IconKind::Aux
     } else if t.kind == TrackKind::Folder {
         IconKind::Folder

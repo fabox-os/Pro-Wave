@@ -54,6 +54,46 @@ pub fn items(ui: &mut egui::Ui, p: &mut Project) {
         }
     });
     ui.separator();
+    ui.menu_button(tr("Follow MIDI Clock"), |ui| {
+        let current = p.midi_clock_in.clone();
+        if ui.selectable_label(current.is_none(), tr("Off")).clicked() {
+            p.midi_clock_in = None;
+            ui.close();
+        }
+        let ports = crate::clock_in::ports();
+        if ports.is_empty() {
+            ui.add_enabled(false, egui::Button::new(tr("No MIDI ports found")));
+        }
+        for name in ports {
+            if ui
+                .selectable_label(current.as_deref() == Some(&name), &name)
+                .clicked()
+            {
+                p.midi_clock_in = Some(name);
+                ui.close();
+            }
+        }
+    });
+    ui.menu_button(tr("Send MIDI Clock"), |ui| {
+        let current = p.midi_clock_out.clone();
+        if ui.selectable_label(current.is_none(), tr("Off")).clicked() {
+            p.midi_clock_out = None;
+            ui.close();
+        }
+        let ports = crate::midi_out::ports();
+        if ports.is_empty() {
+            ui.add_enabled(false, egui::Button::new(tr("No MIDI ports found")));
+        }
+        for name in ports {
+            if ui
+                .selectable_label(current.as_deref() == Some(&name), &name)
+                .clicked()
+            {
+                p.midi_clock_out = Some(name);
+                ui.close();
+            }
+        }
+    });
     ui.menu_button(tr("Send MIDI Time Code"), |ui| {
         let current = p.mtc_out.clone();
         if ui.selectable_label(current.is_none(), tr("Off")).clicked() {
