@@ -72,13 +72,24 @@ pub struct TakeFolder {
     pub open: bool,
 }
 
-/// A MIDI controller event in a region (the sustain pedal is controller 64).
+/// A MIDI event in a region: a controller (the sustain pedal is controller 64), pitch bend,
+/// channel pressure, or one byte of a System Exclusive message (see the constants below).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Control {
     pub start: f32, // beats from region start
+    /// What the event is: a controller number 0-127, or one of the reserved kinds below.
     pub num: u8,
-    pub val: u8,
+    /// The value: 0-127 for a controller and for channel pressure, 0-16383 (centre 8192) for
+    /// pitch bend, one byte (0-255) of a System Exclusive message for [`SYSEX_BYTE`].
+    pub val: u16,
 }
+
+/// Reserved event kinds (`Control::num` above 127): pitch bend, channel pressure, and one byte of
+/// a System Exclusive message. The bytes of one message are consecutive events at the same start,
+/// in order: the first is 0xF0 and the last 0xF7.
+pub const PITCH_BEND: u8 = 128;
+pub const CHANNEL_PRESSURE: u8 = 129;
+pub const SYSEX_BYTE: u8 = 130;
 
 #[derive(Clone)]
 pub struct Region {
@@ -602,6 +613,10 @@ pub struct Track {
     /// External MIDI tracks: the MIDI output port (by name) and the channel, 1-16.
     pub midi_port: Option<String>,
     pub midi_channel: u8,
+    /// External MIDI tracks: the program (sound) and bank sent when the track is routed; `None`
+    /// leaves the device as it is.
+    pub midi_program: Option<u8>,
+    pub midi_bank: Option<u16>,
     /// MIDI FX: effects that change the notes the track plays (see `midi_fx.rs`).
     pub midi_fx: Vec<crate::midi_fx::FxSlot>,
     /// A SoundFont (`.sf2`) instrument the track plays instead of its synth patch.
@@ -666,6 +681,8 @@ impl Track {
             soundfont: None,
             icon: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             midi_fx: Vec::new(),
         }
     }
@@ -789,6 +806,10 @@ pub struct Project {
     pub tuning_hz: f32,
     /// MIDI input port (by name) that plays live notes; `None` picks the first keyboard.
     pub midi_in_port: Option<String>,
+    /// MIDI output port (by name) that sends MIDI Clock while the song plays, if any.
+    pub midi_clock_out: Option<String>,
+    /// MIDI input port (by name) whose clock the song follows, if any.
+    pub midi_clock_in: Option<String>,
     pub key: &'static str,
     pub tracks: Vec<Track>,
     pub playing: bool,
@@ -874,6 +895,8 @@ impl Project {
             soundfont: None,
             icon: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             midi_fx: Vec::new(),
         }];
         p.position_beats = 0.0;
@@ -935,6 +958,8 @@ impl Project {
             soundfont: None,
             icon: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             midi_fx: Vec::new(),
         };
         let tracks = vec![
@@ -1041,6 +1066,8 @@ impl Project {
             count_in_bars: 1,
             tuning_hz: 440.0,
             midi_in_port: None,
+            midi_clock_out: None,
+            midi_clock_in: None,
         }
     }
 

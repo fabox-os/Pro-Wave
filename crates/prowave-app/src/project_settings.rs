@@ -98,7 +98,7 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut crate::UiState) {
                 SettingsTab::Recording => recording(ui, p),
                 SettingsTab::Tuning => tuning(ui, p),
                 SettingsTab::Audio => audio(ui, s.audio_info.as_ref()),
-                SettingsTab::Midi => midi(ui, p),
+                SettingsTab::Midi => midi(ui, p, &mut s.midi_panic),
             }
         });
     s.settings_tab = open.then_some(tab);
@@ -171,7 +171,7 @@ fn audio(ui: &mut egui::Ui, info: Option<&(String, u32)>) {
     ));
 }
 
-fn midi(ui: &mut egui::Ui, p: &mut Project) {
+fn midi(ui: &mut egui::Ui, p: &mut Project, panic: &mut bool) {
     ui.horizontal(|ui| {
         ui.label(tr("MIDI Input"));
         let shown = p
@@ -195,6 +195,12 @@ fn midi(ui: &mut egui::Ui, p: &mut Project) {
                 }
             });
     });
+    ui.separator();
+    // Every note of every MIDI output the tracks use, on every channel (see midi_out.rs).
+    if ui.button(tr("Send MIDI Panic")).clicked() {
+        *panic = true;
+    }
+    ui.label(tr("Silences notes stuck on an external instrument."));
 }
 
 #[cfg(test)]

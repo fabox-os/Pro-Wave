@@ -136,6 +136,7 @@ pub struct Engine {
     state: StateReader,
     midi_out: Option<rtrb::Consumer<MidiOutEvent>>,
     mtc_out: Option<rtrb::Consumer<MtcMessage>>,
+    clock_out: Option<rtrb::Consumer<crate::clock::ClockMessage>>,
     sample_rate: u32,
     device_name: String,
     _output: Output,
@@ -284,6 +285,7 @@ impl Engine {
             state,
             midi_out: readers.midi,
             mtc_out: readers.mtc,
+            clock_out: readers.clock,
             sample_rate: info.sample_rate,
             device_name: info.device_name,
             _output: Output::Wasapi(stream),
@@ -390,6 +392,7 @@ impl Engine {
             state,
             midi_out: readers.midi,
             mtc_out: readers.mtc,
+            clock_out: readers.clock,
             sample_rate,
             device_name,
             _output: Output::Cpal(stream),
@@ -418,6 +421,12 @@ impl Engine {
     /// plays it out on the project's MTC port. `None` after the first call.
     pub fn take_mtc_out(&mut self) -> Option<rtrb::Consumer<MtcMessage>> {
         self.mtc_out.take()
+    }
+
+    /// The MIDI Clock the engine sends while the song plays, once: the app plays it out on the
+    /// project's clock port. `None` after the first call.
+    pub fn take_clock_out(&mut self) -> Option<rtrb::Consumer<crate::clock::ClockMessage>> {
+        self.clock_out.take()
     }
 
     pub fn shared(&self) -> &Shared {
