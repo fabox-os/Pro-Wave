@@ -131,7 +131,6 @@ impl ClockIn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
 
     /// Reads from a real ALSA port: a virtual output that midir creates here plays the clock
     /// device, and the follower's input connects to it by name. Skipped (with a note) where the
@@ -140,6 +139,7 @@ mod tests {
     #[test]
     fn clock_bytes_from_a_real_port_are_read_in_order() {
         use midir::os::unix::VirtualOutput;
+        use std::time::{Duration, Instant};
         let Ok(out) = midir::MidiOutput::new("prowave-clock-device") else {
             println!("no MIDI system: skipped");
             return;
