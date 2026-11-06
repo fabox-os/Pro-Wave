@@ -100,6 +100,8 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         soundfont: None,
         icon: None,
         midi_channel: 1,
+        midi_program: None,
+        midi_bank: None,
         midi_fx: Vec::new(),
     });
     p.selected_track = p.tracks.len() - 1;

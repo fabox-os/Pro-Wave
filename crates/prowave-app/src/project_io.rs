@@ -377,6 +377,8 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             vca: t.vca,
             midi_port: t.midi_port.clone(),
             midi_channel: t.midi_channel,
+            midi_program: t.midi_program,
+            midi_bank: t.midi_bank,
             soundfont: t.soundfont.as_ref().map(|s| s.path.clone()),
             soundfont_bank: t.soundfont.as_ref().map_or(0, |s| s.bank),
             soundfont_program: t.soundfont.as_ref().map_or(0, |s| s.program),
@@ -561,6 +563,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         count_in_bars: p.count_in_bars,
         tuning_hz: Some(p.tuning_hz),
         midi_in_port: p.midi_in_port.clone(),
+        midi_clock_out: p.midi_clock_out.clone(),
         show_master_track: p.show_master_track,
         header_hidden: p
             .header_hidden
@@ -758,6 +761,8 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             vca: t.vca,
             midi_port: port_name(&t.midi_port),
             midi_channel: t.midi_channel.clamp(1, 16),
+            midi_program: t.midi_program.map(|p| p.min(127)),
+            midi_bank: t.midi_bank.map(|b| b.min(16383)),
             soundfont: soundfont_of(t),
             icon: t
                 .icon
@@ -801,6 +806,7 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
     p.mtc_out = port_name(&doc.mtc_out);
     p.mtc_in = port_name(&doc.mtc_in);
     p.midi_in_port = port_name(&doc.midi_in_port);
+    p.midi_clock_out = port_name(&doc.midi_clock_out);
     p.show_master_track = doc.show_master_track;
     p.header_hidden = doc
         .header_hidden
@@ -1156,6 +1162,33 @@ pub(crate) mod tests {
         b.extend_from_slice(&(n * 2).to_le_bytes());
         b.resize(b.len() + (n * 2) as usize, 0);
         std::fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn midi_outputs_are_saved_and_a_bad_file_is_repaired() {
+        let mut p = Project::demo();
+        p.midi_clock_out = Some("Clock Box".into());
+        p.tracks[0].midi_program = Some(40);
+        p.tracks[0].midi_bank = Some(3);
+        let (doc, _) = to_doc(&p);
+        assert_eq!(doc.midi_clock_out.as_deref(), Some("Clock Box"));
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.midi_clock_out.as_deref(), Some("Clock Box"));
+        assert_eq!(
+            (q.tracks[0].midi_program, q.tracks[0].midi_bank),
+            (Some(40), Some(3))
+        );
+        // Out-of-range values in a hand-edited file are held in range.
+        let mut bad = doc.clone();
+        bad.tracks[0].midi_program = Some(200);
+        bad.tracks[0].midi_bank = Some(60000);
+        bad.midi_clock_out = Some(String::new());
+        let (r, _) = from_doc(&bad, Path::new("."), &egui::Context::default());
+        assert_eq!(
+            (r.tracks[0].midi_program, r.tracks[0].midi_bank),
+            (Some(127), Some(16383))
+        );
+        assert_eq!(r.midi_clock_out, None, "an empty port name is no port");
     }
 
     #[test]

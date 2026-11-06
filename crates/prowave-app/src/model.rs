@@ -602,6 +602,10 @@ pub struct Track {
     /// External MIDI tracks: the MIDI output port (by name) and the channel, 1-16.
     pub midi_port: Option<String>,
     pub midi_channel: u8,
+    /// External MIDI tracks: the program (sound) and bank sent when the track is routed; `None`
+    /// leaves the device as it is.
+    pub midi_program: Option<u8>,
+    pub midi_bank: Option<u16>,
     /// MIDI FX: effects that change the notes the track plays (see `midi_fx.rs`).
     pub midi_fx: Vec<crate::midi_fx::FxSlot>,
     /// A SoundFont (`.sf2`) instrument the track plays instead of its synth patch.
@@ -666,6 +670,8 @@ impl Track {
             soundfont: None,
             icon: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             midi_fx: Vec::new(),
         }
     }
@@ -789,6 +795,8 @@ pub struct Project {
     pub tuning_hz: f32,
     /// MIDI input port (by name) that plays live notes; `None` picks the first keyboard.
     pub midi_in_port: Option<String>,
+    /// MIDI output port (by name) that sends MIDI Clock while the song plays, if any.
+    pub midi_clock_out: Option<String>,
     pub key: &'static str,
     pub tracks: Vec<Track>,
     pub playing: bool,
@@ -874,6 +882,8 @@ impl Project {
             soundfont: None,
             icon: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             midi_fx: Vec::new(),
         }];
         p.position_beats = 0.0;
@@ -935,6 +945,8 @@ impl Project {
             soundfont: None,
             icon: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             midi_fx: Vec::new(),
         };
         let tracks = vec![
@@ -1041,6 +1053,7 @@ impl Project {
             count_in_bars: 1,
             tuning_hz: 440.0,
             midi_in_port: None,
+            midi_clock_out: None,
         }
     }
 

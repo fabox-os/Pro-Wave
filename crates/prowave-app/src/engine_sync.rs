@@ -834,6 +834,11 @@ impl EngineSync {
         self.engine.take_midi_out()
     }
 
+    /// The MIDI Clock the engine sends (once).
+    pub fn take_clock_out(&mut self) -> Option<rtrb::Consumer<prowave_engine::ClockMessage>> {
+        self.engine.take_clock_out()
+    }
+
     /// The MIDI Time Code the engine sends (once).
     pub fn take_mtc_out(&mut self) -> Option<rtrb::Consumer<prowave_engine::MtcMessage>> {
         self.engine.take_mtc_out()
@@ -918,6 +923,8 @@ mod tests {
             midi_port: None,
             soundfont: None,
             midi_channel: 1,
+            midi_program: None,
+            midi_bank: None,
             midi_fx: Vec::new(),
         }
     }

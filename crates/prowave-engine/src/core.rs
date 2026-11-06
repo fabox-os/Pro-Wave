@@ -1,5 +1,6 @@
 //! Device-independent engine core. `EngineCore::process` is the audio-thread entry point:
 //! no allocation, no locks, no syscalls. Unit-testable without an audio device.
+use crate::clock::{song_position, tick_index, ClockMessage};
 use crate::disk::{Block, ClipShared};
 use crate::fx::{Chain, Pdc, MAX_FX_PARAMS};
 use crate::gain_smoothing::GainRamp;
@@ -682,6 +683,7 @@ pub(crate) struct Readers {
     pub state: Option<StateReader>,
     pub midi: Option<Consumer<MidiOutEvent>>,
     pub mtc: Option<Consumer<MtcMessage>>,
+    pub clock: Option<Consumer<ClockMessage>>,
 }
 
 pub struct EngineCore {
@@ -776,6 +778,11 @@ pub struct EngineCore {
     mtc_secs: f64,
     mtc_out: Producer<MtcMessage>,
     mtc_out_reader: Option<Consumer<MtcMessage>>,
+    /// MIDI Clock messages (Timing Clock, Start, Stop, Song Position) for the app to send.
+    clock_out: Producer<ClockMessage>,
+    clock_out_reader: Option<Consumer<ClockMessage>>,
+    /// The last Timing Clock index sent (see `clock::tick_index`).
+    clock_tick: i64,
     ext_notes: Vec<ExtNote>,
     test_hz: f32,
     test_gain: f32,
@@ -830,6 +837,7 @@ impl EngineCore {
         let (state, reader) = triple_buffer(EngineState::default());
         let (midi_out, midi_out_reader) = rtrb::RingBuffer::new(1024);
         let (mtc_out, mtc_out_reader) = rtrb::RingBuffer::new(256);
+        let (clock_out, clock_out_reader) = rtrb::RingBuffer::new(1024);
         Self {
             sr: sample_rate.max(1) as f32,
             rx,
@@ -903,6 +911,9 @@ impl EngineCore {
             mtc_secs: 0.0,
             mtc_out,
             mtc_out_reader: Some(mtc_out_reader),
+            clock_out,
+            clock_out_reader: Some(clock_out_reader),
+            clock_tick: 0,
             ext_notes: Vec::with_capacity(MAX_EXT_NOTES),
             test_hz: 0.0,
             test_gain: 0.0,
@@ -928,12 +939,40 @@ impl EngineCore {
         self.mtc_out_reader.take()
     }
 
+    /// The app's half of the MIDI Clock the engine sends. There is one; it is `None` once taken.
+    pub fn take_clock_reader(&mut self) -> Option<Consumer<ClockMessage>> {
+        self.clock_out_reader.take()
+    }
+
+    fn clock_send(&mut self, m: ClockMessage) {
+        let _ = self.clock_out.push(m);
+    }
+
+    /// Starts the MIDI clock where the playhead is: Start at the beginning of the song, otherwise
+    /// the Song Position and Continue.
+    fn clock_start(&mut self) {
+        if self.beat <= 1e-9 {
+            self.clock_send(ClockMessage::Start);
+        } else {
+            self.clock_send(ClockMessage::SongPosition(song_position(self.beat)));
+            self.clock_send(ClockMessage::Continue);
+        }
+        self.clock_tick = tick_index(self.beat);
+    }
+
+    /// The playhead jumped while the song plays: the device is told where it is now.
+    fn clock_resync(&mut self) {
+        self.clock_send(ClockMessage::SongPosition(song_position(self.beat)));
+        self.clock_tick = tick_index(self.beat);
+    }
+
     /// Every reader the app takes from the core, together.
     pub(crate) fn take_readers(&mut self) -> Readers {
         Readers {
             state: self.take_state_reader(),
             midi: self.take_midi_out_reader(),
             mtc: self.take_mtc_reader(),
+            clock: self.take_clock_reader(),
         }
     }
 
@@ -1075,6 +1114,9 @@ impl EngineCore {
     fn seek(&mut self, beat: f64) {
         self.beat = if beat.is_finite() { beat.max(0.0) } else { 0.0 };
         self.kill_voices();
+        if self.playing {
+            self.clock_resync();
+        }
         self.next_note = self
             .song
             .notes
@@ -1292,6 +1334,7 @@ impl EngineCore {
             if self.count_left == 0 {
                 self.counting = false;
                 self.start_beat = self.beat;
+                self.clock_start();
                 self.playing = true;
                 self.mtc_locate();
                 return;
@@ -1410,18 +1453,25 @@ impl EngineCore {
                     self.counting = false;
                     if !self.playing {
                         self.start_beat = self.beat;
+                        self.clock_start();
                     }
                     self.playing = true;
                     self.mtc_locate();
                 }
                 Command::Pause => {
                     self.counting = false;
+                    if self.playing {
+                        self.clock_send(ClockMessage::Stop);
+                    }
                     self.playing = false;
                     self.kill_voices();
                     self.mtc_locate();
                 }
                 Command::Stop => {
                     self.counting = false;
+                    if self.playing {
+                        self.clock_send(ClockMessage::Stop);
+                    }
                     self.playing = false;
                     let b = self.start_beat;
                     self.seek(b);
@@ -2066,6 +2116,18 @@ impl EngineCore {
                             self.next_control = self.song.controls.partition_point(|c| c.beat < s);
                         }
                     }
+                }
+                // MIDI Clock: a Timing Clock message for every 1/24 of a beat the playhead crosses
+                // (a jump is resynced by `seek`).
+                let now = tick_index(self.beat);
+                let mut sent = 0;
+                while self.clock_tick < now && sent < 24 {
+                    self.clock_tick += 1;
+                    sent += 1;
+                    self.clock_send(ClockMessage::Tick);
+                }
+                if self.clock_tick < now {
+                    self.clock_tick = now;
                 }
                 if self.metronome {
                     let (a, b) = (
@@ -2781,6 +2843,72 @@ mod tests {
         let mut buf = vec![0.0f32; 4_800 * 2];
         e.process(&mut buf);
         assert!(buf.iter().any(|x| x.abs() > 0.05));
+    }
+
+    /// Everything on the MIDI clock queue so far.
+    fn drain_clock(clock: &mut Consumer<ClockMessage>) -> Vec<ClockMessage> {
+        let mut out = Vec::new();
+        while let Ok(m) = clock.pop() {
+            out.push(m);
+        }
+        out
+    }
+
+    #[test]
+    fn midi_clock_starts_at_the_beginning_ticks_24_per_beat_and_stops() {
+        let (mut e, mut tx, _s) = rig();
+        let Some(mut clock) = e.take_clock_reader() else {
+            panic!("the clock reader");
+        };
+        assert!(tx.push(Command::Play).is_ok());
+        // 120 BPM at 48 kHz: one second is two beats, so 48 ticks.
+        let mut buf = vec![0.0f32; 48_000 * 2];
+        e.process(&mut buf);
+        let msgs = drain_clock(&mut clock);
+        assert_eq!(msgs.first(), Some(&ClockMessage::Start));
+        let ticks = msgs.iter().filter(|m| **m == ClockMessage::Tick).count();
+        assert!((47..=49).contains(&ticks), "{ticks} ticks in two beats");
+        assert!(tx.push(Command::Pause).is_ok());
+        e.process(&mut buf[..2]);
+        assert_eq!(drain_clock(&mut clock), vec![ClockMessage::Stop]);
+    }
+
+    #[test]
+    fn midi_clock_from_the_middle_of_the_song_sends_the_position_then_continue() {
+        let (mut e, mut tx, _s) = rig();
+        let Some(mut clock) = e.take_clock_reader() else {
+            panic!("the clock reader");
+        };
+        assert!(tx.push(Command::SetPosition { beat: 4.0 }).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        let msgs = drain_clock(&mut clock);
+        assert_eq!(
+            &msgs[..2],
+            &[ClockMessage::SongPosition(16), ClockMessage::Continue],
+            "bar 2 is sixteenth 16"
+        );
+        // The first tick comes after the first 1/24 of a beat, not before.
+        assert!(msgs.iter().skip(2).all(|m| *m == ClockMessage::Tick));
+    }
+
+    #[test]
+    fn midi_clock_resyncs_when_the_playhead_jumps_while_playing() {
+        let (mut e, mut tx, _s) = rig();
+        let Some(mut clock) = e.take_clock_reader() else {
+            panic!("the clock reader");
+        };
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        drain_clock(&mut clock);
+        assert!(tx.push(Command::SetPosition { beat: 8.0 }).is_ok());
+        e.process(&mut buf);
+        let msgs = drain_clock(&mut clock);
+        assert_eq!(msgs.first(), Some(&ClockMessage::SongPosition(32)));
+        let ticks = msgs.iter().filter(|m| **m == ClockMessage::Tick).count();
+        assert!(ticks <= 2, "no burst of ticks for the jump: {ticks}");
     }
 
     /// The loudest sample of one second of the click on a bar's first beat.

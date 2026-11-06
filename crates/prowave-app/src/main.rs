@@ -121,6 +121,8 @@ pub struct UiState {
     pub track_dialog: Option<track_dialogs::TrackDialog>,
     /// The audio output the engine plays on (name, sample rate), for Project Settings > Audio.
     pub audio_info: Option<(String, u32)>,
+    /// Project Settings > MIDI: send MIDI panic on the next frame.
+    pub midi_panic: bool,
     /// The MIDI Transform window.
     pub transform: transform_ui::TransformView,
     /// The editor panel shows the Score instead of the Piano Roll for ordinary MIDI regions.
@@ -200,6 +202,7 @@ impl UiState {
             settings_tab: None,
             track_dialog: None,
             audio_info: None,
+            midi_panic: false,
             transform: transform_ui::TransformView::default(),
             score_tab: false,
             score: score::ScoreView::default(),
@@ -568,8 +571,12 @@ impl eframe::App for App {
         for path in dropped {
             self.import(&path, &ctx);
         }
+        let panic = std::mem::take(&mut self.ui.midi_panic);
         if let Some(out) = self.midi_out.as_mut() {
             out.sync(&self.project);
+            if panic {
+                out.panic();
+            }
         }
         self.follow_time_code(&ctx);
         // Pattern and Drummer regions follow their length and the bars under them.
@@ -1058,7 +1065,10 @@ fn main() -> eframe::Result {
                         midi_out = sync
                             .take_midi_out()
                             .zip(sync.take_mtc_out())
-                            .map(|(notes, mtc)| midi_out::MidiOut::start(notes, mtc));
+                            .zip(sync.take_clock_out())
+                            .map(|((notes, mtc), clock)| {
+                                midi_out::MidiOut::start(midi_out::Queues { notes, mtc, clock })
+                            });
                     }
                     Some(sync)
                 }
@@ -1150,6 +1160,20 @@ fn main() -> eframe::Result {
                 // `PROWAVE_SHOT_SCENE=pattern` or `drummer` opens that editor on a new region
                 // of the Drummer track.
                 let scene = std::env::var("PROWAVE_SHOT_SCENE").unwrap_or_default();
+                // `midi-out`: the External MIDI track selected, with a program and a bank set.
+                if scene == "midi-out" {
+                    if let Some(ti) = app
+                        .project
+                        .tracks
+                        .iter()
+                        .position(|t| t.kind == crate::model::TrackKind::ExternalMidi)
+                    {
+                        app.project.selected_track = ti;
+                        app.project.tracks[ti].midi_program = Some(40);
+                        app.project.tracks[ti].midi_bank = Some(2);
+                        app.ui.inspector.track_open = true;
+                    }
+                }
                 // `select-all`: every region selected (Edit > Select All).
                 if scene == "select-all" {
                     app.ui.tracks.select_all(&app.project);
