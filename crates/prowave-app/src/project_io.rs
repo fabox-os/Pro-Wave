@@ -2109,7 +2109,7 @@ pub(crate) mod tests {
         let pedal = |val: u8| Control {
             start: 0.0,
             num: 64,
-            val,
+            val: u16::from(val),
         };
         let takes = vec![
             Take {

@@ -48,6 +48,8 @@ pub struct MidiOutEvent {
     pub vel: u8,
     /// A controller change (such as the sustain pedal) instead of a note.
     pub controller: bool,
+    /// For a controller: its value in full (0-16383 for pitch bend, see `Control`); 0 for notes.
+    pub value: u16,
 }
 
 /// A controller change on a track's timeline (beats are 0-based quarter notes). Only tracks
@@ -57,7 +59,8 @@ pub struct ControlEvent {
     pub beat: f64,
     pub track: u16,
     pub number: u8,
-    pub value: u8,
+    /// 0-127 for a controller, 0-16383 for pitch bend.
+    pub value: u16,
 }
 
 /// A note sent to an external instrument that has not been released yet.
@@ -1003,6 +1006,7 @@ impl EngineCore {
             pitch,
             vel,
             controller: false,
+            value: 0,
         });
     }
 
@@ -1070,8 +1074,9 @@ impl EngineCore {
             track: c.track,
             on: false,
             pitch: c.number,
-            vel: c.value,
+            vel: c.value.min(127) as u8,
             controller: true,
+            value: c.value,
         });
     }
 
@@ -1085,6 +1090,7 @@ impl EngineCore {
                     pitch: 64,
                     vel: 0,
                     controller: true,
+                    value: 0,
                 });
             }
         }

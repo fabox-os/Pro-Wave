@@ -83,7 +83,8 @@ fn events(p: &Project, s: &UiState) -> Vec<Event> {
                 dim,
                 control: true,
                 pitch: c.num,
-                vel: c.val,
+                // The list shows one byte: a pitch bend (14 bits) is clamped here.
+                vel: c.val.min(255) as u8,
                 len: 0.0,
             });
         }

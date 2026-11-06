@@ -335,6 +335,18 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 
 ✅ Done 2026-11-06: MIDI outputs. The sender (`midi_out.rs`) now works on a `Sink` trait, so its logic is tested with recording ports and a real ALSA virtual port (midir creates it; the notes and the clock arrive). Fixes: a note that was sounding when its track was moved to another port or channel is now released on the port it started on (before, it stayed on). New: each external track sends a Bank Select and a Program Change when it is routed (Inspector: MIDI Program and MIDI Bank, Off at the top of each range); MIDI Clock (Timing Clock 24 per beat, Start, Continue, Stop, Song Position) to the port chosen under Synchronization > Send MIDI Clock, made on the audio clock (`clock.rs`, the engine); Project Settings > MIDI > Send MIDI Panic (All Sound Off and All Notes Off on all 16 channels of every output in use). Saved in `.prowave` (`midi_program`, `midi_bank`, `midi_clock_out`). Not done: pitch bend, channel aftertouch and SysEx (no data for them in regions yet); MIDI clock is not followed from an input; a seek while stopped sends nothing, and a seek while playing sends a Song Position; no test on a real hardware synth.
 
+✅ Done 2026-11-06: pitch bend, channel pressure and SysEx in regions. A region's events
+   (`Control`, value now 0-16383) take reserved kinds above 127: PITCH_BEND (128), CHANNEL_PRESSURE
+   (129) and SYSEX_BYTE (130; one event per byte of a message, from F0 to F7, all at one start).
+   Played live: pitch bend and channel pressure are recorded (the recorder and Capture Recording);
+   MIDI files: they are imported and exported, and SysEx is read and written (a message the file
+   leaves without F7 is completed; SysEx is kept with the first track of its MIDI track that has
+   notes). External MIDI tracks send all three (`midi_out.rs`: 14-bit bend, a whole SysEx message at
+   its F7). Tests: MIDI file round trips, live parsing, the sender with recording ports, engine
+   events on time, and bytes through a real ALSA virtual port. Not done: entering SysEx by hand (only
+   files and the live input supply it), SysEx and bend on the internal instruments, and poly
+   aftertouch (not parsed).
+
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.

@@ -356,7 +356,7 @@ fn song_controls(p: &Project) -> Vec<ControlEvent> {
                         beat: m.beat,
                         track,
                         number: m.number,
-                        value: m.value,
+                        value: u16::from(m.value),
                     }),
             );
             out

@@ -419,8 +419,11 @@ impl App {
                     track: track.min(usize::from(u16::MAX)) as u16,
                 },
                 recorder::LiveNote::Off { pitch } => piano_roll::Audition::Off { pitch },
-                // The engine has no sustain pedal yet: it is only recorded.
-                recorder::LiveNote::Sustain { .. } => continue,
+                // The engine has no sustain pedal, bend or pressure for the keys yet: they are
+                // only recorded.
+                recorder::LiveNote::Sustain { .. }
+                | recorder::LiveNote::Bend { .. }
+                | recorder::LiveNote::Pressure { .. } => continue,
             });
         }
         // Record on an audio track is the audio recorder's (see `record_audio`).

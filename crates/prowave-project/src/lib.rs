@@ -80,7 +80,8 @@ pub struct ControlDoc {
     /// Beats from the region start.
     pub start: f32,
     pub num: u8,
-    pub val: u8,
+    /// 0-127, or 0-16383 for pitch bend (see `Control::val` in the app).
+    pub val: u16,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
