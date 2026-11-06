@@ -739,3 +739,4 @@ MIDI Bank: = Bank MIDI:
 Send MIDI Clock = Kirim MIDI Clock
 Send MIDI Panic = Kirim MIDI Panic
 Silences notes stuck on an external instrument. = Membisukan nada yang macet pada instrumen eksternal.
+Follow MIDI Clock = Ikuti MIDI Clock

@@ -739,3 +739,4 @@ MIDI Bank: = MIDI bankas:
 Send MIDI Clock = Siųsti MIDI laikrodį
 Send MIDI Panic = Siųsti MIDI paniką
 Silences notes stuck on an external instrument. = Nutildo išorinio instrumento užstrigusias natas.
+Follow MIDI Clock = Sekti MIDI laikrodį

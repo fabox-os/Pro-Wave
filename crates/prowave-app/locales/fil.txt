@@ -739,3 +739,4 @@ MIDI Bank: = MIDI Bank:
 Send MIDI Clock = Ipadala ang MIDI Clock
 Send MIDI Panic = Ipadala ang MIDI Panic
 Silences notes stuck on an external instrument. = Pinatatahimik ang mga nota na natigil sa external na instrumento.
+Follow MIDI Clock = Sundan ang MIDI Clock

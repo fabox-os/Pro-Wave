@@ -9,6 +9,8 @@ mod apple_loops;
 mod audio_rec;
 mod automation;
 mod bench;
+mod clock_follow;
+mod clock_in;
 mod engine_sync;
 mod event_list;
 mod file_browser;
@@ -265,6 +267,9 @@ struct App {
     midi_out: Option<midi_out::MidiOut>,
     /// Reads MIDI Time Code from the project's port (none while benchmarking).
     mtc_in: Option<mtc_in::MtcIn>,
+    /// The input port whose MIDI Clock the song follows, and the follower that reads it.
+    clock_in: clock_in::ClockIn,
+    clock_follow: clock_follow::ClockFollower,
     /// Makes the transport follow that time code.
     chase: mtc_in::Chase,
     /// Looks for a newer release and installs it (Windows).
@@ -374,6 +379,25 @@ impl App {
     }
 
     /// MIDI Time Code in: the transport follows the port the project chases, if any.
+    /// Follow MIDI Clock: the transport starts, continues, stops and jumps as the clock input
+    /// says, and the tempo is the clock's. Arrivals are read every frame even when no port is
+    /// followed, so the queue does not fill up.
+    fn follow_clock(&mut self, ctx: &egui::Context) {
+        self.clock_in.sync(self.project.midi_clock_in.as_deref());
+        let mut arrivals = Vec::new();
+        self.clock_in.poll(&mut arrivals);
+        if self.project.midi_clock_in.is_none() {
+            return;
+        }
+        for a in arrivals {
+            let Some(event) = self.clock_follow.message(a.at_us, a.data()) else {
+                continue;
+            };
+            clock_follow::apply(&mut self.project, event);
+            ctx.request_repaint();
+        }
+    }
+
     fn follow_time_code(&mut self, ctx: &egui::Context) {
         let Some(input) = self.mtc_in.as_mut() else {
             return;
@@ -582,6 +606,7 @@ impl eframe::App for App {
             }
         }
         self.follow_time_code(&ctx);
+        self.follow_clock(&ctx);
         // Pattern and Drummer regions follow their length and the bars under them.
         self.project.refresh_generated();
         if let Some(sync) = self.sync.as_mut() {
@@ -1096,6 +1121,8 @@ fn main() -> eframe::Result {
                 midi: (!measuring).then(midi_in::MidiIn::new),
                 midi_out,
                 mtc_in: (!measuring).then(|| mtc_in::MtcIn::new(cc.egui_ctx.clone())),
+                clock_in: clock_in::ClockIn::default(),
+                clock_follow: clock_follow::ClockFollower::default(),
                 chase: mtc_in::Chase::default(),
                 updater: updater::Updater::new(),
             };

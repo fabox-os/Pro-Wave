@@ -739,3 +739,4 @@ MIDI Bank: = MIDI 音色库：
 Send MIDI Clock = 发送 MIDI 时钟
 Send MIDI Panic = 发送 MIDI 恐慌（全部静音）
 Silences notes stuck on an external instrument. = 让外部乐器上卡住的音符静音。
+Follow MIDI Clock = 跟随 MIDI 时钟

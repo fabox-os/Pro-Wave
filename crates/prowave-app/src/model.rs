@@ -808,6 +808,8 @@ pub struct Project {
     pub midi_in_port: Option<String>,
     /// MIDI output port (by name) that sends MIDI Clock while the song plays, if any.
     pub midi_clock_out: Option<String>,
+    /// MIDI input port (by name) whose clock the song follows, if any.
+    pub midi_clock_in: Option<String>,
     pub key: &'static str,
     pub tracks: Vec<Track>,
     pub playing: bool,
@@ -1065,6 +1067,7 @@ impl Project {
             tuning_hz: 440.0,
             midi_in_port: None,
             midi_clock_out: None,
+            midi_clock_in: None,
         }
     }
 

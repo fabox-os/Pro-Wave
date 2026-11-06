@@ -333,7 +333,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    track stack, as Track > Create Track Stack; this is our reading of Logic's "Folder"). Not done:
    Bounce in Place (needs offline rendering) and Convert to New Sampler Track (needs a sampler track).
 
-✅ Done 2026-11-06: MIDI outputs. The sender (`midi_out.rs`) now works on a `Sink` trait, so its logic is tested with recording ports and a real ALSA virtual port (midir creates it; the notes and the clock arrive). Fixes: a note that was sounding when its track was moved to another port or channel is now released on the port it started on (before, it stayed on). New: each external track sends a Bank Select and a Program Change when it is routed (Inspector: MIDI Program and MIDI Bank, Off at the top of each range); MIDI Clock (Timing Clock 24 per beat, Start, Continue, Stop, Song Position) to the port chosen under Synchronization > Send MIDI Clock, made on the audio clock (`clock.rs`, the engine); Project Settings > MIDI > Send MIDI Panic (All Sound Off and All Notes Off on all 16 channels of every output in use). Saved in `.prowave` (`midi_program`, `midi_bank`, `midi_clock_out`). Not done: pitch bend, channel aftertouch and SysEx (no data for them in regions yet); MIDI clock is not followed from an input; a seek while stopped sends nothing, and a seek while playing sends a Song Position; no test on a real hardware synth.
+✅ Done 2026-11-06: MIDI outputs. The sender (`midi_out.rs`) now works on a `Sink` trait, so its logic is tested with recording ports and a real ALSA virtual port (midir creates it; the notes and the clock arrive). Fixes: a note that was sounding when its track was moved to another port or channel is now released on the port it started on (before, it stayed on). New: each external track sends a Bank Select and a Program Change when it is routed (Inspector: MIDI Program and MIDI Bank, Off at the top of each range); MIDI Clock (Timing Clock 24 per beat, Start, Continue, Stop, Song Position) to the port chosen under Synchronization > Send MIDI Clock, made on the audio clock (`clock.rs`, the engine); Project Settings > MIDI > Send MIDI Panic (All Sound Off and All Notes Off on all 16 channels of every output in use). Saved in `.prowave` (`midi_program`, `midi_bank`, `midi_clock_out`). Not done (the last two were done later, see the next entries): pitch bend, channel aftertouch and SysEx; following MIDI clock from an input; a seek while stopped sends nothing, and a seek while playing sends a Song Position; no test on a real hardware synth.
 
 ✅ Done 2026-11-06: pitch bend, channel pressure and SysEx in regions. A region's events
    (`Control`, value now 0-16383) take reserved kinds above 127: PITCH_BEND (128), CHANNEL_PRESSURE
@@ -346,6 +346,16 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    events on time, and bytes through a real ALSA virtual port. Not done: entering SysEx by hand (only
    files and the live input supply it), SysEx and bend on the internal instruments, and poly
    aftertouch (not parsed).
+
+✅ Done 2026-11-06: following MIDI clock from an input. Synchronization > Follow MIDI Clock picks an input
+   port (`clock_in.rs`, midir). `clock_follow.rs` reads the Timing Clock (the tempo is the average of
+   the last two beats, reported every quarter note and rounded to a tenth), Start (play from the
+   beginning), Continue, Stop, and Song Position (the playhead jumps). The app applies them every frame.
+   Saved in `.prowave` (`midi_clock_in`). Tests: the follower with exact timings (120 BPM comes back as
+   120), the mapping to the project, and clock bytes read through a real ALSA virtual port. Not done:
+   the tempo does not follow a clock that is not steady (it averages, so a sudden change takes two
+   beats); the transport's own Play and Stop buttons still work next to it; a clock output on the same
+   device would echo back; and testing with a real hardware clock source (not possible in this sandbox).
 
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm

@@ -739,3 +739,4 @@ MIDI Bank: = MIDI-pankki:
 Send MIDI Clock = Lähetä MIDI-kello
 Send MIDI Panic = Lähetä MIDI-paniikki
 Silences notes stuck on an external instrument. = Hiljentää ulkoisen soittimen jumiutuneet nuotit.
+Follow MIDI Clock = Seuraa MIDI-kelloa

@@ -739,3 +739,4 @@ MIDI Bank: = Bank MIDI:
 Send MIDI Clock = Wyślij zegar MIDI
 Send MIDI Panic = Wyślij MIDI Panic
 Silences notes stuck on an external instrument. = Wycisza nuty utknięte na instrumencie zewnętrznym.
+Follow MIDI Clock = Podążaj za zegarem MIDI

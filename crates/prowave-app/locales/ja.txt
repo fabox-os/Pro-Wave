@@ -739,3 +739,4 @@ MIDI Bank: = MIDI バンク：
 Send MIDI Clock = MIDIクロックを送信
 Send MIDI Panic = MIDIパニックを送信
 Silences notes stuck on an external instrument. = 外部楽器で鳴りっぱなしの音を消します。
+Follow MIDI Clock = MIDIクロックに追従
