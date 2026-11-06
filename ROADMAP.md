@@ -451,7 +451,7 @@ limitations at the end of the section). Still open, in the order the work would 
 - **DoD:** Import 24 tracks 48k/24-bit, play without dropouts
 
 ### Phase 2: MIDI & Sequencer (Weeks 11-18)
-- [ ] MIDI 1.0/2.0 parser, MPE, Articulation ID, SysEx
+- [~] MIDI 1.0/2.0 parser, MPE, Articulation ID, SysEx
   - Standard MIDI Files (2026-10-21): File > Import > MIDI File… (or drop a `.mid` on the window) makes a track for each track and channel (channel 10 becomes a Drummer track) with one region of its notes and the sustain pedal, and takes the file's tempo and signature changes when the project has no regions yet. File > Export > Selection as MIDI File… writes the selected region, or all MIDI, as format 1: a tempo track (tempo curves as a step for each quarter note, signatures) and a track for each MIDI track, with what plays (region transpose, quantize, mute, MIDI FX). Reading and writing round-trip in tests, damaged files are refused without panicking. Not done: SMPTE-timed files, program changes, other controllers, pitch bend, lyrics and markers, MPE, SysEx, MIDI 2.0.
 - [ ] Piano Roll: full Logic parity (Quantize, Velocity, Brush, Time Handles, MIDI Draw for CC, Scale Quantize, Humanize, Flam, Note Color)
 - [ ] Score Editor v0: render notes with `staff` crate, basic printing, MusicXML export
@@ -459,7 +459,7 @@ limitations at the end of the section). Still open, in the order the work would 
 - [x] Hardening pass (2026-10-21) of the newest features: MIDI file import is bounded (128 MB, 4096 tempo and 1024 signature changes, tracks up to the engine's 1024, regions inside bar 9999, note pairing in linear time), pattern regions stop at 250 000 notes and a MIDI FX chain at 1 000 000, MTC positions cannot overflow, the MIDI and MTC input queues are bounded, and generated regions are only compared with their bars when the region or the song changed. Tests: headless pointer tests for the Pattern grid, Drummer pad, Score and MIDI FX window (`ui_test.rs`), a hostile-file test, and Linux and macOS compile checks (the tests themselves run on Windows here and on all three in CI).
 - [x] Step Sequencer: Pattern region with rows, per-step Chance, Repeat, Tie, Gate, Loop Direction
   - Done (2026-10-21): Pattern regions with rows, steps, rate, swing, gate and per-step velocity, Chance (percent, the same every time for a seed; New Variation changes it), Repeat (1-4 notes in a step, click to count up) and Tie (carries on the note before it, also over the loop), and a play direction (Forward, Backward, Ping-Pong, Random). The Edit box above the grid picks what a click sets. Pending: automation per row, per-row gate.
-- [ ] Event List, Step Editor, MIDI Transform (conditions + operations), MIDI FX chain (Arp, Chord Trigger, Scripter via Rhai)
+- [~] Event List, Step Editor, MIDI Transform (conditions + operations), MIDI FX chain (Arp, Chord Trigger, Scripter via Rhai)
   - MIDI FX (2026-10-21): Track > MIDI FX… opens a chain of up to 8 effects for the selected track: Transposer, Velocity Processor, Scale Quantizer, Chord Trigger (8 chords), Note Repeater, Arpeggiator (Up, Down, Up and Down, Random, As Played; 1-4 octaves; gate) and Randomizer (pitch, velocity, timing; the same every time). Each can be switched off, moved and removed; they change the notes the engine plays (and what Export MIDI writes) and leave the regions as recorded. Saved in `.prowave`. Added later the same day: Modulator (sine, triangle, saw or square to a MIDI controller or pitch bend of an External MIDI track) and Scripter (Rhai script, sandboxed, with an operation limit). The sustain pedal and the controllers now go out to External MIDI tracks. Not done: the MIDI FX slot in the channel strip, and showing the changed notes in the Piano Roll.
   - MIDI Transform (2026-10-21): Piano Roll > Functions > MIDI Transform… selects notes by pitch, velocity, position or length and operates on them (transpose, velocity, position, length, scale, randomize), with presets (Transpose, Fixed Velocity, Legato, Humanize, ...). Not done: conditions on other regions' notes and saving your own presets.
 - [ ] Drummer Track v0: 2 drummers, Complexity/Loudness X/Y, Follow Track, Convert to MIDI
@@ -496,7 +496,7 @@ limitations at the end of the section). Still open, in the order the work would 
 - [ ] Ultrabeat: 25 voices drum synth, built-in step sequencer
 - [ ] Studio Strings/Horns: Articulation ID system (key switch, channel, velocity)
 - [x] Guitar and bass amp emulation (tester request, 2026-10-30; done 2026-11-03): *Amp Designer* in the Audio FX slots. Five amplifier models (Clean Combo, Tweed, British Crunch, Plexi Lead, Bass Amp), four valve stages with asymmetric soft clipping at twice the sample rate, a tone stack (Gain, Bass, Mid, Treble, Presence, Master), three speaker cabinets (1x12 Combo, 4x12 British, 4x10 Bass) or none, and a microphone position from the edge of the cone to its centre. Every setting is automatable; a *Guitar Amp* set of Library patches loads it. Pending: a pedal board, impulse-response cabinets, and listening on real guitar recordings.
-- [ ] FX full suite: Space Designer (convolution reverb with IR loading, envelope, filter, length), ChromaVerb (14 models), Delay Designer (visual tap editor, 26 taps, pitch/filter per tap), Tape Delay, Echo, Chorus, Ensemble, Flanger, Phaser, Tremolo, AutoFilter, Ringshifter, Distortion II, Bitcrusher, Overdrive, Pedalboard (35 pedals), Amp Designer (amps + cabs + mics), Match EQ, Multipressor, Exciter, SubBass, Voice Transformer, etc.
+- [~] FX full suite: Space Designer (convolution reverb with IR loading, envelope, filter, length), ChromaVerb (14 models), Delay Designer (visual tap editor, 26 taps, pitch/filter per tap), Tape Delay, Echo, Chorus, Ensemble, Flanger, Phaser, Tremolo, AutoFilter, Ringshifter, Distortion II, Bitcrusher, Overdrive, Pedalboard (35 pedals), Amp Designer (amps + cabs + mics), Match EQ, Multipressor, Exciter, SubBass, Voice Transformer, etc.
 - [ ] Mastering Assistant: rule-based chain (EQ -> Comp -> Limiter) + LUFS targeting -14 LUFS, analyze using `ebur128` crate
 - **DoD:** A/B test Channel EQ curve vs Logic (within 0.5dB), Space Designer IR load
 
@@ -508,12 +508,12 @@ limitations at the end of the section). Still open, in the order the work would 
 - **DoD:** Load Vital, Serum, Kontakt without crashing main DAW if plugin crashes
 
 ### Phase 8: UI - The Logic Look + Live Loops (Weeks 57-66)
-- [ ] Main window: Tracks area (with Track Headers, Track Inspector left, Library right), Mixer (separate window or bottom), Editors (Piano Roll bottom, Score, Audio Editor)
+- [~] Main window: Tracks area (with Track Headers, Track Inspector left, Library right), Mixer (separate window or bottom), Editors (Piano Roll bottom, Score, Audio Editor)
 - [ ] Library: Patches (Channel Strip + Instrument + FX), save/load, search
 - [ ] Smart Controls: 8 knobs per patch, mapping editor (map knob to multiple params with range scaling), Learn
 - [ ] Key Commands: 1200+ commands, searchable, customizable, Presets, Conflict detection
 - [ ] Live Loops: Grid (Cells, Scenes, Trigger modes, Quantize Start), Record Live Loops performance to Tracks, Remix FX (X/Y pad with Gate, Filter, Repeater, Reverse)
-- [ ] Loop Browser: Apple Loops metadata parsing (key, tempo, style), drag-drop with auto tempo/key adaptation, All Files Browser
+- [~] Loop Browser: Apple Loops metadata parsing (key, tempo, style), drag-drop with auto tempo/key adaptation, All Files Browser
   - Started (2026-10-30): Loop Browser and All Files panes list a folder and add a file on
     double-click. No Apple Loops tags or tempo matching yet.
   - Done (2026-11-05): the Loop Browser reads the tags of CAF Apple Loops (category, genre, key,
