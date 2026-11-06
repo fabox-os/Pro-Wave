@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Якщо відлік увімкнено, запис починається після одного такту клацань.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Захопити запис перетворює на регіон те, що ви щойно зіграли на MIDI-клавіатурі.
 
+General = Загальні
+Synchronization = Синхронізація
+Metronome = Метроном
+Recording = Запис
+Tuning = Налаштування строю
+Project Name = Назва проєкту
+Click Volume = Гучність кліка
+Accent First Beat of Each Bar = Акцентувати першу долю кожного такту
+Count-in Bars = Такти відліку
+Reference Pitch (A4) = Опорна висота (A4)
+MIDI Input = MIDI-вхід
+Automatic = Автоматично
+Output Device: {} = Пристрій виведення: {}
+Sample Rate: {} Hz = Частота дискретизації: {} Hz
+Inputs are chosen with the Input slot of each audio track. = Входи вибираються у слоті входу кожної аудіодоріжки.
+Count-in = Відлік

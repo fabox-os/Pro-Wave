@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Med inräkning på börjar inspelningen efter en takt med klick.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Fånga inspelning gör det du just spelade på ett MIDI-klaviatur till en region.
 
+General = Allmänt
+Synchronization = Synkronisering
+Metronome = Metronom
+Recording = Inspelning
+Tuning = Stämning
+Project Name = Projektnamn
+Click Volume = Klickvolym
+Accent First Beat of Each Bar = Betona första slaget i varje takt
+Count-in Bars = Inräkningstakter
+Reference Pitch (A4) = Referenston (A4)
+MIDI Input = MIDI-ingång
+Automatic = Automatisk
+Output Device: {} = Utgångsenhet: {}
+Sample Rate: {} Hz = Samplingsfrekvens: {} Hz
+Inputs are chosen with the Input slot of each audio track. = Ingångar väljs med ingångsplatsen på varje ljudspår.
+Count-in = Inräkning

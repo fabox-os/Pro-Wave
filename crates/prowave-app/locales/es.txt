@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Con la claqueta previa, la grabación empieza tras un compás de clics.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Capturar grabación convierte en región lo que acabas de tocar en un teclado MIDI.
 
+General = General
+Synchronization = Sincronización
+Metronome = Metrónomo
+Recording = Grabación
+Tuning = Afinación
+Project Name = Nombre del proyecto
+Click Volume = Volumen del clic
+Accent First Beat of Each Bar = Acentuar el primer tiempo de cada compás
+Count-in Bars = Compases de cuenta atrás
+Reference Pitch (A4) = Tono de referencia (La4)
+MIDI Input = Entrada MIDI
+Automatic = Automático
+Output Device: {} = Dispositivo de salida: {}
+Sample Rate: {} Hz = Frecuencia de muestreo: {} Hz
+Inputs are chosen with the Input slot of each audio track. = Las entradas se eligen con la ranura de entrada de cada pista de audio.
+Count-in = Cuenta atrás

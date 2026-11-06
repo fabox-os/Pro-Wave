@@ -8,7 +8,8 @@ use crate::library::CATEGORIES;
 use crate::model::{
     CompSegment, Control, Generated, Generator, Marker, Note, Project, Region, RegionParams,
     SendSlot, SigChange, Take, TakeFolder, TempoPoint, Track, TrackKind, TrackParams,
-    MAX_REGION_GAIN, MIN_REGION_GAIN,
+    DEFAULT_CLICK_DB, MAX_COUNT_IN_BARS, MAX_REGION_GAIN, MAX_TUNING_HZ, MIN_CLICK_DB,
+    MIN_REGION_GAIN, MIN_TUNING_HZ,
 };
 use crate::pattern::{
     Direction, DrumStyle, DrummerParams, PatternParams, PatternRow, StepRate, MAX_ROWS, MAX_STEPS,
@@ -554,6 +555,11 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         smpte_start: p.smpte_start,
         mtc_out: p.mtc_out.clone(),
         mtc_in: p.mtc_in.clone(),
+        click_volume_db: Some(p.click_volume_db),
+        click_accent: Some(p.click_accent),
+        count_in_bars: p.count_in_bars,
+        tuning_hz: Some(p.tuning_hz),
+        midi_in_port: p.midi_in_port.clone(),
         sig_changes: p
             .sig_changes
             .iter()
@@ -783,6 +789,18 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
     p.smpte_start = valid_smpte_start(doc.smpte_start, p.smpte_rate);
     p.mtc_out = port_name(&doc.mtc_out);
     p.mtc_in = port_name(&doc.mtc_in);
+    p.midi_in_port = port_name(&doc.midi_in_port);
+    // A file is not trusted: out-of-range or non-finite values fall back or are held in range.
+    p.click_volume_db = match doc.click_volume_db {
+        Some(db) if db.is_finite() => db.clamp(MIN_CLICK_DB, 0.0),
+        _ => DEFAULT_CLICK_DB,
+    };
+    p.click_accent = doc.click_accent.unwrap_or(true);
+    p.count_in_bars = doc.count_in_bars.clamp(1, MAX_COUNT_IN_BARS);
+    p.tuning_hz = match doc.tuning_hz {
+        Some(hz) if hz.is_finite() => hz.clamp(MIN_TUNING_HZ, MAX_TUNING_HZ),
+        _ => 440.0,
+    };
     p.markers = doc
         .markers
         .iter()
@@ -1121,6 +1139,50 @@ pub(crate) mod tests {
         b.extend_from_slice(&(n * 2).to_le_bytes());
         b.resize(b.len() + (n * 2) as usize, 0);
         std::fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn project_settings_are_saved_and_a_hostile_file_is_held_in_range() {
+        let mut p = Project::empty();
+        p.click_volume_db = -20.0;
+        p.click_accent = false;
+        p.count_in_bars = 3;
+        p.tuning_hz = 432.0;
+        p.midi_in_port = Some("Keys".into());
+        let (doc, _) = to_doc(&p);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.click_volume_db, -20.0);
+        assert!(!q.click_accent);
+        assert_eq!(q.count_in_bars, 3);
+        assert_eq!(q.tuning_hz, 432.0);
+        assert_eq!(q.midi_in_port.as_deref(), Some("Keys"));
+
+        // A file from before these settings has the old behaviour.
+        let (old, _) = from_doc(
+            &ProjectDoc {
+                count_in_bars: 0,
+                ..ProjectDoc::default()
+            },
+            Path::new("."),
+            &egui::Context::default(),
+        );
+        assert_eq!(old.click_volume_db, DEFAULT_CLICK_DB);
+        assert!(old.click_accent);
+        assert_eq!((old.count_in_bars, old.tuning_hz), (1, 440.0));
+
+        // Hand-edited values are held in range; not-a-number falls back.
+        let mut bad = doc.clone();
+        bad.click_volume_db = Some(f32::NAN);
+        bad.tuning_hz = Some(9000.0);
+        bad.count_in_bars = 200;
+        let (r, _) = from_doc(&bad, Path::new("."), &egui::Context::default());
+        assert_eq!(r.click_volume_db, DEFAULT_CLICK_DB);
+        assert_eq!(r.tuning_hz, MAX_TUNING_HZ);
+        assert_eq!(r.count_in_bars, MAX_COUNT_IN_BARS);
+        bad.click_volume_db = Some(50.0);
+        bad.tuning_hz = Some(f32::INFINITY);
+        let (r, _) = from_doc(&bad, Path::new("."), &egui::Context::default());
+        assert_eq!((r.click_volume_db, r.tuning_hz), (0.0, 440.0));
     }
 
     #[test]

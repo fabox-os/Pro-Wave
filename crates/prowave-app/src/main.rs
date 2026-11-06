@@ -38,6 +38,7 @@ mod patches;
 mod pattern;
 mod piano_roll;
 mod project_io;
+mod project_settings;
 mod recent_files;
 mod recorder;
 mod score;
@@ -110,6 +111,10 @@ pub struct UiState {
     pub piano: piano_roll::PianoView,
     /// The MIDI FX window of the selected track is open.
     pub show_midi_fx: bool,
+    /// The Project Settings window, with the tab it shows.
+    pub settings_tab: Option<project_settings::SettingsTab>,
+    /// The audio output the engine plays on (name, sample rate), for Project Settings > Audio.
+    pub audio_info: Option<(String, u32)>,
     /// The MIDI Transform window.
     pub transform: transform_ui::TransformView,
     /// The editor panel shows the Score instead of the Piano Roll for ordinary MIDI regions.
@@ -185,6 +190,8 @@ impl UiState {
             piano: piano_roll::PianoView::default(),
             steps: step_editor::StepView::default(),
             show_midi_fx: false,
+            settings_tab: None,
+            audio_info: None,
             transform: transform_ui::TransformView::default(),
             score_tab: false,
             score: score::ScoreView::default(),
@@ -364,6 +371,7 @@ impl App {
         // The keyboard input does not take the port the time code comes from.
         if let Some(midi) = self.midi.as_mut() {
             midi.avoid(self.project.mtc_in.as_deref());
+            midi.prefer(self.project.midi_in_port.as_deref());
         }
         let mut events = Vec::new();
         input.poll(&mut events);
@@ -711,6 +719,10 @@ impl eframe::App for App {
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
         }
+        if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
+            self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
+        }
+        project_settings::show(&ctx, &mut self.project, &mut self.ui);
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
@@ -1129,6 +1141,17 @@ fn main() -> eframe::Result {
                 // `PROWAVE_SHOT_SCENE=pattern` or `drummer` opens that editor on a new region
                 // of the Drummer track.
                 let scene = std::env::var("PROWAVE_SHOT_SCENE").unwrap_or_default();
+                // `settings-metronome` and the like open Project Settings on that tab.
+                app.ui.settings_tab = match scene.as_str() {
+                    "settings-general" => Some(project_settings::SettingsTab::General),
+                    "settings-sync" => Some(project_settings::SettingsTab::Synchronization),
+                    "settings-metronome" => Some(project_settings::SettingsTab::Metronome),
+                    "settings-recording" => Some(project_settings::SettingsTab::Recording),
+                    "settings-tuning" => Some(project_settings::SettingsTab::Tuning),
+                    "settings-audio" => Some(project_settings::SettingsTab::Audio),
+                    "settings-midi" => Some(project_settings::SettingsTab::Midi),
+                    _ => None,
+                };
                 if scene == "score" || scene == "midifx" {
                     app.ui.tracks.selected = Some((0, 0));
                     app.project.selected_track = 0;

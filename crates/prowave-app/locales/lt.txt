@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Įjungus įskaitymą, įrašas prasideda po vieno takto spragtelėjimų.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Užfiksuoti įrašą paverčia sritimi tai, ką ką tik grojote MIDI klaviatūra.
 
+General = Bendrieji
+Synchronization = Sinchronizavimas
+Metronome = Metronomas
+Recording = Įrašymas
+Tuning = Derinimas
+Project Name = Projekto pavadinimas
+Click Volume = Spragtelėjimo garsumas
+Accent First Beat of Each Bar = Paryškinti kiekvieno takto pirmą dalį
+Count-in Bars = Įskaičiavimo taktai
+Reference Pitch (A4) = Atskaitos tonas (A4)
+MIDI Input = MIDI įvestis
+Automatic = Automatinis
+Output Device: {} = Išvesties įrenginys: {}
+Sample Rate: {} Hz = Diskretizavimo dažnis: {} Hz
+Inputs are chosen with the Input slot of each audio track. = Įvestys pasirenkamos kiekvieno garso takelio įvesties lizde.
+Count-in = Įskaičiavimas

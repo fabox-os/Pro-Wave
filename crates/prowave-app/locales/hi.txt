@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Count-in चालू होने पर रिकॉर्डिंग एक बार की क्लिक के बाद शुरू होती है।
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Capture Recording आपने MIDI कीबोर्ड पर अभी जो बजाया उसे रीजन बना देता है।
 
+General = सामान्य
+Synchronization = सिंक्रनाइज़ेशन
+Metronome = मेट्रोनोम
+Recording = रिकॉर्डिंग
+Tuning = ट्यूनिंग
+Project Name = प्रोजेक्ट का नाम
+Click Volume = क्लिक वॉल्यूम
+Accent First Beat of Each Bar = हर बार की पहली बीट पर ज़ोर दें
+Count-in Bars = काउंट-इन बार
+Reference Pitch (A4) = संदर्भ पिच (A4)
+MIDI Input = MIDI इनपुट
+Automatic = स्वचालित
+Output Device: {} = आउटपुट डिवाइस: {}
+Sample Rate: {} Hz = सैंपल रेट: {} Hz
+Inputs are chosen with the Input slot of each audio track. = इनपुट हर ऑडियो ट्रैक के इनपुट स्लॉट से चुने जाते हैं।
+Count-in = काउंट-इन

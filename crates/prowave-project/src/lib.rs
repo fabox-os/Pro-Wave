@@ -441,6 +441,16 @@ pub struct ProjectDoc {
     pub mtc_out: Option<String>,
     /// MIDI input port (by name) that Pro Wave chases MIDI Time Code from, if any.
     pub mtc_in: Option<String>,
+    /// Metronome click level in dB (Project Settings > Metronome); `None` keeps the default.
+    pub click_volume_db: Option<f32>,
+    /// Whether the first beat of a bar has the higher click; `None` keeps the default (yes).
+    pub click_accent: Option<bool>,
+    /// Bars of count-in before recording, 1 to 4. Files from before this setting have 0: one.
+    pub count_in_bars: u8,
+    /// Frequency of A4 in Hz (Project Settings > Tuning); `None` is 440.
+    pub tuning_hz: Option<f32>,
+    /// MIDI input port (by name) that plays live notes; `None` picks the first keyboard.
+    pub midi_in_port: Option<String>,
 }
 
 /// A time-signature change: `num/den` from the start of the 1-based `bar` on.
@@ -498,6 +508,11 @@ impl Default for ProjectDoc {
             smpte_start: [1, 0, 0, 0],
             mtc_out: None,
             mtc_in: None,
+            click_volume_db: None,
+            click_accent: None,
+            count_in_bars: 1,
+            tuning_hz: None,
+            midi_in_port: None,
         }
     }
 }

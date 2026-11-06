@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = 打开预备拍后，录音会在一小节的节拍声后开始。
 Capture Recording turns what you just played on a MIDI keyboard into a region. = 捕捉录音会把你刚在 MIDI 键盘上弹奏的内容变成一个片段。
 
+General = 通用
+Synchronization = 同步
+Metronome = 节拍器
+Recording = 录音
+Tuning = 调音
+Project Name = 项目名称
+Click Volume = 节拍器音量
+Accent First Beat of Each Bar = 强调每小节第一拍
+Count-in Bars = 预备拍小节数
+Reference Pitch (A4) = 标准音高 (A4)
+MIDI Input = MIDI 输入
+Automatic = 自动
+Output Device: {} = 输出设备：{}
+Sample Rate: {} Hz = 采样率：{} Hz
+Inputs are chosen with the Input slot of each audio track. = 输入通过每个音频轨道的输入插槽选择。
+Count-in = 预备拍

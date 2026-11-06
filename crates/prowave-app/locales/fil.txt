@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Kapag naka-on ang Count-in, magsisimula ang recording pagkatapos ng isang bar ng click.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Ginagawang region ng Capture Recording ang kakatugtog mo lang sa MIDI keyboard.
 
+General = Pangkalahatan
+Synchronization = Pag-sync
+Metronome = Metronome
+Recording = Pag-record
+Tuning = Pag-tono
+Project Name = Pangalan ng Proyekto
+Click Volume = Lakas ng Click
+Accent First Beat of Each Bar = I-accent ang unang beat ng bawat bar
+Count-in Bars = Bilang ng Bar sa Count-in
+Reference Pitch (A4) = Reference Pitch (A4)
+MIDI Input = MIDI Input
+Automatic = Awtomatiko
+Output Device: {} = Output Device: {}
+Sample Rate: {} Hz = Sample Rate: {} Hz
+Inputs are chosen with the Input slot of each audio track. = Pinipili ang mga input sa Input slot ng bawat audio track.
+Count-in = Count-in

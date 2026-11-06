@@ -16,9 +16,24 @@ pub struct MidiIn {
     /// A port another input uses (MIDI Time Code): this one leaves it alone, since some systems
     /// let only one program or connection open a port.
     avoided: Option<String>,
+    /// The port the project asks for (Project Settings > MIDI), used when it is there.
+    preferred: Option<String>,
     tx: SyncSender<LiveNote>,
     rx: Receiver<LiveNote>,
     last_try: Option<Instant>,
+}
+
+/// Which of the ports to open: the one the project asks for if it is there, else the first
+/// that is not a system "Through" port. A port another input uses (`avoided`) is never taken.
+fn pick_port(names: &[String], preferred: Option<&str>, avoided: Option<&str>) -> Option<usize> {
+    let usable = |name: &str| !name.is_empty() && avoided != Some(name);
+    preferred
+        .and_then(|want| names.iter().position(|n| n == want && usable(n)))
+        .or_else(|| {
+            names
+                .iter()
+                .position(|n| !n.to_lowercase().contains("through") && usable(n))
+        })
 }
 
 /// The note message in a raw MIDI message, if it is one (Note On with velocity 0 is a Note
@@ -49,6 +64,7 @@ impl MidiIn {
             connection: None,
             port: None,
             avoided: None,
+            preferred: None,
             tx,
             rx,
             last_try: None,
@@ -78,20 +94,35 @@ impl MidiIn {
         self.last_try = None;
     }
 
+    /// Asks for the port named `name` (or any keyboard again with `None`): a connection to
+    /// another port is closed, and the wanted one is opened as soon as it is there.
+    pub fn prefer(&mut self, name: Option<&str>) {
+        if self.preferred.as_deref() == name {
+            return;
+        }
+        self.preferred = name.map(str::to_string);
+        if self.preferred.is_some() && self.port != self.preferred {
+            self.connection = None;
+            self.port = None;
+        }
+        self.last_try = None;
+    }
+
     fn connect(&mut self) {
         self.last_try = Some(Instant::now());
         let Ok(input) = MidiInput::new("Pro Wave") else {
             return;
         };
         let ports = input.ports();
-        let picked = ports.iter().find_map(|port| {
-            let name = input.port_name(port).ok()?;
-            (!name.to_lowercase().contains("through") && self.avoided.as_deref() != Some(&name))
-                .then_some((port, name))
-        });
-        let Some((port, name)) = picked else {
+        let names: Vec<String> = ports
+            .iter()
+            .map(|p| input.port_name(p).unwrap_or_default())
+            .collect();
+        let Some(index) = pick_port(&names, self.preferred.as_deref(), self.avoided.as_deref())
+        else {
             return;
         };
+        let (port, name) = (&ports[index], names[index].clone());
         let tx = self.tx.clone();
         match input.connect(
             port,
@@ -162,5 +193,21 @@ mod tests {
         assert_eq!(parse(&[0x90, 60]), None, "cut short");
         assert_eq!(parse(&[0x90, 200, 100]), None, "pitch out of range");
         assert_eq!(parse(&[]), None);
+    }
+
+    #[test]
+    fn the_wanted_port_wins_when_it_is_there() {
+        let names: Vec<String> = ["Midi Through", "Keys A", "Keys B"]
+            .map(String::from)
+            .to_vec();
+        // Nothing asked for: the first one that is not the system's Through port.
+        assert_eq!(pick_port(&names, None, None), Some(1));
+        assert_eq!(pick_port(&names, Some("Keys B"), None), Some(2));
+        // The wanted port is gone: any keyboard does.
+        assert_eq!(pick_port(&names, Some("Keys C"), None), Some(1));
+        // A port another input uses is left alone, even when it is the wanted one.
+        assert_eq!(pick_port(&names, Some("Keys B"), Some("Keys B")), Some(1));
+        assert_eq!(pick_port(&names, None, Some("Keys A")), Some(2));
+        assert_eq!(pick_port(&[], Some("Keys A"), None), None);
     }
 }

@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = カウントインがオンのとき、録音は 1 小節のクリックの後に始まります。
 Capture Recording turns what you just played on a MIDI keyboard into a region. = 録音をキャプチャは、MIDI キーボードで弾いたばかりの演奏をリージョンにします。
 
+General = 一般
+Synchronization = 同期
+Metronome = メトロノーム
+Recording = 録音
+Tuning = チューニング
+Project Name = プロジェクト名
+Click Volume = クリック音量
+Accent First Beat of Each Bar = 各小節の1拍目を強調
+Count-in Bars = カウントインの小節数
+Reference Pitch (A4) = 基準ピッチ（A4）
+MIDI Input = MIDI入力
+Automatic = 自動
+Output Device: {} = 出力デバイス：{}
+Sample Rate: {} Hz = サンプルレート：{} Hz
+Inputs are chosen with the Input slot of each audio track. = 入力は各オーディオトラックの入力スロットで選択します。
+Count-in = カウントイン

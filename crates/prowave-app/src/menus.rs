@@ -5,6 +5,7 @@
 use crate::file_commands::FileCmd;
 use crate::i18n::{self, tr, trf, Lang};
 use crate::model::{Project, TrackKind};
+use crate::project_settings::SettingsTab;
 use crate::undo::UndoCmd;
 use crate::Bottom;
 use egui::{pos2, vec2, Align2, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke};
@@ -438,6 +439,9 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
     if FileCmd::from_menu(label).is_some() || is_checkable(label) && !CHECKABLE.contains(&label) {
         return true;
     }
+    if SettingsTab::from_menu(label).is_some() {
+        return true;
+    }
     match label {
         "Undo" => s.can_undo,
         "Redo" => s.can_redo,
@@ -552,6 +556,9 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         return;
     }
     match label {
+        _ if SettingsTab::from_menu(label).is_some() => {
+            s.settings_tab = SettingsTab::from_menu(label)
+        }
         "Show Mixer" | "Mixer" => {
             s.show_mixer = !(s.show_mixer && s.bottom == Bottom::Mixer);
             s.bottom = Bottom::Mixer;
@@ -1021,7 +1028,12 @@ mod tests {
                 p.position_beats,
                 p.recording,
                 (s.show_mixer, s.show_library, s.show_inspector, s.show_lists),
-                (s.update_check, s.update_auto, s.show_midi_fx),
+                (
+                    s.update_check,
+                    s.update_auto,
+                    s.show_midi_fx,
+                    s.settings_tab
+                ),
                 (
                     s.capture_cmd,
                     s.show_quick_help,

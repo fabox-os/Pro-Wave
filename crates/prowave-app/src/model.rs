@@ -155,6 +155,16 @@ pub struct RegionParams {
     pub crossfade: bool,
 }
 
+/// Project Settings > Metronome: the click's level range in dB, and where it starts (the
+/// engine's own, about -10.5 dB).
+pub const MIN_CLICK_DB: f32 = -60.0;
+pub const DEFAULT_CLICK_DB: f32 = -10.5;
+/// Project Settings > Recording: the most bars of count-in.
+pub const MAX_COUNT_IN_BARS: u8 = 4;
+/// Project Settings > Tuning: Logic's range for A4 in Hz.
+pub const MIN_TUNING_HZ: f32 = 427.0;
+pub const MAX_TUNING_HZ: f32 = 453.0;
+
 /// Logic Pro's region gain range, in dB.
 pub const MIN_REGION_GAIN: f32 = -96.0;
 pub const MAX_REGION_GAIN: f32 = 24.0;
@@ -722,6 +732,16 @@ pub struct Project {
     pub mtc_out: Option<String>,
     /// MIDI input port (by name) the transport chases MIDI Time Code from.
     pub mtc_in: Option<String>,
+    /// Metronome click level in dB (Project Settings > Metronome), `MIN_CLICK_DB..=0`.
+    pub click_volume_db: f32,
+    /// The first beat of each bar clicks higher.
+    pub click_accent: bool,
+    /// Bars of count-in before recording, `1..=MAX_COUNT_IN_BARS`.
+    pub count_in_bars: u8,
+    /// Frequency of A4 in Hz (Project Settings > Tuning), Logic's 427 to 453.
+    pub tuning_hz: f32,
+    /// MIDI input port (by name) that plays live notes; `None` picks the first keyboard.
+    pub midi_in_port: Option<String>,
     pub key: &'static str,
     pub tracks: Vec<Track>,
     pub playing: bool,
@@ -961,6 +981,11 @@ impl Project {
             smpte_start: [1, 0, 0, 0],
             mtc_out: None,
             mtc_in: None,
+            click_volume_db: DEFAULT_CLICK_DB,
+            click_accent: true,
+            count_in_bars: 1,
+            tuning_hz: 440.0,
+            midi_in_port: None,
         }
     }
 

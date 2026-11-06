@@ -711,3 +711,19 @@ The I button lets you hear an audio track's input. Use headphones to avoid feedb
 With Count-in on, recording starts after one bar of clicks. = Kun sisäänlaskenta on päällä, äänitys alkaa yhden tahdin klikkien jälkeen.
 Capture Recording turns what you just played on a MIDI keyboard into a region. = Kaappaa äänitys tekee alueen siitä, mitä juuri soitit MIDI-koskettimilla.
 
+General = Yleiset
+Synchronization = Synkronointi
+Metronome = Metronomi
+Recording = Äänitys
+Tuning = Viritys
+Project Name = Projektin nimi
+Click Volume = Napsautuksen äänenvoimakkuus
+Accent First Beat of Each Bar = Korosta jokaisen tahdin ensimmäistä iskua
+Count-in Bars = Sisäänlaskutahdit
+Reference Pitch (A4) = Vertailuäänen korkeus (A4)
+MIDI Input = MIDI-sisääntulo
+Automatic = Automaattinen
+Output Device: {} = Ulostulolaite: {}
+Sample Rate: {} Hz = Näytteenottotaajuus: {} Hz
+Inputs are chosen with the Input slot of each audio track. = Sisääntulot valitaan kunkin äänikanavan Input-paikasta.
+Count-in = Sisäänlasku
