@@ -3,6 +3,12 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Smoother with big projects:** the Piano Roll no longer slows down with a large selection (it searched the whole selection for every note on every frame), and the Tracks area draws one mark for short notes that fall on the same pixel and pitch. In a test with 24 tracks of 20,000 notes per region, a frame took 7.9 ms instead of 12.6 ms. New: `PROWAVE_BENCH_NOTES=n` with `--bench` to measure dense regions.
+
 ## 0.2.2
 
 Tested on Ubuntu 26.04.1 LTS (x86-64, kernel 7.0.0-42): the full project check (formatting,

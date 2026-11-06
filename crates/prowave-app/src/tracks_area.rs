@@ -2041,10 +2041,22 @@ fn draw_region(
         // Logic keeps a fixed, small step per semitone and centres the notes in the region.
         let step = (2.0f32).min((inner.height() - 4.0) / (hi - lo).max(1.0));
         let mid = (lo + hi) / 2.0;
+        // Short notes in the same pixel column and on the same pitch look like one, so a dense
+        // region draws one mark for them, not thousands.
+        let columns = inner.width().max(1.0).ceil() as usize + 1;
+        let mut seen = vec![0u128; columns];
         for n in &region.notes {
             let nx = full.left() + n.start * beat_px;
             if nx > inner.right() || nx + n.len * beat_px < inner.left() {
                 continue;
+            }
+            if n.len * beat_px < 2.0 {
+                let column = ((nx - inner.left()).max(0.0) as usize).min(columns - 1);
+                let bit = 1u128 << (n.pitch & 127);
+                if seen[column] & bit != 0 {
+                    continue;
+                }
+                seen[column] |= bit;
             }
             let ny = inner.center().y - (n.pitch as f32 - mid) * step;
             let nr = Rect::from_min_max(

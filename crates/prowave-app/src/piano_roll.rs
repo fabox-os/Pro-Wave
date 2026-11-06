@@ -1457,6 +1457,8 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
             );
         }
     }
+    // A flag per note, so drawing a big selection does not search the list for every note.
+    let is_selected = selection_flags(&v.selected, notes.len());
     for (i, n) in notes.iter().enumerate() {
         let r = Rect::from_min_size(
             pos2(x_of(n.start), y_of(n.pitch as i32) + 1.0),
@@ -1469,7 +1471,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
         {
             continue;
         }
-        let selected = v.selected.contains(&i);
+        let selected = is_selected[i];
         // Logic draws a note with a light edge of its velocity colour around a deeper body.
         let color = velocity_color(n.vel);
         let (fill, edge) = if selected {
@@ -1521,13 +1523,14 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
             Stroke::new(1.0, Color32::from_gray(0x44)),
         );
     }
+    let vel_selected = selection_flags(&v.selected, p.tracks[ti].regions[ri].notes.len());
     for (i, n) in p.tracks[ti].regions[ri].notes.iter().enumerate() {
         let x = x_of(n.start);
         if x < vel_rect.left() - 4.0 || x > vel_rect.right() + 4.0 {
             continue;
         }
         let top = vel_rect.bottom() - n.vel as f32 / 127.0 * (vel_rect.height() - 6.0);
-        let col = if v.selected.contains(&i) {
+        let col = if vel_selected[i] {
             NOTE_SEL
         } else {
             Color32::from_rgb(115, 197, 113)
@@ -1638,8 +1641,26 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
     }
 }
 
+/// One flag per note of a region of `len` notes: whether its index is in `selected`. Indexes
+/// past the end are ignored.
+fn selection_flags(selected: &[usize], len: usize) -> Vec<bool> {
+    let mut flags = vec![false; len];
+    for &i in selected {
+        if let Some(f) = flags.get_mut(i) {
+            *f = true;
+        }
+    }
+    flags
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selection_flags_mark_the_selected_notes_and_ignore_stale_indexes() {
+        assert_eq!(selection_flags(&[0, 2, 9], 4), [true, false, true, false]);
+        assert_eq!(selection_flags(&[], 2), [false, false]);
+    }
+
     use super::*;
 
     #[test]

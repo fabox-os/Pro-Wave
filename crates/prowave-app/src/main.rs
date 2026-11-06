@@ -1149,6 +1149,15 @@ fn main() -> eframe::Result {
                 .flatten()
             {
                 app.project = bench::many_tracks(n.clamp(1, 1000));
+                // `PROWAVE_BENCH_NOTES=n`: n notes in every MIDI region; the piano roll opens
+                // on the first track that has one.
+                if let Some(notes) = std::env::var("PROWAVE_BENCH_NOTES")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                {
+                    bench::fill_notes(&mut app.project, notes.min(100_000));
+                    app.ui.bottom = Bottom::PianoRoll;
+                }
                 app.saved = file_commands::content(&app.project);
                 app.history.reset(&app.project);
             }

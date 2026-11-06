@@ -85,6 +85,27 @@ pub fn many_tracks(n: usize) -> Project {
     p
 }
 
+/// Puts `n` notes in every MIDI region, spread over its length, to see how the interface
+/// copes with dense regions (`PROWAVE_BENCH_NOTES`).
+pub fn fill_notes(p: &mut Project, n: usize) {
+    for t in &mut p.tracks {
+        for r in &mut t.regions {
+            if r.audio.is_some() || r.generated.is_some() || r.folder.is_some() {
+                continue;
+            }
+            let span = (r.len_bars * 4.0).max(1.0);
+            r.notes = (0..n)
+                .map(|i| crate::model::Note {
+                    start: span * i as f32 / n as f32,
+                    len: (span / n as f32).max(0.05),
+                    pitch: 30 + (i * 7 % 60) as u8,
+                    vel: 90,
+                })
+                .collect();
+        }
+    }
+}
+
 /// Marks the start of `main`; `startup_ms` counts from here.
 pub fn mark_start() {
     let _ = START.set(Instant::now());
