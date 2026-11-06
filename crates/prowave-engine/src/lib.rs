@@ -14,6 +14,7 @@ mod analysis;
 #[cfg(not(target_arch = "wasm32"))]
 mod capture;
 mod clock;
+mod convolver;
 mod core;
 mod disk;
 mod flex;
@@ -38,6 +39,10 @@ pub use crate::capture::{
     input_devices, Capture, CaptureError, InputInfo, InputSource, Recorded, MAX_INPUT_CHANNELS,
 };
 pub use crate::clock::{song_position, tick_index, ClockMessage, TICKS_PER_BEAT};
+pub use crate::convolver::{
+    ir_preview, ir_samples, sd, volume_env, Convolver, BLOCK as CONVOLVER_BLOCK, IR_NAMES,
+    MAX_IR_SECONDS,
+};
 pub use crate::core::{
     dsp_load, AudioClip, ClipEdit, Command, ControlEvent, EngineCore, EngineState, FadeCurve,
     Garbage, MidiOutEvent, NoteEvent, Shared, Song, StateReader, TrackMix, MAX_TRACKS,

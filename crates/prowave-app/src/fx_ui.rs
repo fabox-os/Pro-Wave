@@ -19,10 +19,10 @@ const AMP_W: f32 = 470.0;
 const AMP_H: f32 = 146.0;
 
 /// A slider the user moved: parameter number, new value, and whether the gesture ended.
-struct Edit {
-    param: usize,
-    value: f32,
-    ended: bool,
+pub(crate) struct Edit {
+    pub(crate) param: usize,
+    pub(crate) value: f32,
+    pub(crate) ended: bool,
 }
 
 /// Draws the effect window for the insert the Mixer opened, if any.
@@ -34,6 +34,20 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
         s.mixer.fx_window = None;
         return;
     };
+    if insert.kind == FxKind::Reverb {
+        #[allow(deprecated)]
+        let id = egui::Id::new(("space_designer", ti, slot));
+        let (edited, edits, open) = crate::space_designer_ui::window(
+            ctx,
+            &insert,
+            &p.tracks[ti],
+            slot,
+            p.position_beats,
+            id,
+        );
+        finish(p, s, ti, slot, insert, edited, edits, open);
+        return;
+    }
     let mut open = true;
     let title = format!("{} · {}", p.tracks[ti].name, insert.name());
     let reduction = meters.reduction.get(ti).copied().unwrap_or(0.0);
@@ -121,6 +135,23 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
                     }
                 });
         });
+    finish(p, s, ti, slot, insert, edited, edits, open);
+}
+
+/// Puts an edited effect and the setting moves of its window into the project (and the
+/// automation), and closes the window when it was closed.
+#[allow(clippy::too_many_arguments)]
+fn finish(
+    p: &mut Project,
+    s: &mut UiState,
+    ti: usize,
+    slot: usize,
+    insert: Insert,
+    mut edited: Insert,
+    edits: Vec<Edit>,
+    open: bool,
+) {
+    let beat = p.position_beats;
     if edited != insert {
         edited.params = edited.kind.clamp_params(edited.params);
         p.tracks[ti].inserts[slot] = edited;
@@ -486,6 +517,21 @@ mod tests {
         p.tracks[0].inserts.clear();
         h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
         assert_eq!(s.mixer.fx_window, None);
+    }
+
+    #[test]
+    fn the_space_designer_window_draws_and_changes_nothing_by_looking() {
+        let mut p = Project::empty();
+        p.tracks[0].inserts = vec![Insert::new(FxKind::Reverb)];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..4 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)));
+        assert_eq!(p.tracks[0].inserts[0], Insert::new(FxKind::Reverb));
     }
 
     #[test]

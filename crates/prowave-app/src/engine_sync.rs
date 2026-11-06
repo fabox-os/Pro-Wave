@@ -63,12 +63,53 @@ pub struct EngineSync {
     layout: Option<AudioLayout>,
     /// The effects, routes and automation the engine has, by track.
     fx: Vec<Vec<Insert>>,
+    /// Space Designer responses being made off the UI thread, by track and slot.
+    irs: std::collections::HashMap<(usize, usize), IrJob>,
     routes: Vec<Route>,
     /// The compensation delays the engine has, by track.
     pdc: Vec<(usize, usize)>,
     automation: Vec<AutoLane>,
     /// A command was rejected during the last `sync`.
     retry: bool,
+}
+
+/// The settings that change the impulse response of a Space Designer (not Predelay, Dry, Wet,
+/// Input or Output EQ, which the audio thread applies as they move).
+fn ir_key(params: &[f32; prowave_engine::MAX_FX_PARAMS]) -> Vec<u32> {
+    use prowave_engine::sd;
+    [
+        sd::LENGTH,
+        sd::SIZE,
+        sd::XOVER,
+        sd::LO_SPREAD,
+        sd::HI_SPREAD,
+        sd::INIT_LEVEL,
+        sd::ATTACK,
+        sd::DECAY,
+        sd::CURVE,
+        sd::END_LEVEL,
+        sd::IR_OFFSET,
+        sd::REVERSE,
+        sd::QUALITY,
+        sd::FILTER_ENV,
+        sd::VOLUME_ENV,
+        sd::IR_TYPE,
+        sd::IR_INDEX,
+        sd::BRIGHTNESS,
+    ]
+    .iter()
+    .map(|&i| params[i].to_bits())
+    .collect()
+}
+
+/// A Space Designer response being made on a background thread. Settings that change while it
+/// runs wait in `next`; only the newest is made after it, so dragging a control does not queue
+/// up work.
+struct IrJob {
+    running: Option<std::sync::mpsc::Receiver<Box<prowave_engine::Convolver>>>,
+    next: Option<[f32; prowave_engine::MAX_FX_PARAMS]>,
+    /// A finished response the engine did not take yet.
+    ready: Option<Box<prowave_engine::Convolver>>,
 }
 
 /// Play, or with Record and Count-in on, the bars of clicks set in Project Settings >
@@ -503,6 +544,7 @@ impl EngineSync {
             song_rev: None,
             layout: None,
             fx: Vec::new(),
+            irs: std::collections::HashMap::new(),
             routes: Vec::new(),
             pdc: Vec::new(),
             automation: Vec::new(),
@@ -757,6 +799,7 @@ impl EngineSync {
                     return;
                 }
                 self.fx[i] = want.to_vec();
+                self.irs.retain(|(t, _), _| *t != i);
             } else {
                 for (slot, (have, w)) in self.fx[i].iter_mut().zip(want).enumerate() {
                     if have == w {
@@ -771,6 +814,16 @@ impl EngineSync {
                     if !self.engine.send(cmd) {
                         self.retry = true;
                         return;
+                    }
+                    if w.kind == prowave_engine::FxKind::Reverb
+                        && ir_key(&have.params) != ir_key(&w.params)
+                    {
+                        let job = self.irs.entry((i, slot)).or_insert(IrJob {
+                            running: None,
+                            next: None,
+                            ready: None,
+                        });
+                        job.next = Some(w.params);
                     }
                     *have = *w;
                 }
@@ -814,12 +867,74 @@ impl EngineSync {
                 self.pdc[i] = (0, 0);
             }
         }
+        self.run_ir_jobs(sr);
         if !automation_unchanged(p, &self.automation) {
             let lanes = automation_lanes(p);
             if self.send(Command::SetAutomation(lanes.clone())) {
                 self.automation = lanes;
             }
         }
+    }
+
+    /// Starts the response for the newest Space Designer settings, hands finished ones to the
+    /// engine, and keeps the screen redrawing while any is being made.
+    fn run_ir_jobs(&mut self, sr: f32) {
+        let keys: Vec<(usize, usize)> = self.irs.keys().copied().collect();
+        for key in keys {
+            let still_there = self
+                .fx
+                .get(key.0)
+                .and_then(|f| f.get(key.1))
+                .is_some_and(|i| i.kind == prowave_engine::FxKind::Reverb);
+            let Some(job) = self.irs.get_mut(&key) else {
+                continue;
+            };
+            if !still_there {
+                self.irs.remove(&key);
+                continue;
+            }
+            if let Some(rx) = &job.running {
+                match rx.try_recv() {
+                    Ok(conv) => {
+                        job.running = None;
+                        job.ready = Some(conv);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => job.running = None,
+                }
+            }
+            if let Some(conv) = job.ready.take() {
+                let cmd = Command::SetConvolver {
+                    track: key.0 as u16,
+                    slot: key.1 as u8,
+                    conv,
+                };
+                // A rejected command is dropped with its response: the next one replaces it.
+                if !self.engine.send(cmd) {
+                    self.retry = true;
+                }
+            }
+            let Some(job) = self.irs.get_mut(&key) else {
+                continue;
+            };
+            if job.running.is_none() {
+                if let Some(params) = job.next.take() {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let spawned = std::thread::Builder::new()
+                        .name("space-designer-ir".into())
+                        .spawn(move || {
+                            let _ = tx
+                                .send(Box::new(prowave_engine::Convolver::for_params(&params, sr)));
+                        });
+                    job.running = spawned.is_ok().then_some(rx);
+                }
+            }
+            if job.running.is_some() || job.next.is_some() {
+                self.retry = true;
+            }
+        }
+        self.irs
+            .retain(|_, j| j.running.is_some() || j.next.is_some() || j.ready.is_some());
     }
 
     /// `Engine::send`, remembering a rejection so the caller keeps redrawing to retry.

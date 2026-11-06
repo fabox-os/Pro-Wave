@@ -441,6 +441,13 @@ pub enum Command {
         track: u16,
         chain: Box<Chain>,
     },
+    /// Space Designer: a new impulse response for the effect in `slot` of `track` (made with
+    /// [`Convolver::for_params`]); the old one goes back through the garbage queue.
+    SetConvolver {
+        track: u16,
+        slot: u8,
+        conv: Box<crate::convolver::Convolver>,
+    },
     /// New parameters and bypass for effect `slot` of a strip's chain (no allocation, so
     /// knobs can move while it plays). Ignored when the slot does not exist.
     SetFx {
@@ -483,6 +490,7 @@ impl Command {
                 | Self::SetControls(_)
                 | Self::SetTempoMap(_)
                 | Self::SetInserts { .. }
+                | Self::SetConvolver { .. }
                 | Self::SetPdc { .. }
                 | Self::SetAutomation(_)
                 | Self::SetInput(_)
@@ -508,6 +516,7 @@ pub enum Garbage {
     Controls(Vec<ControlEvent>),
     TempoMap(Box<TempoMap>),
     Chain(Box<Chain>),
+    Convolver(Box<crate::convolver::Convolver>),
     Pdc(Box<Pdc>),
     Automation(Vec<AutoLane>),
     Input(Box<InputFeed>),
@@ -1605,6 +1614,18 @@ impl EngineCore {
                     } else {
                         let _ = self.trash.push(Garbage::Pdc(pdc));
                     }
+                }
+                Command::SetConvolver { track, slot, conv } => {
+                    let fx = self
+                        .chains
+                        .get_mut(track as usize)
+                        .and_then(|c| c.as_mut())
+                        .and_then(|c| c.fx.get_mut(slot as usize));
+                    let old = match fx {
+                        Some(fx) => fx.set_convolver(conv),
+                        None => conv,
+                    };
+                    let _ = self.trash.push(Garbage::Convolver(old));
                 }
                 Command::SetFx {
                     track,

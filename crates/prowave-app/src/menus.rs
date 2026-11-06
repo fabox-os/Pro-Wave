@@ -94,6 +94,7 @@ const SUBMENUS: &[(&str, &[&str])] = &[
     ),
     ("Share", &["Song to File…", "Song to Mobile Device…"]),
     ("Language", LANGUAGE),
+    ("Space Designer", &["Show"]),
 ];
 
 /// What is in the submenu opened by `label`, if it opens one.
@@ -210,6 +211,8 @@ const MIX: &[&str] = &[
     "Mastering",
     "Create Mastering Track",
     "Stem Splitter…",
+    "-",
+    "Space Designer",
     "-",
     "Bounce",
     "Export",
@@ -453,6 +456,15 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             p.tracks.get(p.selected_track).is_some()
         }
         "Configure Track Header…" | "Show Master Track" => true,
+        // Opens the Space Designer on the selected track (adding one when it has none).
+        "Show" => p.tracks.get(p.selected_track).is_some_and(|t| {
+            t.kind != TrackKind::Output
+                && (t.kind != TrackKind::Vca)
+                && (t.inserts.len() < prowave_engine::MAX_INSERTS
+                    || t.inserts
+                        .iter()
+                        .any(|i| i.kind == prowave_engine::FxKind::Reverb))
+        }),
         "Paste" => crate::region_edit::can_paste(p, &s.region_clip),
         "Select All" => p.tracks.iter().any(|t| !t.regions.is_empty()),
         "Join" => crate::region_edit::can_join(p, &s.tracks),
@@ -639,6 +651,26 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             p.add_track(TrackKind::ExternalMidi);
         }
         "MIDI FX…" => s.show_midi_fx = !s.show_midi_fx,
+        // Mix > Space Designer > Show: the window of the selected track's Space Designer.
+        "Show" => {
+            let ti = p.selected_track;
+            if let Some(t) = p.tracks.get_mut(ti) {
+                let slot = t
+                    .inserts
+                    .iter()
+                    .position(|i| i.kind == prowave_engine::FxKind::Reverb)
+                    .or_else(|| {
+                        (t.inserts.len() < prowave_engine::MAX_INSERTS).then(|| {
+                            t.inserts
+                                .push(crate::model::Insert::new(prowave_engine::FxKind::Reverb));
+                            t.inserts.len() - 1
+                        })
+                    });
+                if let Some(slot) = slot {
+                    s.mixer.fx_window = Some((ti, slot));
+                }
+            }
+        }
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
         "Selection as MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Export),
         "New Pattern Region" | "New Drummer Region" => {

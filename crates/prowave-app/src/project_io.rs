@@ -197,6 +197,15 @@ fn inserts_from_doc(t: &prowave_project::TrackDoc) -> Vec<crate::model::Insert> 
             for (k, slot) in params.iter_mut().enumerate().skip(d.params.len()) {
                 *slot = kind.defaults()[k];
             }
+            // Space D of earlier versions was a four-setting reverb (Size, Damping, Width, Mix):
+            // it opens as Space Designer with the same balance of dry and reverb.
+            if kind == prowave_engine::FxKind::Reverb && d.params.len() <= 4 {
+                params = kind.defaults();
+                let mix = d.params.get(3).copied().unwrap_or(0.3).clamp(0.0, 1.0);
+                let db = |x: f32| 20.0 * x.max(1e-4).log10();
+                params[prowave_engine::sd::DRY] = db(1.0 - mix);
+                params[prowave_engine::sd::WET] = db(mix);
+            }
             Some(crate::model::Insert {
                 kind,
                 bypass: d.bypass,

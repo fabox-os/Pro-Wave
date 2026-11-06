@@ -3,6 +3,16 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Space D is now Logic's Space Designer:** a convolution reverb with its own window (light grey, dark top bar, Sampled IR and Synthesized IR tabs, the response drawn with its Volume Envelope, and the orange controls below). Open it from the Audio FX slot or with **Mix > Space Designer > Show**. It has six built-in impulse responses (03.0s Long Reverb is the default), Volume Env and Filter Env, Init Level, Attack, Decay with LIN or EXP, End Level (drag the three blue handles or the values), IR Offset, Reverse, Quality, Predelay, Length, Size, X-Over with Lo and Hi Spread, Input, Dry and Wet, Output EQ, Compare, Copy, Paste, Undo, Redo and View (75 to 150 %). The reverb reports its 512-sample delay for compensation. Projects with the old four-slider Space D open with the same balance of dry and reverb.
+
+### Still to do or test
+
+❌ Space Designer: loading your own impulse response files; the Synthesized IR tab has one control (Brightness, set through Length for its decay) and the Filter Env is a fixed sweep; tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs and the silent tail, it does not run at half the sample rate
+
 ## 0.2.2
 
 Tested on Ubuntu 26.04.1 LTS (x86-64, kernel 7.0.0-42): the full project check (formatting,
