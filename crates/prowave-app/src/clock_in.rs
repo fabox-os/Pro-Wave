@@ -4,6 +4,10 @@
 
 use midir::{MidiInput, MidiInputConnection};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::time::{Duration, Instant};
+
+/// How often to look again for a followed port that is not there (listing the ports is not free).
+const RETRY: Duration = Duration::from_secs(3);
 
 /// A message as the port delivered it: its arrival time (µs) and its bytes (at most three; a
 /// longer one, such as System Exclusive, is not a clock message and is dropped).
@@ -37,6 +41,9 @@ pub fn ports() -> Vec<String> {
 pub struct ClockIn {
     connection: Option<MidiInputConnection<()>>,
     port: Option<String>,
+    /// The port asked for, and when the last look for it was made.
+    wanted: Option<String>,
+    last_try: Option<Instant>,
     tx: SyncSender<Arrival>,
     rx: Receiver<Arrival>,
 }
@@ -48,6 +55,8 @@ impl Default for ClockIn {
         Self {
             connection: None,
             port: None,
+            wanted: None,
+            last_try: None,
             tx,
             rx,
         }
@@ -58,8 +67,17 @@ impl ClockIn {
     /// Follows the port named `want`, or nothing (`None`). A change closes the old port.
     pub fn sync(&mut self, want: Option<&str>) {
         if self.port.as_deref() == want {
+            self.wanted = want.map(str::to_string);
             return;
         }
+        // A new port is looked for at once; a port that is not there is looked for again only
+        // every few seconds.
+        let changed = self.wanted.as_deref() != want;
+        if !changed && self.last_try.is_some_and(|t| t.elapsed() < RETRY) {
+            return;
+        }
+        self.wanted = want.map(str::to_string);
+        self.last_try = Some(Instant::now());
         self.connection = None;
         self.port = None;
         let Some(name) = want else {
@@ -156,5 +174,19 @@ mod tests {
             got.windows(2).all(|w| w[0].at_us <= w[1].at_us),
             "time order"
         );
+    }
+
+    /// A followed port that is not there is looked for once, and again only after the retry
+    /// time: the port list is not asked every frame.
+    #[test]
+    fn a_missing_clock_port_is_looked_for_at_most_every_few_seconds() {
+        let mut c = ClockIn::default();
+        c.sync(Some("No Such Clock Port 5b1e"));
+        let first = c.last_try;
+        assert!(first.is_some(), "the first look is made at once");
+        c.sync(Some("No Such Clock Port 5b1e"));
+        assert_eq!(c.last_try, first, "no second look within the retry time");
+        c.sync(None);
+        assert!(c.wanted.is_none() && c.port.is_none());
     }
 }

@@ -357,6 +357,15 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    beats); the transport's own Play and Stop buttons still work next to it; a clock output on the same
    device would echo back; and testing with a real hardware clock source (not possible in this sandbox).
 
+✅ Done 2026-11-06: event list fixes and SysEx entry. The list shows pitch bend with its full 14-bit
+   value, channel pressure as Aftertouch, and each System Exclusive message as one row with its
+   bytes in hex (it used to show a bend clamped to one byte and every SysEx byte as its own row).
+   Event list > SysEx… types a message in hex (`sysex.rs`) and puts it in the selected MIDI region at
+   the playhead (or the region under the playhead). Fixes: a followed clock port that is missing is
+   looked for every three seconds, not on every frame; and clearing the followed port no longer keeps
+   its name for the next choice. Not done: SysEx for audio, Pattern and Drummer regions; the list's
+   other columns for SysEx (the Length column is empty).
+
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.

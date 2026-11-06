@@ -14,6 +14,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **MIDI outputs:** the MIDI Clock can be sent to a port (Synchronization > Send MIDI Clock). An external MIDI track sends its program and bank when it is routed (Inspector: MIDI Program, MIDI Bank). Project Settings > MIDI has Send MIDI Panic. A note that was sounding when its track was moved to another port is released on the old port now, so it no longer stays on.
 ✅ **Pitch bend, channel pressure and SysEx:** a MIDI keyboard's pitch bend and channel pressure are recorded into the region. MIDI files keep them and their SysEx messages, both ways. External MIDI tracks send them.
 ✅ **Follow MIDI Clock:** Synchronization > Follow MIDI Clock makes the song start, continue, stop and jump where a MIDI clock input says, and its tempo is the clock's.
+✅ **Event list:** pitch bend shows its full value and each SysEx message is one row. **SysEx…** in the event list adds a message typed in hex at the playhead.
+✅ **Fixes:** a followed MIDI clock port that is missing is looked for every few seconds, not every frame.
 ✅ **Select All and Join:** Edit > Select All selects every region; Shift or Command click adds or removes one, and dragging moves the whole selection. Join merges the selected MIDI regions of one track into one region, keeping each note where it was.
 ✅ **Track menu:** Rename Track, Assign Track Color, Assign Track Icon and Configure Track Header now work. Configure Track Header (also in the Tracks area's View menu) hides parts of every track header. Show Master Track adds a Master strip with the master fader under the tracks. All saved with the project.
 
