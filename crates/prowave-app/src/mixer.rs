@@ -116,6 +116,11 @@ pub struct Meters {
     pub tracks: Vec<(f32, f32)>,
     /// Gain reduction in dB of each track's compressors.
     pub reduction: Vec<f32>,
+    /// Level going into each track's Space Designer (linear).
+    pub fx_input: Vec<f32>,
+    /// Gain reduction in dB and Space Designer input level of the Stereo Out strip's effects.
+    pub master_reduction: f32,
+    pub master_fx_input: f32,
     pub master: (f32, f32),
 }
 
@@ -607,7 +612,7 @@ pub fn fx_rows_for(p: &Project, keys: &[StripKey]) -> usize {
     keys.iter()
         .map(|k| match k {
             StripKey::Track(i) => p.tracks.get(*i).map_or(0, |t| t.inserts.len()),
-            StripKey::StereoOut => 2,
+            StripKey::StereoOut => p.master_inserts.len(),
             StripKey::Master => 0,
         })
         .max()
@@ -768,6 +773,19 @@ enum InsertAct {
     Move(isize),
 }
 
+/// The number the effect window and the Audio FX menus use for the Stereo Out strip (no track
+/// has it): its effects are `Project::master_inserts`.
+pub const MASTER_STRIP: usize = usize::MAX;
+
+/// The effects of strip `i` (a track, or [`MASTER_STRIP`]).
+fn strip_inserts(p: &Project, i: usize) -> &[Insert] {
+    if i == MASTER_STRIP {
+        &p.master_inserts
+    } else {
+        p.tracks.get(i).map_or(&[], |t| &t.inserts)
+    }
+}
+
 /// One Audio FX slot of track `i`: the effect in it (blue, grey when bypassed or silenced),
 /// or the empty slot after the last. Click for the menu, double-click for the effect's window.
 #[allow(clippy::too_many_arguments)]
@@ -782,8 +800,8 @@ fn insert_slot(
     uid: egui::Id,
     inactive: bool,
 ) {
-    let have = p.tracks[i].inserts.get(k).copied();
-    let count = p.tracks[i].inserts.len();
+    let have = strip_inserts(p, i).get(k).copied();
+    let count = strip_inserts(p, i).len();
     match have {
         Some(fx) => {
             let off = inactive || fx.bypass;
@@ -858,10 +876,15 @@ fn insert_slot(
 /// Carries out what the user chose in the menu of Audio FX slot `k` of track `i`. Choices that
 /// do not fit (a slot that is not there) do nothing.
 fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: InsertAct) {
-    let Some(t) = p.tracks.get_mut(i) else {
-        return;
+    // The Stereo Out strip has effects but no automation lanes.
+    let (inserts, mut auto) = if i == MASTER_STRIP {
+        (&mut p.master_inserts, None)
+    } else {
+        let Some(t) = p.tracks.get_mut(i) else {
+            return;
+        };
+        (&mut t.inserts, Some(&mut t.auto))
     };
-    let inserts = &mut t.inserts;
     let filled = k < inserts.len();
     match act {
         InsertAct::Add(kind) => {
@@ -872,11 +895,15 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
         }
         InsertAct::Replace(kind) if filled => {
             inserts[k] = Insert::new(kind);
-            t.auto.insert_replaced(k);
+            if let Some(a) = auto.as_mut() {
+                a.insert_replaced(k);
+            }
         }
         InsertAct::Remove if filled => {
             inserts.remove(k);
-            t.auto.insert_removed(k);
+            if let Some(a) = auto.as_mut() {
+                a.insert_removed(k);
+            }
             v.fx_window = match v.fx_window {
                 Some((t, s)) if t == i && s == k => None,
                 Some((t, s)) if t == i && s > k => Some((t, s - 1)),
@@ -892,7 +919,9 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
             }
             let to = to as usize;
             inserts.swap(k, to);
-            t.auto.insert_swapped(k, to);
+            if let Some(a) = auto.as_mut() {
+                a.insert_swapped(k, to);
+            }
             if v.fx_window == Some((i, k)) {
                 v.fx_window = Some((i, to));
             } else if v.fx_window == Some((i, to)) {
@@ -1030,7 +1059,10 @@ pub fn channel_strip(
         StripKey::StereoOut => (
             tr("Stereo Out").to_string(),
             OUT_PURPLE,
-            vec![("Compressor", false), ("MultiMeter", false)],
+            p.master_inserts
+                .iter()
+                .map(|x| (x.name(), x.bypass))
+                .collect(),
             None,
             None,
         ),
@@ -1135,6 +1167,17 @@ pub fn channel_strip(
                 StripKey::Track(i) => {
                     insert_slot(ui, g, rr, p, v, i, k, id(ns, (key, "fx", k)), inactive)
                 }
+                StripKey::StereoOut => insert_slot(
+                    ui,
+                    g,
+                    rr,
+                    p,
+                    v,
+                    MASTER_STRIP,
+                    k,
+                    id(ns, (key, "fx", k)),
+                    inactive,
+                ),
                 _ => match inserts.get(k) {
                     Some((fx, _)) => slot(g, rr, fx, plug, plug_text),
                     None if k == inserts.len() => slot(g, rr, "", SLOT_EMPTY, TEXT),
@@ -2266,6 +2309,57 @@ mod tests {
     }
 
     #[test]
+    fn the_stereo_out_strip_takes_the_audio_fx_menu_like_a_track() {
+        let mut p = Project::empty();
+        let mut v = MixerView::default();
+        apply_insert(
+            &mut p,
+            &mut v,
+            MASTER_STRIP,
+            0,
+            InsertAct::Add(FxKind::Reverb),
+        );
+        apply_insert(
+            &mut p,
+            &mut v,
+            MASTER_STRIP,
+            1,
+            InsertAct::Add(FxKind::Compressor),
+        );
+        assert_eq!(p.master_inserts.len(), 2);
+        assert!(p.tracks[0].inserts.is_empty(), "no track was touched");
+        assert_eq!(
+            v.fx_window,
+            Some((MASTER_STRIP, 1)),
+            "the new effect's window opens"
+        );
+        apply_insert(&mut p, &mut v, MASTER_STRIP, 0, InsertAct::Bypass);
+        assert!(p.master_inserts[0].bypass);
+        apply_insert(&mut p, &mut v, MASTER_STRIP, 0, InsertAct::Move(1));
+        assert_eq!(p.master_inserts[1].kind, FxKind::Reverb);
+        assert_eq!(
+            v.fx_window,
+            Some((MASTER_STRIP, 0)),
+            "the window follows its effect"
+        );
+        apply_insert(
+            &mut p,
+            &mut v,
+            MASTER_STRIP,
+            0,
+            InsertAct::Replace(FxKind::Delay),
+        );
+        assert_eq!(p.master_inserts[0], Insert::new(FxKind::Delay));
+        apply_insert(&mut p, &mut v, MASTER_STRIP, 0, InsertAct::Remove);
+        assert_eq!(p.master_inserts.len(), 1);
+        assert_eq!(
+            fx_rows_for(&p, &[StripKey::StereoOut]),
+            2,
+            "one effect and an empty slot"
+        );
+    }
+
+    #[test]
     fn rows_make_room_for_every_send_and_the_strip_draws_with_all_of_it() {
         let mut p = mixer_project();
         p.tracks[0].sends = vec![
@@ -2296,6 +2390,9 @@ mod tests {
         let meters = Meters {
             tracks: vec![(0.5, 0.4), (0.0, 0.0)],
             reduction: vec![6.0, 0.0],
+            fx_input: vec![],
+            master_reduction: 0.0,
+            master_fx_input: 0.0,
             master: (0.3, 0.3),
         };
         for _ in 0..3 {

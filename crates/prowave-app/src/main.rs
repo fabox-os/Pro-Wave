@@ -50,6 +50,7 @@ mod side_panes;
 mod signature_track;
 mod smart_tempo;
 mod soundfonts;
+mod space_designer_ui;
 mod start_screen;
 mod step_editor;
 mod sync_menu;
@@ -641,6 +642,9 @@ impl eframe::App for App {
             Some(sync) => mixer::Meters {
                 tracks: sync.track_meters(self.project.tracks.len()),
                 reduction: sync.gain_reduction(self.project.tracks.len()),
+                fx_input: sync.fx_inputs(self.project.tracks.len()),
+                master_reduction: sync.master_fx_meters().0,
+                master_fx_input: sync.master_fx_meters().1,
                 master: sync.master_peaks(),
             },
             None => mixer::Meters::default(),
@@ -888,7 +892,7 @@ fn shot_flex_scene(app: &mut App, ctx: &egui::Context, kind: &str) {
 /// The Mixer layout pictures (`PROWAVE_SHOT_SCENE=mix…`): the demo project playing, with two
 /// Aux strips (a reverb and a delay), sends to them, effects on the strips, a compressor
 /// working, and automation in its different modes. `mixfx` also opens the compressor's window,
-/// `mixeq` the Channel EQ's and `mixauto` the Automation editor.
+/// `mixeq` the Channel EQ's, `mixspace` the Space Designer's and `mixauto` the Automation editor.
 fn shot_mixer_scene(app: &mut App, kind: &str) {
     use model::{AutoMode, AutoTarget, Insert, SendSlot, TrackKind};
     use prowave_engine::FxKind;
@@ -943,7 +947,7 @@ fn shot_mixer_scene(app: &mut App, kind: &str) {
     comp.params[1] = 6.0;
     p.tracks[grand].inserts = vec![eq2, comp];
     let mut multi = Insert::new(FxKind::MultiEq);
-    multi.params.copy_from_slice(&[
+    multi.params[..16].copy_from_slice(&[
         70.0, 3.0, 200.0, -4.0, 1.2, 700.0, 2.5, 1.5, 2200.0, -3.0, 2.0, 5500.0, 5.0, 1.0, 11000.0,
         -2.0,
     ]);
@@ -1002,6 +1006,17 @@ fn shot_mixer_scene(app: &mut App, kind: &str) {
         "eq" => app.ui.mixer.fx_window = Some((piano_t, 1)),
         "multi" => app.ui.mixer.fx_window = Some((pad, 1)),
         "limiter" => app.ui.mixer.fx_window = Some((vocal, 1)),
+        "master" => {
+            // The Mastering Glue preset on the Stereo Out strip.
+            let mut glue = Insert::new(FxKind::Reverb);
+            glue.params = space_designer_ui::mastering_preset(0);
+            app.project.master_inserts = vec![glue];
+            app.ui.mixer.fx_window = Some((mixer::MASTER_STRIP, 0));
+        }
+        "space" => {
+            app.project.tracks[bass].inserts = vec![Insert::new(FxKind::Reverb)];
+            app.ui.mixer.fx_window = Some((bass, 0));
+        }
         "auto" => {
             app.ui.mixer.auto_editor.track = Some(piano_t);
             app.ui.mixer.auto_editor.span = 72.0;

@@ -430,6 +430,8 @@ pub struct ProjectDoc {
     /// The Note Pad's text.
     pub notes: String,
     pub master_vol: f32,
+    /// The effects on the Stereo Out strip (the master bus), in order.
+    pub master_fx: Vec<InsertDoc>,
     pub selected_track: usize,
     pub tracks: Vec<TrackDoc>,
     /// Mix groups.
@@ -514,6 +516,7 @@ impl Default for ProjectDoc {
             count_in: true,
             notes: String::new(),
             master_vol: 0.8,
+            master_fx: Vec::new(),
             selected_track: 0,
             tracks: Vec::new(),
             groups: Vec::new(),

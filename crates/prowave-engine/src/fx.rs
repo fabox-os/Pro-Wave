@@ -6,10 +6,11 @@
 //! Every effect has up to [`MAX_FX_PARAMS`] parameters in natural units (dB, Hz, ms, 0..1);
 //! [`FxKind::params`] lists their names, ranges and defaults, and anything out of range or
 //! not finite is clamped, so a damaged project cannot make the output blow up.
+use crate::convolver::Convolver;
 use std::f32::consts::{PI, TAU};
 
 /// Most parameters one effect has.
-pub const MAX_FX_PARAMS: usize = 16;
+pub const MAX_FX_PARAMS: usize = 32;
 /// Most effects in one channel strip.
 pub const MAX_INSERTS: usize = 8;
 
@@ -110,11 +111,39 @@ const COMP_PARAMS: [ParamInfo; 5] = [
     pl("Release", 10.0, 1000.0, 120.0, "ms"),
     p("Make-up", 0.0, 24.0, 0.0, "dB"),
 ];
-const REVERB_PARAMS: [ParamInfo; 4] = [
-    p("Size", 0.0, 1.0, 0.6, ""),
-    p("Damping", 0.0, 1.0, 0.5, ""),
-    p("Width", 0.0, 1.0, 1.0, ""),
-    p("Mix", 0.0, 1.0, 0.3, ""),
+/// Space Designer (Logic's own ranges and starting values): see [`crate::convolver::sd`] for
+/// where each one sits.
+const REVERB_PARAMS: [ParamInfo; 30] = [
+    p("Predelay", 0.0, 500.0, 15.0, "ms"),
+    pl("Length", 0.1, 10.0, 4.52, "s"),
+    pl("Size", 10.0, 1000.0, 100.0, "%"),
+    pl("X-Over", 200.0, 16000.0, 710.0, "Hz"),
+    p("Lo Spread", 0.0, 100.0, 100.0, "%"),
+    p("Hi Spread", 0.0, 200.0, 100.0, "%"),
+    p("Dry", -96.0, 6.0, -12.5, "dB"),
+    p("Wet", -96.0, 6.0, -7.0, "dB"),
+    p("Input", -96.0, 6.0, 0.0, "dB"),
+    p("Init Level", 0.0, 100.0, 100.0, "%"),
+    p("Attack", 0.0, 2000.0, 122.0, "ms"),
+    pl("Decay", 0.01, 10.0, 4.52, "s"),
+    p("Decay Curve", 0.0, 1.0, 0.0, ""),
+    p("End Level", 0.0, 100.0, 18.0, "%"),
+    p("IR Offset", 0.0, 2.0, 0.0, "s"),
+    p("Reverse", 0.0, 1.0, 0.0, ""),
+    p("Quality", 0.0, 1.0, 1.0, ""),
+    p("Output EQ", 0.0, 1.0, 1.0, ""),
+    p("Filter Env", 0.0, 1.0, 0.0, ""),
+    p("Volume Env", 0.0, 1.0, 1.0, ""),
+    p("IR Type", 0.0, 1.0, 0.0, ""),
+    p("IR", 0.0, 5.0, 0.0, ""),
+    p("Density", 0.0, 1.0, 0.5, ""),
+    p("Diffuse", 0.0, 1.0, 0.5, ""),
+    p("Early Reflections", 0.0, 1.0, 0.5, ""),
+    pl("Filter Start", 100.0, 20000.0, 20000.0, "Hz"),
+    pl("Filter End", 100.0, 20000.0, 5000.0, "Hz"),
+    p("Resonance", 0.0, 1.0, 0.1, ""),
+    p("Output EQ Low", -12.0, 12.0, -2.0, "dB"),
+    p("Output EQ High", -12.0, 12.0, -1.0, "dB"),
 ];
 const DELAY_PARAMS: [ParamInfo; 5] = [
     pl("Time", 1.0, 2000.0, 375.0, "ms"),
@@ -406,6 +435,7 @@ impl FxKind {
         match self {
             FxKind::Limiter => limiter_len(sample_rate.clamp(8_000.0, 384_000.0)) - 1,
             FxKind::Amp => AMP_LATENCY,
+            FxKind::Reverb => crate::convolver::BLOCK,
             _ => 0,
         }
     }
@@ -685,93 +715,68 @@ impl Line {
     }
 }
 
-/// Freeverb's comb and allpass delays, in samples at 44.1 kHz.
-const COMBS: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
-const ALLPASSES: [usize; 4] = [556, 441, 341, 225];
-const STEREO_SPREAD: usize = 23;
+fn finite_or_zero(x: f32) -> f32 {
+    if x.is_finite() {
+        x
+    } else {
+        0.0
+    }
+}
 
+/// The linear gains of the Dry, Wet and Input settings of Space Designer (-96 dB is off).
+fn space_gains(pr: &[f32]) -> [f32; 3] {
+    use crate::convolver::sd;
+    let db = |x: f32| {
+        if x <= -95.9 {
+            0.0
+        } else {
+            10f32.powf(x / 20.0)
+        }
+    };
+    [db(pr[sd::DRY]), db(pr[sd::WET]), db(pr[sd::INPUT])]
+}
+
+/// The Output EQ of Space Designer: low shelf at 100 Hz, high shelf at 10 kHz.
+fn space_eq(pr: &[f32], sr: f32) -> [Biquad; 2] {
+    use crate::convolver::sd;
+    [
+        Biquad::make(Shape::LowShelf, 100.0, 0.707, pr[sd::OUT_LO], sr),
+        Biquad::make(Shape::HighShelf, 10_000.0, 0.707, pr[sd::OUT_HI], sr),
+    ]
+}
+
+/// Space Designer: the convolver and what goes around it. The response itself is made off
+/// the audio thread and handed over with [`Fx::set_convolver`].
 #[derive(Clone, Debug)]
-struct Comb {
-    line: Vec<f32>,
-    pos: usize,
-    store: f32,
+struct SpaceState {
+    conv: Box<Convolver>,
+    /// The input before the convolver is delayed by the Predelay; the dry sound by what the
+    /// convolver delays, so the two stay in time.
+    pre: [Line; 2],
+    dry: [Line; 2],
+    /// The Output EQ on the reverb only: a low shelf at 100 Hz and a high shelf at 10 kHz.
+    eq: [[Biquad; 2]; 2],
+    /// The input level (linear, falls slowly), for the Input meter.
+    in_peak: f32,
+    /// The gain the Dry, Wet and Input settings make (linear), smoothed so a move does not
+    /// click.
+    gains: [f32; 3],
 }
 
-impl Comb {
-    fn new(len: usize) -> Self {
+impl SpaceState {
+    fn new(sr: f32, params: &[f32; MAX_FX_PARAMS]) -> Self {
+        let pre_max = (0.5 * sr) as usize + 4;
+        let eq = |_: usize| space_eq(params, sr);
         Self {
-            line: vec![0.0; len.max(2)],
-            pos: 0,
-            store: 0.0,
-        }
-    }
-
-    #[inline]
-    fn tick(&mut self, x: f32, feedback: f32, damp: f32) -> f32 {
-        let out = self.line[self.pos];
-        self.store = out * (1.0 - damp) + self.store * damp;
-        self.line[self.pos] = x + self.store * feedback;
-        self.pos += 1;
-        if self.pos == self.line.len() {
-            self.pos = 0;
-        }
-        out
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Allpass {
-    line: Vec<f32>,
-    pos: usize,
-}
-
-impl Allpass {
-    fn new(len: usize) -> Self {
-        Self {
-            line: vec![0.0; len.max(2)],
-            pos: 0,
-        }
-    }
-
-    #[inline]
-    fn tick(&mut self, x: f32) -> f32 {
-        let buffered = self.line[self.pos];
-        let out = buffered - x;
-        self.line[self.pos] = x + buffered * 0.5;
-        self.pos += 1;
-        if self.pos == self.line.len() {
-            self.pos = 0;
-        }
-        out
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ReverbState {
-    combs: [Vec<Comb>; 2],
-    allpasses: [Vec<Allpass>; 2],
-}
-
-impl ReverbState {
-    fn new(sr: f32) -> Self {
-        let scale = sr / 44_100.0;
-        let side = |extra: usize| {
-            (
-                COMBS
-                    .iter()
-                    .map(|n| Comb::new(((*n + extra) as f32 * scale) as usize))
-                    .collect::<Vec<_>>(),
-                ALLPASSES
-                    .iter()
-                    .map(|n| Allpass::new(((*n + extra) as f32 * scale) as usize))
-                    .collect::<Vec<_>>(),
-            )
-        };
-        let (cl, al) = side(0);
-        let (cr, ar) = side(STEREO_SPREAD);
-        Self {
-            combs: [cl, cr],
-            allpasses: [al, ar],
+            conv: Box::new(Convolver::for_params(params, sr)),
+            pre: [Line::new(pre_max), Line::new(pre_max)],
+            dry: [
+                Line::new(crate::convolver::BLOCK + 4),
+                Line::new(crate::convolver::BLOCK + 4),
+            ],
+            eq: [eq(0), eq(1)],
+            gains: space_gains(params),
+            in_peak: 0.0,
         }
     }
 }
@@ -942,7 +947,7 @@ enum State {
     Limiter(Box<LimiterState>),
     Eq([[Biquad; 3]; 2]),
     Comp(CompState),
-    Reverb(Box<ReverbState>),
+    Reverb(Box<SpaceState>),
     Delay(Box<DelayState>),
     Chorus(Box<ChorusState>),
     Phaser(Box<PhaserState>),
@@ -974,7 +979,9 @@ impl Fx {
         let state = match kind {
             FxKind::ChannelEq => State::Eq([[Biquad::unity(); 3]; 2]),
             FxKind::Compressor => State::Comp(CompState { reduction: 0.0 }),
-            FxKind::Reverb => State::Reverb(Box::new(ReverbState::new(sr))),
+            FxKind::Reverb => {
+                State::Reverb(Box::new(SpaceState::new(sr, &kind.clamp_params(params))))
+            }
             FxKind::Delay => State::Delay(Box::new(DelayState {
                 lines: [
                     Line::new((2.05 * sr) as usize),
@@ -1055,6 +1062,25 @@ impl Fx {
         }
     }
 
+    /// Space Designer: puts a new response in place (made with [`Convolver::for_params`] off the
+    /// audio thread) and returns the old one, to be freed off that thread. Any other effect
+    /// returns `conv` at once.
+    pub fn set_convolver(&mut self, conv: Box<Convolver>) -> Box<Convolver> {
+        match &mut self.state {
+            State::Reverb(s) => std::mem::replace(&mut s.conv, conv),
+            _ => conv,
+        }
+    }
+
+    /// Space Designer: the level of the sound going into the convolver (linear, 0 for any other
+    /// effect or while bypassed), for the Input meter.
+    pub fn input_level(&self) -> f32 {
+        match &self.state {
+            State::Reverb(s) if !self.bypass => s.in_peak,
+            _ => 0.0,
+        }
+    }
+
     /// The parameter values being played.
     pub fn current(&self) -> [f32; MAX_FX_PARAMS] {
         self.params
@@ -1085,6 +1111,14 @@ impl Fx {
                             z2: old.z2,
                             ..n
                         };
+                    }
+                }
+            }
+            State::Reverb(s) => {
+                let new = space_eq(&pr, sr);
+                for ch in s.eq.iter_mut() {
+                    for (old, n) in ch.iter_mut().zip(new) {
+                        *old = old.retuned(n);
                     }
                 }
             }
@@ -1233,26 +1267,38 @@ impl Fx {
                 (l * g, r * g)
             }
             State::Reverb(s) => {
-                let feedback = 0.7 + pr[0] * 0.28;
-                let damp = pr[1] * 0.4;
-                let input = (l + r) * 0.015;
-                let mut out = [0f32; 2];
-                for (ch, o) in out.iter_mut().enumerate() {
-                    let mut acc = 0.0;
-                    for c in s.combs[ch].iter_mut() {
-                        acc += c.tick(input, feedback, damp);
-                    }
-                    for a in s.allpasses[ch].iter_mut() {
-                        acc = a.tick(acc);
-                    }
-                    *o = acc;
+                use crate::convolver::sd;
+                // Smooth the three gains (about 5 ms).
+                let target = space_gains(&pr);
+                let k = 1.0 - (-1.0 / (0.005 * sr)).exp();
+                for (g, t) in s.gains.iter_mut().zip(target) {
+                    *g += (t - *g) * k;
                 }
-                let wet_l = out[0] * (0.5 + 0.5 * pr[2]) + out[1] * (0.5 - 0.5 * pr[2]);
-                let wet_r = out[1] * (0.5 + 0.5 * pr[2]) + out[0] * (0.5 - 0.5 * pr[2]);
-                let wet = pr[3] * 3.0;
+                let (in_g, wet_g, dry_g) = (s.gains[2], s.gains[1], s.gains[0]);
+                // A damaged input must not get into the convolver, where it would stay.
+                let (l, r) = (finite_or_zero(l), finite_or_zero(r));
+                s.in_peak = (s.in_peak * 0.99997)
+                    .max((l * in_g).abs())
+                    .max((r * in_g).abs());
+                s.pre[0].push(l * in_g);
+                s.pre[1].push(r * in_g);
+                let d = (pr[sd::PREDELAY] * 0.001 * sr).max(1.0);
+                let (wl, wr) = s.conv.tick(s.pre[0].read(d), s.pre[1].read(d));
+                let (mut wl, mut wr) = (wl, wr);
+                if pr[sd::OUTPUT_EQ] >= 0.5 {
+                    for b in s.eq[0].iter_mut() {
+                        wl = b.tick(wl);
+                    }
+                    for b in s.eq[1].iter_mut() {
+                        wr = b.tick(wr);
+                    }
+                }
+                s.dry[0].push(l);
+                s.dry[1].push(r);
+                let lat = crate::convolver::BLOCK as f32;
                 (
-                    l * (1.0 - pr[3]) + wet_l * wet,
-                    r * (1.0 - pr[3]) + wet_r * wet,
+                    s.dry[0].read(lat) * dry_g + wl * wet_g,
+                    s.dry[1].read(lat) * dry_g + wr * wet_g,
                 )
             }
             State::Delay(s) => {
@@ -1447,7 +1493,15 @@ impl Fx {
             }
             State::Limiter(l) => **l = LimiterState::new(sr),
             State::Comp(c) => c.reduction = 0.0,
-            State::Reverb(s) => **s = ReverbState::new(sr),
+            State::Reverb(s) => {
+                s.conv.clear();
+                for b in s.eq.iter_mut().flatten() {
+                    *b = b.cleared();
+                }
+                for l in s.pre.iter_mut().chain(s.dry.iter_mut()) {
+                    l.buf.fill(0.0);
+                }
+            }
             State::Delay(s) => {
                 s.lines.iter_mut().for_each(|l| l.buf.fill(0.0));
                 s.tone = [0.0; 2];
@@ -1506,6 +1560,11 @@ impl Chain {
     /// The largest gain reduction of the compressors in the chain, in dB.
     pub fn reduction_db(&self) -> f32 {
         self.fx.iter().map(Fx::reduction_db).fold(0.0, f32::max)
+    }
+
+    /// The loudest Space Designer input level in the chain (linear).
+    pub fn input_level(&self) -> f32 {
+        self.fx.iter().map(Fx::input_level).fold(0.0, f32::max)
     }
 
     /// The delay of the whole chain, in samples.
@@ -1726,25 +1785,107 @@ mod tests {
             hits.iter().any(|i| (*i as i32 - 9600).abs() < 5),
             "{hits:?}"
         );
+    }
 
-        let mut rv = with(FxKind::Reverb, &[(3, 1.0)]);
-        let mut tail = 0.0f32;
-        let mut late = 0.0f32;
-        for i in 0..(2.0 * SR) as usize {
+    /// Space Designer's first sample of sound in the left output for an impulse, and the
+    /// loudest sample after `after` samples.
+    fn space_response(settings: &[(usize, f32)], secs: f32, after: usize) -> (Option<usize>, f32) {
+        let mut rv = with(FxKind::Reverb, settings);
+        let (mut first, mut tail) = (None, 0.0f32);
+        for i in 0..(secs * SR) as usize {
             let x = if i == 0 { 1.0 } else { 0.0 };
             let (l, _) = rv.process(x, x);
-            if i > 24_000 {
+            if first.is_none() && l.abs() > 2e-4 {
+                first = Some(i);
+            }
+            if i > after {
                 tail = tail.max(l.abs());
             }
-            if i > 90_000 {
-                late = late.max(l.abs());
-            }
         }
-        assert!(tail > 1e-4, "no tail: {tail}");
-        assert!(late < tail, "the tail does not die");
+        (first, tail)
+    }
+
+    #[test]
+    fn space_designer_is_a_convolution_reverb_with_dry_wet_and_predelay() {
+        use crate::convolver::{sd, BLOCK};
+        // Dry only: the impulse comes out as late as the convolver, so dry and wet line up.
+        let dry_only = [(sd::DRY, 0.0), (sd::WET, -96.0)];
+        let (first, tail) = space_response(&dry_only, 1.0, BLOCK + 8);
+        assert_eq!(
+            first,
+            Some(BLOCK),
+            "the dry sound is delayed by the latency"
+        );
+        assert!(tail < 1e-4, "no reverb when Wet is off: {tail}");
+        assert_eq!(FxKind::Reverb.latency_samples(SR), BLOCK);
+
+        // Wet only: a tail that is there after half a second and has died after four.
+        let wet_only = [(sd::DRY, -96.0), (sd::WET, 0.0), (sd::LENGTH, 3.0)];
+        let (_, tail) = space_response(&wet_only, 1.0, 24_000);
+        assert!(tail > 5e-6, "no tail: {tail}");
+        let (_, late) = space_response(&wet_only, 4.0, 3 * SR as usize + 4000);
+        assert!(late < 1e-3, "the tail does not die: {late}");
+
+        // Output EQ: a big cut of the high shelf makes the reverb quieter in the highs, and the
+        // dry sound is not touched by it.
+        let mut eq_a = wet_only.to_vec();
+        eq_a.push((sd::OUTPUT_EQ, 1.0));
+        eq_a.push((sd::OUT_HI, 0.0));
+        eq_a.push((sd::OUT_LO, 0.0));
+        let mut eq_b = eq_a.clone();
+        eq_b.push((sd::OUT_HI, -12.0));
+        let energy = |settings: &[(usize, f32)]| {
+            let mut rv = with(FxKind::Reverb, settings);
+            let mut prev = 0.0f32;
+            let mut e = 0.0f32;
+            for i in 0..(0.5 * SR) as usize {
+                let (l, _) = rv.process(if i == 0 { 1.0 } else { 0.0 }, 0.0);
+                e += (l - prev) * (l - prev);
+                prev = l;
+            }
+            e
+        };
+        assert!(
+            energy(&eq_b) < energy(&eq_a) * 0.6,
+            "the high shelf does nothing"
+        );
+
+        // Predelay moves the start of the reverb.
+        let mut a = wet_only.to_vec();
+        a.push((sd::PREDELAY, 0.0));
+        a.push((sd::VOLUME_ENV, 0.0));
+        a.push((sd::OUTPUT_EQ, 0.0));
+        let mut b = a.clone();
+        b.push((sd::PREDELAY, 100.0));
+        let (fa, _) = space_response(&a, 0.6, 0);
+        let (fb, _) = space_response(&b, 0.6, 0);
+        let (fa, fb) = (fa.unwrap_or(0), fb.unwrap_or(0));
+        assert!(
+            (fb as f32 - fa as f32 - 0.1 * SR).abs() < 400.0,
+            "predelay 100 ms: {fa} -> {fb}"
+        );
+
         // Reset silences it at once.
+        let mut rv = with(FxKind::Reverb, &wet_only);
+        for i in 0..4000 {
+            rv.process(if i == 0 { 1.0 } else { 0.0 }, 0.0);
+        }
         rv.reset();
         assert_eq!(rv.process(0.0, 0.0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_new_response_replaces_the_old_one_and_the_old_one_is_handed_back() {
+        use crate::convolver::{sd, Convolver};
+        let mut params = FxKind::Reverb.defaults();
+        let mut rv = Fx::new(FxKind::Reverb, params, false, SR);
+        params[sd::REVERSE] = 1.0;
+        let old = rv.set_convolver(Box::new(Convolver::for_params(&params, SR)));
+        assert!(old.partitions() > 1);
+        // Another kind of effect gives it straight back.
+        let mut filter = Fx::new(FxKind::Filter, FxKind::Filter.defaults(), false, SR);
+        let n = old.partitions();
+        assert_eq!(filter.set_convolver(old).partitions(), n);
     }
 
     #[test]

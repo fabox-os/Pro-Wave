@@ -19,10 +19,10 @@ const AMP_W: f32 = 470.0;
 const AMP_H: f32 = 146.0;
 
 /// A slider the user moved: parameter number, new value, and whether the gesture ended.
-struct Edit {
-    param: usize,
-    value: f32,
-    ended: bool,
+pub(crate) struct Edit {
+    pub(crate) param: usize,
+    pub(crate) value: f32,
+    pub(crate) ended: bool,
 }
 
 /// Draws the effect window for the insert the Mixer opened, if any.
@@ -30,17 +30,56 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
     let Some((ti, slot)) = s.mixer.fx_window else {
         return;
     };
-    let Some(insert) = p.tracks.get(ti).and_then(|t| t.inserts.get(slot)).copied() else {
+    // The Stereo Out strip has effects but no automation lanes: a stand-in track with none.
+    let master = ti == crate::mixer::MASTER_STRIP;
+    let found = if master {
+        p.master_inserts.get(slot)
+    } else {
+        p.tracks.get(ti).and_then(|t| t.inserts.get(slot))
+    };
+    let Some(insert) = found.copied() else {
         s.mixer.fx_window = None;
         return;
     };
+    let stand_in;
+    let track: &Track = if master {
+        stand_in = Project::empty().tracks[0].clone();
+        &stand_in
+    } else {
+        &p.tracks[ti]
+    };
+    let (reduction, input_level) = if master {
+        (meters.master_reduction, meters.master_fx_input)
+    } else {
+        (
+            meters.reduction.get(ti).copied().unwrap_or(0.0),
+            meters.fx_input.get(ti).copied().unwrap_or(0.0),
+        )
+    };
+    if insert.kind == FxKind::Reverb {
+        #[allow(deprecated)]
+        let id = egui::Id::new(("space_designer", ti, slot));
+        let (edited, edits, open) = crate::space_designer_ui::window(
+            ctx,
+            &insert,
+            track,
+            slot,
+            p.position_beats,
+            id,
+            input_level,
+        );
+        finish(p, s, ti, slot, insert, edited, edits, open);
+        return;
+    }
     let mut open = true;
-    let title = format!("{} · {}", p.tracks[ti].name, insert.name());
-    let reduction = meters.reduction.get(ti).copied().unwrap_or(0.0);
+    let title = if master {
+        format!("{} · {}", tr("Stereo Out"), insert.name())
+    } else {
+        format!("{} · {}", p.tracks[ti].name, insert.name())
+    };
     let beat = p.position_beats;
     let mut edited = insert;
     let mut edits: Vec<Edit> = Vec::new();
-    let track = &p.tracks[ti];
     egui::Window::new(title)
         .id(egui::Id::unique("fx_window"))
         .open(&mut open)
@@ -121,9 +160,39 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
                     }
                 });
         });
+    finish(p, s, ti, slot, insert, edited, edits, open);
+}
+
+/// Puts an edited effect and the setting moves of its window into the project (and the
+/// automation), and closes the window when it was closed.
+#[allow(clippy::too_many_arguments)]
+fn finish(
+    p: &mut Project,
+    s: &mut UiState,
+    ti: usize,
+    slot: usize,
+    insert: Insert,
+    mut edited: Insert,
+    edits: Vec<Edit>,
+    open: bool,
+) {
+    let beat = p.position_beats;
     if edited != insert {
         edited.params = edited.kind.clamp_params(edited.params);
-        p.tracks[ti].inserts[slot] = edited;
+        if ti == crate::mixer::MASTER_STRIP {
+            if let Some(i) = p.master_inserts.get_mut(slot) {
+                *i = edited;
+            }
+        } else {
+            p.tracks[ti].inserts[slot] = edited;
+        }
+    }
+    if ti == crate::mixer::MASTER_STRIP {
+        // No automation lanes on the Stereo Out strip.
+        if !open {
+            s.mixer.fx_window = None;
+        }
+        return;
     }
     let playing = p.playing;
     for e in edits {
@@ -484,6 +553,46 @@ mod tests {
         assert_eq!(p.tracks[0].inserts[2], Insert::new(FxKind::MultiEq));
         // The insert goes away: the window closes.
         p.tracks[0].inserts.clear();
+        h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        assert_eq!(s.mixer.fx_window, None);
+    }
+
+    #[test]
+    fn the_space_designer_window_draws_and_changes_nothing_by_looking() {
+        let mut p = Project::empty();
+        p.tracks[0].inserts = vec![Insert::new(FxKind::Reverb)];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..4 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)));
+        assert_eq!(p.tracks[0].inserts[0], Insert::new(FxKind::Reverb));
+    }
+
+    #[test]
+    fn the_stereo_out_effect_window_opens_edits_and_closes() {
+        let mut p = Project::empty();
+        p.master_inserts = vec![Insert::new(FxKind::Reverb), Insert::new(FxKind::Compressor)];
+        let mut s = UiState::new();
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for slot in 0..2 {
+            s.mixer.fx_window = Some((crate::mixer::MASTER_STRIP, slot));
+            for _ in 0..3 {
+                h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+            }
+            assert_eq!(s.mixer.fx_window, Some((crate::mixer::MASTER_STRIP, slot)));
+        }
+        assert_eq!(
+            p.master_inserts[0],
+            Insert::new(FxKind::Reverb),
+            "looking changes nothing"
+        );
+        // The effect goes away: the window closes.
+        p.master_inserts.clear();
         h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
         assert_eq!(s.mixer.fx_window, None);
     }

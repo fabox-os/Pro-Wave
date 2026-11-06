@@ -828,6 +828,8 @@ pub struct Project {
     pub position_beats: f64, // 0-based
     pub selected_track: usize,
     pub master_vol: f32,
+    /// The effects on the Stereo Out strip, in order (they process the whole mix).
+    pub master_inserts: Vec<Insert>,
     /// Mix groups; a track's `group` is an index into this list.
     pub groups: Vec<MixGroup>,
     /// Bumped whenever tracks/regions change so the engine song is rebuilt.
@@ -1047,6 +1049,7 @@ impl Project {
             position_beats: 16.0,
             selected_track: 0,
             master_vol: 0.8,
+            master_inserts: Vec::new(),
             groups: Vec::new(),
             song_rev: 0,
             show_master_track: false,

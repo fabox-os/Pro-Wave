@@ -3,6 +3,20 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Space D is now Logic's Space Designer:** a convolution reverb with its own window (light grey, dark top bar, Sampled IR and Synthesized IR tabs, the response drawn with its Volume Envelope, and the orange controls below). Open it from the Audio FX slot or with **Mix > Space Designer > Show**. It has six built-in impulse responses (03.0s Long Reverb is the default), Volume Env and Filter Env, Init Level, Attack, Decay with LIN or EXP, End Level (drag the three blue handles or the values), IR Offset, Reverse, Quality, Predelay, Length, Size, X-Over with Lo and Hi Spread, Input, Dry and Wet, Output EQ, Compare, Copy, Paste, Undo, Redo and View (75 to 150 %). The reverb reports its 512-sample delay for compensation.
+
+✅ **Space Designer for mastering:** Length now cuts the response and Size stretches it, as in Logic. The Filter Env is a real low pass with a Start and End cut-off and Resonance (click its name to edit it in the display). Output EQ is a 100 Hz low shelf and a 10 kHz high shelf with their gains (-2 and -1 dB at first), on the reverb only. Hi Spread goes to 200 %. The Synthesized IR tab has Density, Diffuse and Early Reflections. The Input fader has a level meter. New responses: 01.2s Medium Hall, 00.5s Small Room, Plate, Church and 02.0s Hall. Three mastering presets (Glue - Small Room, Plate - Vocal Sheen, Wide Hall) are in the preset menu and in **Mix > Space Designer**. Projects with the old four-slider Space D open with the same balance of dry and reverb.
+
+✅ **Effects on the Stereo Out strip (the master bus):** the Stereo Out strip now has real Audio FX slots, with the same menu as a track strip (add, replace, bypass, move, remove; double-click opens the window). The whole mix goes through them before the master fader, and they are saved with the project. **Mix > Space Designer > Mastering Glue - Small Room** (and the other two presets) puts a Space Designer there and opens it. Gain reduction and Space Designer input meters work for it. The master effects have no automation lanes yet.
+
+### Still to do or test
+
+❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
+
 ## 0.2.2
 
 Tested on Ubuntu 26.04.1 LTS (x86-64, kernel 7.0.0-42): the full project check (formatting,
