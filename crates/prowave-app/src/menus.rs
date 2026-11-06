@@ -6,6 +6,7 @@ use crate::file_commands::FileCmd;
 use crate::i18n::{self, tr, trf, Lang};
 use crate::model::{Project, TrackKind};
 use crate::project_settings::SettingsTab;
+use crate::track_dialogs;
 use crate::undo::UndoCmd;
 use crate::Bottom;
 use egui::{pos2, vec2, Align2, Color32, FontId, Key, KeyboardShortcut, Modifiers, Sense, Stroke};
@@ -325,6 +326,7 @@ pub(crate) const CHECKABLE: &[&str] = &[
     "Show Tempo Track",
     "Show Marker Track",
     "Show Signature Track",
+    "Show Master Track",
     "Show Piano Roll",
     "Show Mixer",
     "Show Library",
@@ -447,6 +449,10 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Redo" => s.can_redo,
         "Delete Undo History" => s.can_undo || s.can_redo,
         "Delete" | "Deselect All" | "Copy" | "Cut" => s.tracks.selected.is_some(),
+        "Rename Track" | "Assign Track Color…" | "Assign Track Icon…" => {
+            p.tracks.get(p.selected_track).is_some()
+        }
+        "Configure Track Header…" | "Show Master Track" => true,
         "Paste" => crate::region_edit::can_paste(p, &s.region_clip),
         "Split at Playhead" => crate::region_edit::can_split(p, &s.tracks),
         "Delete Track" => p.tracks.len() > 1,
@@ -521,7 +527,7 @@ fn region_starts(p: &Project) -> Vec<f64> {
 }
 
 /// Whether `label` shows a check mark (what it shows is visible).
-pub(crate) fn checked(label: &str, s: &crate::UiState) -> bool {
+pub(crate) fn checked(label: &str, p: &Project, s: &crate::UiState) -> bool {
     match label {
         "Show Piano Roll" => s.bottom == Bottom::PianoRoll,
         "Show Mixer" => s.show_mixer && s.bottom == Bottom::Mixer,
@@ -536,6 +542,7 @@ pub(crate) fn checked(label: &str, s: &crate::UiState) -> bool {
         "Show Tempo Track" => s.tracks.show_tempo,
         "Show Marker Track" => s.tracks.show_markers,
         "Show Signature Track" => s.tracks.show_signatures,
+        "Show Master Track" => p.show_master_track,
         _ if Lang::from_native_name(label).is_some() => {
             Lang::from_native_name(label) == Some(i18n::current())
         }
@@ -561,6 +568,13 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         _ if SettingsTab::from_menu(label).is_some() => {
             s.settings_tab = SettingsTab::from_menu(label)
         }
+        "Rename Track"
+        | "Assign Track Color…"
+        | "Assign Track Icon…"
+        | "Configure Track Header…" => {
+            s.track_dialog = track_dialogs::open_for(label, p);
+        }
+        "Show Master Track" => p.show_master_track = !p.show_master_track,
         "Show Mixer" | "Mixer" => {
             s.show_mixer = !(s.show_mixer && s.bottom == Bottom::Mixer);
             s.bottom = Bottom::Mixer;
@@ -886,7 +900,7 @@ fn entries(ui: &mut egui::Ui, items: &[&str], p: &mut Project, s: &mut crate::Ui
             continue;
         }
         let key = shortcut(it).map(|k| ui.ctx().format_shortcut(&k));
-        let (on, check) = (enabled(it, p, s), checked(it, s));
+        let (on, check) = (enabled(it, p, s), checked(it, p, s));
         if row(ui, tr(it), on, check, key, false, look).clicked() {
             apply(it, p, s);
             ui.close();
@@ -1055,7 +1069,10 @@ mod tests {
                     s.ui_scale,
                     s.tracks.bar_w,
                     s.tracks.selected,
-                    s.region_clip.is_some()
+                    s.region_clip.is_some(),
+                    p.show_master_track,
+                    p.header_hidden.len(),
+                    s.track_dialog.is_some()
                 ),
                 (
                     s.tracks.show_tempo,
@@ -1071,13 +1088,13 @@ mod tests {
     fn view_menu_checks_follow_the_panels() {
         let mut s = crate::UiState::new();
         let mut p = Project::demo();
-        assert!(checked("Show Library", &s) && checked("Show Mixer", &s));
+        assert!(checked("Show Library", &p, &s) && checked("Show Mixer", &p, &s));
         apply("Show Library", &mut p, &mut s);
-        assert!(!s.show_library && !checked("Show Library", &s));
+        assert!(!s.show_library && !checked("Show Library", &p, &s));
         apply("Show Piano Roll", &mut p, &mut s);
-        assert!(checked("Show Piano Roll", &s) && !checked("Show Mixer", &s));
+        assert!(checked("Show Piano Roll", &p, &s) && !checked("Show Mixer", &p, &s));
         apply("Show Mixer", &mut p, &mut s);
-        assert!(checked("Show Mixer", &s));
+        assert!(checked("Show Mixer", &p, &s));
     }
 
     #[test]
@@ -1258,15 +1275,15 @@ mod tests {
 
         let (mut p, mut s) = (Project::demo(), crate::UiState::new());
         assert!(
-            checked("English (Default)", &s),
+            checked("English (Default)", &p, &s),
             "English until another is picked"
         );
         apply("Deutsch", &mut p, &mut s);
         assert_eq!(i18n::current(), Lang::De);
         assert_eq!(i18n::chosen(), Some(Lang::De), "saved for the next start");
-        assert!(checked("Deutsch", &s) && !checked("English (Default)", &s));
+        assert!(checked("Deutsch", &p, &s) && !checked("English (Default)", &p, &s));
         assert_eq!(tr("Language"), "Sprache", "the menus switch at once");
         apply("English (Default)", &mut p, &mut s);
-        assert!(checked("English (Default)", &s));
+        assert!(checked("English (Default)", &p, &s));
     }
 }

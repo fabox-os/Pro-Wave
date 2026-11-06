@@ -6,8 +6,8 @@
 use crate::import::audio_region;
 use crate::library::CATEGORIES;
 use crate::model::{
-    CompSegment, Control, Generated, Generator, Marker, Note, Project, Region, RegionParams,
-    SendSlot, SigChange, Take, TakeFolder, TempoPoint, Track, TrackKind, TrackParams,
+    CompSegment, Control, Generated, Generator, HeaderPart, Marker, Note, Project, Region,
+    RegionParams, SendSlot, SigChange, Take, TakeFolder, TempoPoint, Track, TrackKind, TrackParams,
     DEFAULT_CLICK_DB, MAX_COUNT_IN_BARS, MAX_REGION_GAIN, MAX_TUNING_HZ, MIN_CLICK_DB,
     MIN_REGION_GAIN, MIN_TUNING_HZ,
 };
@@ -380,6 +380,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             soundfont: t.soundfont.as_ref().map(|s| s.path.clone()),
             soundfont_bank: t.soundfont.as_ref().map_or(0, |s| s.bank),
             soundfont_program: t.soundfont.as_ref().map_or(0, |s| s.program),
+            icon: t.icon.map(|k| k.name().to_string()),
             input: match t.input {
                 InputSource::Mono(c) | InputSource::Stereo(c) => c,
             },
@@ -560,6 +561,12 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         count_in_bars: p.count_in_bars,
         tuning_hz: Some(p.tuning_hz),
         midi_in_port: p.midi_in_port.clone(),
+        show_master_track: p.show_master_track,
+        header_hidden: p
+            .header_hidden
+            .iter()
+            .map(|h| h.name().to_string())
+            .collect(),
         sig_changes: p
             .sig_changes
             .iter()
@@ -752,6 +759,10 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             midi_port: port_name(&t.midi_port),
             midi_channel: t.midi_channel.clamp(1, 16),
             soundfont: soundfont_of(t),
+            icon: t
+                .icon
+                .as_deref()
+                .and_then(crate::track_icons::IconKind::from_name),
             input: input_source(t.input, t.input_stereo),
             output: if usize::from(t.output) <= prowave_engine::MAX_BUSES {
                 t.output
@@ -790,6 +801,12 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
     p.mtc_out = port_name(&doc.mtc_out);
     p.mtc_in = port_name(&doc.mtc_in);
     p.midi_in_port = port_name(&doc.midi_in_port);
+    p.show_master_track = doc.show_master_track;
+    p.header_hidden = doc
+        .header_hidden
+        .iter()
+        .filter_map(|n| HeaderPart::from_name(n))
+        .collect();
     // A file is not trusted: out-of-range or non-finite values fall back or are held in range.
     p.click_volume_db = match doc.click_volume_db {
         Some(db) if db.is_finite() => db.clamp(MIN_CLICK_DB, 0.0),
@@ -1139,6 +1156,46 @@ pub(crate) mod tests {
         b.extend_from_slice(&(n * 2).to_le_bytes());
         b.resize(b.len() + (n * 2) as usize, 0);
         std::fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn track_icons_the_master_strip_and_hidden_header_parts_are_saved() {
+        use crate::model::HeaderPart;
+        use crate::track_icons::IconKind;
+        let mut p = Project::demo();
+        p.tracks[0].icon = Some(IconKind::Guitar);
+        p.show_master_track = true;
+        p.header_hidden = vec![HeaderPart::Pan, HeaderPart::Volume];
+        let (doc, _) = to_doc(&p);
+        assert_eq!(doc.tracks[0].icon.as_deref(), Some("guitar"));
+        assert_eq!(
+            doc.header_hidden,
+            vec!["pan".to_string(), "volume".to_string()]
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].icon, Some(IconKind::Guitar));
+        assert!(q.show_master_track);
+        assert_eq!(q.header_hidden, vec![HeaderPart::Pan, HeaderPart::Volume]);
+        assert_eq!(
+            q.tracks[1].icon, None,
+            "tracks without an icon stay automatic"
+        );
+
+        // A file from before these settings, or with names this version does not know.
+        let mut odd = doc.clone();
+        odd.tracks[0].icon = Some("spaceship".into());
+        odd.header_hidden = vec!["volume".into(), "nonsense".into()];
+        odd.show_master_track = false;
+        let (r, _) = from_doc(&odd, Path::new("."), &egui::Context::default());
+        assert_eq!(r.tracks[0].icon, None);
+        assert_eq!(r.header_hidden, vec![HeaderPart::Volume]);
+        assert!(!r.show_master_track);
+        let (old, _) = from_doc(
+            &ProjectDoc::default(),
+            Path::new("."),
+            &egui::Context::default(),
+        );
+        assert!(!old.show_master_track && old.header_hidden.is_empty());
     }
 
     #[test]

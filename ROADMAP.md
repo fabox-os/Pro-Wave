@@ -313,6 +313,13 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    audio output device and buffer size, MIDI output ports, tuning for audio regions, Logic's other
    General options.
 
+✅ Done 2026-11-06: Track menu. Rename Track, Assign Track Color (16 swatches), Assign Track Icon (15
+   icons or Automatic), and Configure Track Header (hide the number, icon, name, M S R I buttons,
+   volume slider or pan knob), all in `track_dialogs.rs`; Show Master Track adds a Master strip under
+   the tracks with the master fader (no automation lane yet). Icons, colours, names, the master strip
+   and hidden header parts are saved in `.prowave`. Not done: Show Chord Track and Show Arrangement
+   Track (new data models).
+
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
   - Done: `cargo xtask check|wasm-check|rt-check` (fmt, clippy -D warnings, tests, no-alloc, cargo-deny, wasm32) passes on Windows.
@@ -505,8 +512,7 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
   Sound Library Manager, Project Alternatives
 - Edit: Undo History, Paste Replace, Select All, Join,
   Bounce and Join
-- Track: Rename Track, Show Master / Chord / Arrangement Track, Assign Track Color / Icon,
-  Configure Track Header
+- Track: Show Chord / Arrangement Track (both need new data: chord events and sections)
 - Navigate: Go to Position
 - Record: Record / Record Repeat, Record Toggle, Record Enable, New Take,
   Delete Take, Bounce In Place, Record Project Settings, Project Settings
@@ -520,7 +526,7 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - Help: Key Commands, About Pro Wave
 - Tracks area: Edit (Select All, Join), Functions (Folder, Quantize,
   Bounce in Place, Convert to New Sampler Track, Move to Playhead), View (Show Global Tracks,
-  Configure Track Header), every tool except Pointer and Fade, waveform zoom buttons
+  every tool except Pointer and Fade, waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo
 - Mixer: Select Audio Channel Strips, Create New Output Channel Strip, Show Signal Flow
 - Inspector: Channel, Freeze Mode, Q-Reference, Flex Mode, MIDI In Port and Channel, and the

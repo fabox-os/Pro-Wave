@@ -6,6 +6,7 @@
 //! (sliders and Ctrl+wheel), Catch playhead, add/duplicate tracks, M/S/R/I, volume, pan.
 //! Menu entries that are not implemented yet are shown disabled.
 use crate::i18n::{tr, trf};
+use crate::model::HeaderPart;
 use crate::model::{Project, Region, Track, TrackKind};
 use crate::track_icons::{draw_icon, track_icon};
 use crate::widgets::{
@@ -676,7 +677,10 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect, lanes_w: f32) {
             ui.close();
         }
         todo_item(ui, tr("Show Global Tracks"));
-        todo_item(ui, tr("Configure Track Header…"));
+        if ui.button(tr("Configure Track Header…")).clicked() {
+            s.track_dialog = Some(crate::track_dialogs::TrackDialog::Header);
+            ui.close();
+        }
     });
 
     // View buttons: grid (Live Loops) / list (Tracks, active).
@@ -2135,19 +2139,30 @@ fn header(
     silenced: bool,
 ) -> egui::Response {
     let selected = p.selected_track == i;
+    // Track > Configure Track Header: the parts the user hid are not drawn (their space stays).
+    let (show_number, show_icon, show_name, show_buttons, show_volume, show_pan) = (
+        !p.header_hidden.contains(&HeaderPart::Number),
+        !p.header_hidden.contains(&HeaderPart::Icon),
+        !p.header_hidden.contains(&HeaderPart::Name),
+        !p.header_hidden.contains(&HeaderPart::Buttons),
+        !p.header_hidden.contains(&HeaderPart::Volume),
+        !p.header_hidden.contains(&HeaderPart::Pan),
+    );
     g.rect_filled(hdr, 0.0, if selected { HEADER_SEL } else { HEADER_BG });
     g.line_segment(
         [hdr.left_bottom(), hdr.right_bottom()],
         Stroke::new(1.0, Color32::from_gray(0x2a)),
     );
     let num = Rect::from_min_size(hdr.min, vec2(NUM_W, hdr.height()));
-    g.text(
-        num.center(),
-        Align2::CENTER_CENTER,
-        (i + 1).to_string(),
-        FontId::proportional(12.0),
-        TEXT_DIM,
-    );
+    if show_number {
+        g.text(
+            num.center(),
+            Align2::CENTER_CENTER,
+            (i + 1).to_string(),
+            FontId::proportional(12.0),
+            TEXT_DIM,
+        );
+    }
     let resp = ui.interact(hdr, id(("hdr", i)), Sense::click());
     if resp.clicked() || context_click(&resp) {
         p.selected_track = i;
@@ -2176,7 +2191,9 @@ fn header(
         ),
         vec2(icon_size, icon_size),
     );
-    draw_icon(g, icon, track_icon(&p.tracks[i]));
+    if show_icon {
+        draw_icon(g, icon, track_icon(&p.tracks[i]));
+    }
 
     let name_x = icon.right() + 10.0;
     let compact = h < 46.0;
@@ -2191,15 +2208,17 @@ fn header(
         Rect::from_min_size(pos2(name_x, hdr.top()), vec2(name_w.max(20.0), h))
             .intersect(g.clip_rect()),
     );
-    clip.galley(
-        pos2(name_x, name_y - name_galley.size().y / 2.0),
-        name_galley,
-        TEXT,
-    );
+    if show_name {
+        clip.galley(
+            pos2(name_x, name_y - name_galley.size().y / 2.0),
+            name_galley,
+            TEXT,
+        );
+    }
 
     // A folder only has M and S, which act on everything inside it, and no volume or pan.
     if folder {
-        if !compact {
+        if !compact && show_buttons {
             folder_buttons(ui, g, p, i, name_x, hdr.center().y + 3.0, selected);
         }
         return resp;
@@ -2208,7 +2227,7 @@ fn header(
     // M S R (I) buttons under the name (compact tracks: hidden, like Logic at small heights).
     let audio = p.tracks[i].kind == TrackKind::Audio;
     let t = &mut p.tracks[i];
-    if !compact {
+    if !compact && show_buttons {
         let by = hdr.center().y + 3.0;
         let mut bx = name_x;
         let size = vec2(18.0, 15.0);
@@ -2270,80 +2289,116 @@ fn header(
         }
     }
 
-    // Volume slider (dB, -60..+6; double-click resets to 0 dB) and pan knob.
-    // Logic's slider: a dark pill with a grey thumb that stays inside it.
-    let sl = Rect::from_min_size(
-        pos2(hdr.right() - 98.0, hdr.center().y - SLIDER_H / 2.0),
-        vec2(SLIDER_W, SLIDER_H),
-    );
-    let travel = (sl.left() + SLIDER_H / 2.0, sl.right() - SLIDER_H / 2.0);
-    let resp = ui.interact(
-        sl.expand2(vec2(4.0, 6.0)),
-        id(("vol", i)),
-        Sense::click_and_drag(),
-    );
-    if let Some(pt) = resp.interact_pointer_pos() {
-        let f = (pt.x - travel.0) / (travel.1 - travel.0);
-        t.volume_db = slider_to_db(f.clamp(0.0, 1.0));
-    }
-    if resp.double_clicked() {
-        t.volume_db = 0.0;
-    }
-    g.rect_filled(sl, SLIDER_H / 2.0, Color32::from_rgb(55, 54, 54));
-    // Level meter inside the pill, as in Logic: two thin bars (L over R) that follow the
-    // slider's own scale, green, yellow from -6 dB and red above 0 dB.
-    let silent = t.mute || silenced;
-    for (k, peak) in [peaks.0, peaks.1].into_iter().enumerate() {
-        let db = crate::mixer::lin_to_db(peak);
-        if db <= -60.0 {
-            continue;
+    if show_volume {
+        // Volume slider (dB, -60..+6; double-click resets to 0 dB) and pan knob.
+        // Logic's slider: a dark pill with a grey thumb that stays inside it.
+        let sl = Rect::from_min_size(
+            pos2(hdr.right() - 98.0, hdr.center().y - SLIDER_H / 2.0),
+            vec2(SLIDER_W, SLIDER_H),
+        );
+        let travel = (sl.left() + SLIDER_H / 2.0, sl.right() - SLIDER_H / 2.0);
+        let resp = ui.interact(
+            sl.expand2(vec2(4.0, 6.0)),
+            id(("vol", i)),
+            Sense::click_and_drag(),
+        );
+        if let Some(pt) = resp.interact_pointer_pos() {
+            let f = (pt.x - travel.0) / (travel.1 - travel.0);
+            t.volume_db = slider_to_db(f.clamp(0.0, 1.0));
         }
-        let y = sl.center().y - 3.0 + k as f32 * 3.5;
-        let x0 = sl.left() + 3.0;
-        let x_at = |db: f32| x0 + (sl.right() - 3.0 - x0) * db_to_slider(db);
-        let mut from = -60.0f32;
-        for edge in [-6.0f32, 0.0, 6.0] {
-            let to = db.min(edge);
-            if to > from {
-                let r = Rect::from_min_max(pos2(x_at(from), y), pos2(x_at(to), y + 2.5));
-                let color = if silent {
-                    Color32::from_gray(0x70)
-                } else {
-                    crate::mixer::meter_colour(to - 0.01)
-                };
-                g.rect_filled(r, 1.0, color);
+        if resp.double_clicked() {
+            t.volume_db = 0.0;
+        }
+        g.rect_filled(sl, SLIDER_H / 2.0, Color32::from_rgb(55, 54, 54));
+        // Level meter inside the pill, as in Logic: two thin bars (L over R) that follow the
+        // slider's own scale, green, yellow from -6 dB and red above 0 dB.
+        let silent = t.mute || silenced;
+        for (k, peak) in [peaks.0, peaks.1].into_iter().enumerate() {
+            let db = crate::mixer::lin_to_db(peak);
+            if db <= -60.0 {
+                continue;
             }
-            from = edge;
+            let y = sl.center().y - 3.0 + k as f32 * 3.5;
+            let x0 = sl.left() + 3.0;
+            let x_at = |db: f32| x0 + (sl.right() - 3.0 - x0) * db_to_slider(db);
+            let mut from = -60.0f32;
+            for edge in [-6.0f32, 0.0, 6.0] {
+                let to = db.min(edge);
+                if to > from {
+                    let r = Rect::from_min_max(pos2(x_at(from), y), pos2(x_at(to), y + 2.5));
+                    let color = if silent {
+                        Color32::from_gray(0x70)
+                    } else {
+                        crate::mixer::meter_colour(to - 0.01)
+                    };
+                    g.rect_filled(r, 1.0, color);
+                }
+                from = edge;
+            }
         }
+        let knob = pos2(
+            travel.0 + (travel.1 - travel.0) * db_to_slider(t.volume_db),
+            sl.center().y,
+        );
+        g.circle_filled(knob, SLIDER_H / 2.0 - 1.0, Color32::from_rgb(136, 134, 135));
+        g.circle_stroke(
+            knob,
+            SLIDER_H / 2.0 - 1.0,
+            Stroke::new(1.0, Color32::from_rgb(98, 97, 97)),
+        );
     }
-    let knob = pos2(
-        travel.0 + (travel.1 - travel.0) * db_to_slider(t.volume_db),
-        sl.center().y,
-    );
-    g.circle_filled(knob, SLIDER_H / 2.0 - 1.0, Color32::from_rgb(136, 134, 135));
-    g.circle_stroke(
-        knob,
-        SLIDER_H / 2.0 - 1.0,
-        Stroke::new(1.0, Color32::from_rgb(98, 97, 97)),
-    );
 
-    let kc = pos2(hdr.right() - 22.0, hdr.center().y);
-    let kresp = ui.interact(
-        Rect::from_center_size(kc, vec2(22.0, 22.0)),
-        id(("pan", i)),
-        Sense::click_and_drag(),
-    );
-    if kresp.dragged() {
-        t.pan = (t.pan - kresp.drag_delta().y * 0.01).clamp(-1.0, 1.0);
+    if show_pan {
+        let kc = pos2(hdr.right() - 22.0, hdr.center().y);
+        let kresp = ui.interact(
+            Rect::from_center_size(kc, vec2(22.0, 22.0)),
+            id(("pan", i)),
+            Sense::click_and_drag(),
+        );
+        if kresp.dragged() {
+            t.pan = (t.pan - kresp.drag_delta().y * 0.01).clamp(-1.0, 1.0);
+        }
+        if kresp.double_clicked() {
+            t.pan = 0.0;
+        }
+        crate::widgets::draw_knob(g, kc, 9.0, t.pan);
     }
-    if kresp.double_clicked() {
-        t.pan = 0.0;
-    }
-    crate::widgets::draw_knob(g, kc, 9.0, t.pan);
     resp
 }
 
 // ------------------------------------------------------------------ main view
+
+/// Height of the Master strip (Track > Show Master Track).
+const MASTER_STRIP_H: f32 = 36.0;
+
+/// The Master strip: its name and the master fader, the same control as the transport's.
+fn master_strip(ui: &mut Ui, p: &mut Project, rect: Rect, meters: &crate::mixer::Meters) {
+    let g = ui.painter_at(rect);
+    g.rect_filled(rect, 0.0, HEADER_BG);
+    g.line_segment(
+        [rect.left_top(), rect.right_top()],
+        Stroke::new(1.0, Color32::from_gray(0x2a)),
+    );
+    g.text(
+        pos2(rect.left() + 12.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        tr("Master"),
+        FontId::proportional(13.0),
+        TEXT,
+    );
+    let slider = Rect::from_min_max(
+        pos2(rect.left() + 96.0, rect.center().y - 11.0),
+        pos2(rect.right() - 16.0, rect.center().y + 11.0),
+    );
+    crate::transport::master_volume(
+        ui,
+        &g,
+        p,
+        slider,
+        Some(meters.master),
+        id(("tracks", "master")),
+    );
+}
 
 pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer::Meters) {
     let rec_targets: Vec<(usize, usize)> = s
@@ -2352,8 +2407,19 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
         .into_iter()
         .chain(s.audio_rec.regions())
         .collect();
-    let area = ui.available_rect_before_wrap();
-    ui.allocate_rect(area, Sense::hover());
+    let full = ui.available_rect_before_wrap();
+    ui.allocate_rect(full, Sense::hover());
+    // Track > Show Master Track: a strip along the bottom, outside the scrolling tracks.
+    let master_h = if p.show_master_track {
+        MASTER_STRIP_H
+    } else {
+        0.0
+    };
+    let area = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - master_h));
+    if p.show_master_track {
+        let strip = Rect::from_min_max(pos2(full.left(), area.bottom()), full.max);
+        master_strip(ui, p, strip, meters);
+    }
     let tb = Rect::from_min_size(area.min, vec2(area.width(), TOOLBAR_H));
     let ruler_y = tb.bottom();
     // Global tracks between the ruler and the tracks: Marker, then Tempo, as in Logic.

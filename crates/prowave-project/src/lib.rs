@@ -269,6 +269,8 @@ pub struct TrackDoc {
     pub soundfont: Option<String>,
     pub soundfont_bank: u16,
     pub soundfont_program: u8,
+    /// The icon the user picked (`IconKind::name`); absent or unknown names give the automatic one.
+    pub icon: Option<String>,
     /// Audio tracks: the first input channel they record (0 is Input 1), and whether they
     /// record it and the next one as a stereo pair.
     pub input: u16,
@@ -393,6 +395,7 @@ impl Default for TrackDoc {
             soundfont: None,
             soundfont_bank: 0,
             soundfont_program: 0,
+            icon: None,
             input: 0,
             input_stereo: false,
             output: 0,
@@ -451,6 +454,10 @@ pub struct ProjectDoc {
     pub tuning_hz: Option<f32>,
     /// MIDI input port (by name) that plays live notes; `None` picks the first keyboard.
     pub midi_in_port: Option<String>,
+    /// Track > Show Master Track: the master strip under the tracks.
+    pub show_master_track: bool,
+    /// Names of the track-header parts that are hidden (Track > Configure Track Header).
+    pub header_hidden: Vec<String>,
 }
 
 /// A time-signature change: `num/den` from the start of the 1-based `bar` on.
@@ -513,6 +520,8 @@ impl Default for ProjectDoc {
             count_in_bars: 1,
             tuning_hz: None,
             midi_in_port: None,
+            show_master_track: false,
+            header_hidden: Vec::new(),
         }
     }
 }

@@ -54,6 +54,7 @@ mod sync_menu;
 mod takes;
 mod tempo_track;
 mod theme;
+mod track_dialogs;
 mod track_icons;
 mod tracks_area;
 mod transform;
@@ -116,6 +117,8 @@ pub struct UiState {
     pub show_midi_fx: bool,
     /// The Project Settings window, with the tab it shows.
     pub settings_tab: Option<project_settings::SettingsTab>,
+    /// A Track menu window (rename, colour, icon, header), when one is open.
+    pub track_dialog: Option<track_dialogs::TrackDialog>,
     /// The audio output the engine plays on (name, sample rate), for Project Settings > Audio.
     pub audio_info: Option<(String, u32)>,
     /// The MIDI Transform window.
@@ -195,6 +198,7 @@ impl UiState {
             steps: step_editor::StepView::default(),
             show_midi_fx: false,
             settings_tab: None,
+            track_dialog: None,
             audio_info: None,
             transform: transform_ui::TransformView::default(),
             score_tab: false,
@@ -727,6 +731,7 @@ impl eframe::App for App {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
         }
         project_settings::show(&ctx, &mut self.project, &mut self.ui);
+        track_dialogs::show(&ctx, &mut self.project, &mut self.ui);
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
@@ -1145,6 +1150,15 @@ fn main() -> eframe::Result {
                 // `PROWAVE_SHOT_SCENE=pattern` or `drummer` opens that editor on a new region
                 // of the Drummer track.
                 let scene = std::env::var("PROWAVE_SHOT_SCENE").unwrap_or_default();
+                // `tracks-extras`: the Master strip, two hidden header parts and a chosen icon.
+                if scene == "tracks-extras" {
+                    app.project.show_master_track = true;
+                    app.project.header_hidden = vec![
+                        crate::model::HeaderPart::Pan,
+                        crate::model::HeaderPart::Volume,
+                    ];
+                    app.project.tracks[0].icon = Some(crate::track_icons::IconKind::Guitar);
+                }
                 // `settings-metronome` and the like open Project Settings on that tab.
                 app.ui.settings_tab = match scene.as_str() {
                     "settings-general" => Some(project_settings::SettingsTab::General),

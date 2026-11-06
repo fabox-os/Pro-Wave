@@ -98,6 +98,7 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         vca: None,
         midi_port: None,
         soundfont: None,
+        icon: None,
         midi_channel: 1,
         midi_fx: Vec::new(),
     });

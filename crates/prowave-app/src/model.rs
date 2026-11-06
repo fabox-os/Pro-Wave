@@ -606,6 +606,8 @@ pub struct Track {
     pub midi_fx: Vec<crate::midi_fx::FxSlot>,
     /// A SoundFont (`.sf2`) instrument the track plays instead of its synth patch.
     pub soundfont: Option<SoundFontUse>,
+    /// The icon the user picked (Track > Assign Track Icon); `None` is the automatic one.
+    pub icon: Option<crate::track_icons::IconKind>,
 }
 
 /// A SoundFont instrument on a track: the `.sf2` file and the preset played from it.
@@ -662,6 +664,7 @@ impl Track {
             vca: None,
             midi_port: None,
             soundfont: None,
+            icon: None,
             midi_channel: 1,
             midi_fx: Vec::new(),
         }
@@ -688,6 +691,50 @@ pub struct Marker {
 }
 
 /// Colours offered for markers, in the order new markers take them.
+/// The parts of a track header Track > Configure Track Header can hide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderPart {
+    /// The track number.
+    Number,
+    /// The track's icon.
+    Icon,
+    /// The track's name.
+    Name,
+    /// The M, S, R and I buttons.
+    Buttons,
+    /// The volume slider and its meter.
+    Volume,
+    /// The pan knob.
+    Pan,
+}
+
+impl HeaderPart {
+    pub const ALL: [HeaderPart; 6] = [
+        HeaderPart::Number,
+        HeaderPart::Icon,
+        HeaderPart::Name,
+        HeaderPart::Buttons,
+        HeaderPart::Volume,
+        HeaderPart::Pan,
+    ];
+
+    /// The name the project file stores this part under.
+    pub fn name(self) -> &'static str {
+        match self {
+            HeaderPart::Number => "number",
+            HeaderPart::Icon => "icon",
+            HeaderPart::Name => "name",
+            HeaderPart::Buttons => "buttons",
+            HeaderPart::Volume => "volume",
+            HeaderPart::Pan => "pan",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.name() == name)
+    }
+}
+
 pub const MARKER_COLORS: [Color32; 8] = [
     Color32::from_rgb(0x3f, 0x8f, 0xd8),
     Color32::from_rgb(0x4e, 0xb0, 0x4a),
@@ -764,6 +811,10 @@ pub struct Project {
     pub groups: Vec<MixGroup>,
     /// Bumped whenever tracks/regions change so the engine song is rebuilt.
     pub song_rev: u64,
+    /// Track > Show Master Track: the master strip under the tracks.
+    pub show_master_track: bool,
+    /// Parts hidden from every track header (Track > Configure Track Header). Empty: all shown.
+    pub header_hidden: Vec<HeaderPart>,
 }
 
 /// Deterministic pseudo-random so demo content is stable across runs.
@@ -821,6 +872,7 @@ impl Project {
             vca: None,
             midi_port: None,
             soundfont: None,
+            icon: None,
             midi_channel: 1,
             midi_fx: Vec::new(),
         }];
@@ -881,6 +933,7 @@ impl Project {
             vca: None,
             midi_port: None,
             soundfont: None,
+            icon: None,
             midi_channel: 1,
             midi_fx: Vec::new(),
         };
@@ -971,6 +1024,8 @@ impl Project {
             master_vol: 0.8,
             groups: Vec::new(),
             song_rev: 0,
+            show_master_track: false,
+            header_hidden: Vec::new(),
             tempo_ramp: false,
             groove_onsets: Default::default(),
             groove_key: 0,

@@ -913,6 +913,7 @@ mod tests {
             height: 1.0,
             indent: 0,
             folded: false,
+            icon: None,
             vca: None,
             midi_port: None,
             soundfont: None,
