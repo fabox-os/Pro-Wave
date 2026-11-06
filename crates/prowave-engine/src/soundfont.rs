@@ -59,7 +59,14 @@ impl SoundFontBank {
             ));
         }
         let mut reader = bytes;
-        let font = SoundFont::new(&mut reader).map_err(|e| format!("not a SoundFont: {e:?}"))?;
+        Self::load_reader(&mut reader)
+    }
+
+    /// Parses a SoundFont as it is read from `reader`, so a big file is never held twice in
+    /// memory and the caller can count the bytes read to show progress. The reader should be
+    /// buffered (the headers are read a few bytes at a time).
+    pub fn load_reader<R: std::io::Read>(reader: &mut R) -> Result<Self, String> {
+        let font = SoundFont::new(reader).map_err(|e| format!("not a SoundFont: {e:?}"))?;
         let presets = font
             .get_presets()
             .iter()
