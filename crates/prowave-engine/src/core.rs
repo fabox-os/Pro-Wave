@@ -21,6 +21,9 @@ use std::sync::Arc;
 
 /// Tracks the engine mixes (Logic: 1000 tracks per project).
 pub const MAX_TRACKS: usize = 1024;
+/// The `track` number that addresses the master bus (the Stereo Out strip) in
+/// [`Command::SetFx`] and [`Command::SetConvolver`].
+pub const MASTER_TRACK: u16 = u16::MAX;
 const MAX_VOICES: usize = 48;
 /// Samples between two readings of the automation (0.7 ms at 48 kHz).
 const AUTO_BLOCK: u32 = 32;
@@ -441,6 +444,9 @@ pub enum Command {
         track: u16,
         chain: Box<Chain>,
     },
+    /// The effects of the master bus (Stereo Out): they process the whole mix before the master
+    /// fader. The old chain goes back through the garbage queue.
+    SetMasterInserts(Box<Chain>),
     /// Space Designer: a new impulse response for the effect in `slot` of `track` (made with
     /// [`Convolver::for_params`]); the old one goes back through the garbage queue.
     SetConvolver {
@@ -491,6 +497,7 @@ impl Command {
                 | Self::SetTempoMap(_)
                 | Self::SetInserts { .. }
                 | Self::SetConvolver { .. }
+                | Self::SetMasterInserts(_)
                 | Self::SetPdc { .. }
                 | Self::SetAutomation(_)
                 | Self::SetInput(_)
@@ -538,6 +545,9 @@ pub struct EngineState {
     pub gain_reduction: [f32; MAX_TRACKS],
     /// Level (linear) going into the Space Designer of each strip, for its Input meter.
     pub fx_input: [f32; MAX_TRACKS],
+    /// The same two for the master bus's effects: gain reduction in dB and Space Designer input.
+    pub master_reduction: f32,
+    pub master_fx_input: f32,
     /// Frames in the most recent device callback.
     pub block_frames: u32,
     /// Device-reported delay from callback to DAC, in microseconds (0 if unknown).
@@ -553,6 +563,8 @@ impl Default for EngineState {
             track_peaks: [(0.0, 0.0); MAX_TRACKS],
             gain_reduction: [0.0; MAX_TRACKS],
             fx_input: [0.0; MAX_TRACKS],
+            master_reduction: 0.0,
+            master_fx_input: 0.0,
             block_frames: 0,
             output_latency_us: 0,
         }
@@ -762,6 +774,8 @@ pub struct EngineCore {
     sf_notes: [SfNote; MAX_SF_NOTES],
     /// Effects per strip (an empty box for none), sends and bus inputs.
     chains: Vec<Option<Box<Chain>>>,
+    /// The effects of the master bus.
+    master_chain: Option<Box<Chain>>,
     /// Delay compensation per strip.
     pdc: Vec<Option<Box<Pdc>>>,
     routes: Vec<Route>,
@@ -905,6 +919,7 @@ impl EngineCore {
             sf_tracks: Vec::with_capacity(MAX_TRACKS),
             sf_notes: [SfNote::default(); MAX_SF_NOTES],
             chains: (0..MAX_TRACKS).map(|_| None).collect(),
+            master_chain: None,
             pdc: (0..MAX_TRACKS).map(|_| None).collect(),
             routes: vec![Route::default(); MAX_TRACKS],
             complex: Vec::with_capacity(MAX_TRACKS),
@@ -1623,12 +1638,18 @@ impl EngineCore {
                         let _ = self.trash.push(Garbage::Pdc(pdc));
                     }
                 }
+                Command::SetMasterInserts(chain) => {
+                    if let Some(old) = self.master_chain.replace(chain) {
+                        let _ = self.trash.push(Garbage::Chain(old));
+                    }
+                }
                 Command::SetConvolver { track, slot, conv } => {
-                    let fx = self
-                        .chains
-                        .get_mut(track as usize)
-                        .and_then(|c| c.as_mut())
-                        .and_then(|c| c.fx.get_mut(slot as usize));
+                    let chain = if track == MASTER_TRACK {
+                        self.master_chain.as_mut()
+                    } else {
+                        self.chains.get_mut(track as usize).and_then(|c| c.as_mut())
+                    };
+                    let fx = chain.and_then(|c| c.fx.get_mut(slot as usize));
                     let old = match fx {
                         Some(fx) => fx.set_convolver(conv),
                         None => conv,
@@ -1641,12 +1662,12 @@ impl EngineCore {
                     params,
                     bypass,
                 } => {
-                    if let Some(fx) = self
-                        .chains
-                        .get_mut(track as usize)
-                        .and_then(|c| c.as_mut())
-                        .and_then(|c| c.fx.get_mut(slot as usize))
-                    {
+                    let chain = if track == MASTER_TRACK {
+                        self.master_chain.as_mut()
+                    } else {
+                        self.chains.get_mut(track as usize).and_then(|c| c.as_mut())
+                    };
+                    if let Some(fx) = chain.and_then(|c| c.fx.get_mut(slot as usize)) {
                         fx.set(params, bypass);
                     }
                 }
@@ -2116,6 +2137,14 @@ impl EngineCore {
                 l += c as f64;
                 r += c as f64;
             }
+            // The master effects: the whole mix goes through them, before the master fader.
+            if let Some(chain) = self.master_chain.as_mut() {
+                (l, r) = {
+                    let (cl, cr) =
+                        chain.process(finite_or_zero(l as f32), finite_or_zero(r as f32));
+                    (f64::from(cl), f64::from(cr))
+                };
+            }
             let master = self.master.next() as f64;
             // `clamp` lets NaN through, so a non-finite sum becomes silence first.
             let l = finite_or_zero((l * master) as f32).clamp(-1.0, 1.0);
@@ -2205,6 +2234,8 @@ impl EngineCore {
             shown.gain_reduction[t] = self.chains[t].as_ref().map_or(0.0, |c| c.reduction_db());
             shown.fx_input[t] = self.chains[t].as_ref().map_or(0.0, |c| c.input_level());
         }
+        shown.master_reduction = self.master_chain.as_ref().map_or(0.0, |c| c.reduction_db());
+        shown.master_fx_input = self.master_chain.as_ref().map_or(0.0, |c| c.input_level());
         *self.state.input() = *shown;
         self.state.publish();
     }

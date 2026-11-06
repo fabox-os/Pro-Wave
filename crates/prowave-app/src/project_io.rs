@@ -186,7 +186,12 @@ fn inserts_from_doc(t: &prowave_project::TrackDoc) -> Vec<crate::model::Insert> 
         let names: Vec<&str> = t.inserts.iter().map(String::as_str).collect();
         return crate::model::inserts_from_names(&names);
     }
-    t.fx.iter()
+    inserts_from_fx_docs(&t.fx)
+}
+
+/// The effects of a detailed list in a file (a track's or the master bus's).
+fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::Insert> {
+    fx.iter()
         .filter_map(|d| {
             let kind = prowave_engine::FxKind::from_name(&d.kind)?;
             let mut params = [0.0; prowave_engine::MAX_FX_PARAMS];
@@ -540,6 +545,15 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         count_in: p.count_in,
         notes: p.notes.clone(),
         master_vol: p.master_vol,
+        master_fx: p
+            .master_inserts
+            .iter()
+            .map(|s| prowave_project::InsertDoc {
+                kind: s.name().into(),
+                bypass: s.bypass,
+                params: s.params[..s.kind.params().len()].to_vec(),
+            })
+            .collect(),
         selected_track: p.selected_track,
         tracks,
         groups: p
@@ -869,6 +883,7 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
         .take(crate::side_panes::MAX_NOTES)
         .collect();
     p.master_vol = doc.master_vol.clamp(0.0, 2.0);
+    p.master_inserts = inserts_from_fx_docs(&doc.master_fx);
     p.groups = doc
         .groups
         .iter()
@@ -1244,6 +1259,34 @@ pub(crate) mod tests {
             &egui::Context::default(),
         );
         assert!(!old.show_master_track && old.header_hidden.is_empty());
+    }
+
+    #[test]
+    fn the_effects_of_stereo_out_are_saved_and_an_old_file_has_none() {
+        use prowave_engine::{sd, FxKind};
+        let mut p = Project::empty();
+        let mut glue = crate::model::Insert::new(FxKind::Reverb);
+        glue.params[sd::WET] = -20.0;
+        glue.params[sd::LO_SPREAD] = 60.0;
+        let mut comp = crate::model::Insert::new(FxKind::Compressor);
+        comp.bypass = true;
+        p.master_inserts = vec![glue, comp];
+        let (doc, _) = to_doc(&p);
+        assert_eq!(doc.master_fx.len(), 2);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.master_inserts, p.master_inserts);
+        // They count as a change to save.
+        assert_ne!(
+            crate::file_commands::content(&p),
+            crate::file_commands::content(&Project::empty())
+        );
+        // A file from before has none.
+        let (old, _) = from_doc(
+            &ProjectDoc::default(),
+            Path::new("."),
+            &egui::Context::default(),
+        );
+        assert!(old.master_inserts.is_empty());
     }
 
     #[test]

@@ -63,6 +63,8 @@ pub struct EngineSync {
     layout: Option<AudioLayout>,
     /// The effects, routes and automation the engine has, by track.
     fx: Vec<Vec<Insert>>,
+    /// The effects the engine has on the master bus.
+    master_fx: Vec<Insert>,
     /// Space Designer responses being made off the UI thread, by track and slot.
     irs: std::collections::HashMap<(usize, usize), IrJob>,
     routes: Vec<Route>,
@@ -81,6 +83,9 @@ fn ir_key(params: &[f32; prowave_engine::MAX_FX_PARAMS]) -> Vec<u32> {
         .map(|&i| params[i].to_bits())
         .collect()
 }
+
+/// The key of the master bus in the Space Designer jobs (no track has this number).
+const MASTER_KEY: usize = usize::MAX;
 
 /// A Space Designer response being made on a background thread. Settings that change while it
 /// runs wait in `next`; only the newest is made after it, so dragging a control does not queue
@@ -524,6 +529,7 @@ impl EngineSync {
             song_rev: None,
             layout: None,
             fx: Vec::new(),
+            master_fx: Vec::new(),
             irs: std::collections::HashMap::new(),
             routes: Vec::new(),
             pdc: Vec::new(),
@@ -762,6 +768,9 @@ impl EngineSync {
         let n = p.tracks.len().min(MAX_TRACKS).max(self.fx.len());
         self.fx.resize_with(n, Vec::new);
         self.routes.resize(n, Route::default());
+        if !self.sync_master_fx(p, sr) {
+            return;
+        }
         for i in 0..n {
             let want: &[Insert] = p
                 .tracks
@@ -856,14 +865,63 @@ impl EngineSync {
         }
     }
 
+    /// The effects of the Stereo Out strip, sent like a track's: a new chain when the kinds
+    /// change, else the changed settings. Returns false when the engine's queue was full.
+    fn sync_master_fx(&mut self, p: &Project, sr: f32) -> bool {
+        let want = &p.master_inserts;
+        let same_kinds = self.master_fx.len() == want.len()
+            && self
+                .master_fx
+                .iter()
+                .zip(want)
+                .all(|(a, b)| a.kind == b.kind);
+        if !same_kinds {
+            if !self.send(Command::SetMasterInserts(chain_of(want, sr))) {
+                return false;
+            }
+            self.master_fx = want.to_vec();
+            self.irs.retain(|(t, _), _| *t != MASTER_KEY);
+            return true;
+        }
+        for (slot, (have, w)) in self.master_fx.iter_mut().zip(want).enumerate() {
+            if have == w {
+                continue;
+            }
+            let cmd = Command::SetFx {
+                track: prowave_engine::MASTER_TRACK,
+                slot: slot as u8,
+                params: w.params,
+                bypass: w.bypass,
+            };
+            if !self.engine.send(cmd) {
+                self.retry = true;
+                return false;
+            }
+            if w.kind == prowave_engine::FxKind::Reverb && ir_key(&have.params) != ir_key(&w.params)
+            {
+                let job = self.irs.entry((MASTER_KEY, slot)).or_insert(IrJob {
+                    running: None,
+                    next: None,
+                    ready: None,
+                });
+                job.next = Some(w.params);
+            }
+            *have = *w;
+        }
+        true
+    }
+
     /// Starts the response for the newest Space Designer settings, hands finished ones to the
     /// engine, and keeps the screen redrawing while any is being made.
     fn run_ir_jobs(&mut self, sr: f32) {
         let keys: Vec<(usize, usize)> = self.irs.keys().copied().collect();
         for key in keys {
-            let still_there = self
-                .fx
-                .get(key.0)
+            let strip = if key.0 == MASTER_KEY {
+                Some(&self.master_fx)
+            } else {
+                self.fx.get(key.0)
+            };
+            let still_there = strip
                 .and_then(|f| f.get(key.1))
                 .is_some_and(|i| i.kind == prowave_engine::FxKind::Reverb);
             let Some(job) = self.irs.get_mut(&key) else {
@@ -885,7 +943,11 @@ impl EngineSync {
             }
             if let Some(conv) = job.ready.take() {
                 let cmd = Command::SetConvolver {
-                    track: key.0 as u16,
+                    track: if key.0 == MASTER_KEY {
+                        prowave_engine::MASTER_TRACK
+                    } else {
+                        key.0 as u16
+                    },
                     slot: key.1 as u8,
                     conv,
                 };
@@ -968,6 +1030,12 @@ impl EngineSync {
     pub fn fx_inputs(&mut self, n: usize) -> Vec<f32> {
         let state = self.engine.state();
         (0..n).map(|i| state.fx_input(i)).collect()
+    }
+
+    /// Gain reduction in dB and Space Designer input level (linear) of the master bus's effects.
+    pub fn master_fx_meters(&mut self) -> (f32, f32) {
+        let state = self.engine.state();
+        (state.master_reduction, state.master_fx_input)
     }
 
     /// Highest audio-callback DSP load since the last call (1.0 = full budget).
