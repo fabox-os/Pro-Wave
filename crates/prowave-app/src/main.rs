@@ -53,6 +53,7 @@ mod soundfonts;
 mod start_screen;
 mod step_editor;
 mod sync_menu;
+mod sysex;
 mod takes;
 mod tempo_track;
 mod theme;
@@ -125,6 +126,8 @@ pub struct UiState {
     pub audio_info: Option<(String, u32)>,
     /// Project Settings > MIDI: send MIDI panic on the next frame.
     pub midi_panic: bool,
+    /// Event list > SysEx…: the message being typed, while its window is open.
+    pub sysex_entry: Option<String>,
     /// The MIDI Transform window.
     pub transform: transform_ui::TransformView,
     /// The editor panel shows the Score instead of the Piano Roll for ordinary MIDI regions.
@@ -205,6 +208,7 @@ impl UiState {
             track_dialog: None,
             audio_info: None,
             midi_panic: false,
+            sysex_entry: None,
             transform: transform_ui::TransformView::default(),
             score_tab: false,
             score: score::ScoreView::default(),
