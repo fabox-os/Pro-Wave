@@ -351,6 +351,18 @@ pub enum Command {
     SetMetronome {
         on: bool,
     },
+    /// Metronome settings (Logic: Project Settings > Metronome): the click's level in dB
+    /// (clamped to -60..0) and whether the first beat of each bar has the higher accent click.
+    /// Non-finite levels are ignored.
+    SetClick {
+        gain_db: f32,
+        accent: bool,
+    },
+    /// Reference pitch of software instruments: the frequency of A4 in Hz (Logic: Project
+    /// Settings > Tuning), clamped to 427..453 like Logic's. Non-finite values are ignored.
+    SetTuning {
+        a4_hz: f32,
+    },
     /// Master fader (Logic: Stereo Out level), clamped to 0..2 linear. Changes ramp over
     /// 5 ms during playback/audition; silent stopped setup is immediate. Non-finite values
     /// are ignored so malformed commands cannot poison the output.
@@ -697,6 +709,10 @@ pub struct EngineCore {
     click_remaining: u32,
     click_phase: f32,
     click_freq: f32,
+    click_gain: f32,
+    click_accent: bool,
+    /// Frequency of A4 in Hz.
+    tuning_hz: f32,
     /// A count-in is running: the clicks left, the frames to the next one, the frames
     /// between clicks and how many clicks it has.
     counting: bool,
@@ -794,8 +810,14 @@ fn decayed_peak(new: f32, old: f32) -> f32 {
     finite_or_zero(new.max(old * 0.85)).min(16.0)
 }
 
-fn midi_hz(p: u8) -> f32 {
-    440.0 * 2f32.powf((p as f32 - 69.0) / 12.0)
+/// Logic's range for the reference pitch (A4) in Hz.
+pub const MIN_TUNING_HZ: f32 = 427.0;
+pub const MAX_TUNING_HZ: f32 = 453.0;
+/// The click's level before Project Settings > Metronome changes it (linear, about -10.5 dB).
+const DEFAULT_CLICK_GAIN: f32 = 0.3;
+
+fn midi_hz(p: u8, a4_hz: f32) -> f32 {
+    a4_hz * 2f32.powf((p as f32 - 69.0) / 12.0)
 }
 
 impl EngineCore {
@@ -831,6 +853,9 @@ impl EngineCore {
             click_remaining: 0,
             click_phase: 0.0,
             click_freq: 1000.0,
+            click_gain: DEFAULT_CLICK_GAIN,
+            click_accent: true,
+            tuning_hz: 440.0,
             counting: false,
             count_left: 0,
             count_wait: 0,
@@ -1422,6 +1447,17 @@ impl EngineCore {
                     self.mtc_locate();
                 }
                 Command::SetMetronome { on } => self.metronome = on,
+                Command::SetClick { gain_db, accent } => {
+                    if gain_db.is_finite() {
+                        self.click_gain = 10f32.powf(gain_db.clamp(-60.0, 0.0) / 20.0);
+                    }
+                    self.click_accent = accent;
+                }
+                Command::SetTuning { a4_hz } => {
+                    if a4_hz.is_finite() {
+                        self.tuning_hz = a4_hz.clamp(MIN_TUNING_HZ, MAX_TUNING_HZ);
+                    }
+                }
                 Command::SetMasterGain { linear } => {
                     if linear.is_finite() {
                         let samples = self.smoothing_samples();
@@ -1624,7 +1660,7 @@ impl EngineCore {
             .unwrap_or_default();
         let track = n.track.min(MAX_TRACKS as u16 - 1);
         let mut patch = self.track_patch[track as usize];
-        let mut base_hz = midi_hz(n.pitch);
+        let mut base_hz = midi_hz(n.pitch, self.tuning_hz);
         if patch.kit != Kit::None {
             (patch, base_hz) = kit_voice(&patch, n.pitch);
         }
@@ -1991,7 +2027,7 @@ impl EngineCore {
                 self.click_remaining -= 1;
                 self.click_phase += self.click_freq / self.sr;
                 let env = self.click_remaining as f32 / (0.03 * self.sr);
-                let c = (self.click_phase * std::f32::consts::TAU).sin() * env * 0.3;
+                let c = (self.click_phase * std::f32::consts::TAU).sin() * env * self.click_gain;
                 l += c as f64;
                 r += c as f64;
             }
@@ -2039,7 +2075,11 @@ impl EngineCore {
                     if (a.bar, a.beat) != (b.bar, b.beat) {
                         self.click_remaining = (0.03 * self.sr) as u32;
                         self.click_phase = 0.0;
-                        self.click_freq = if b.beat == 0 { 1500.0 } else { 1000.0 };
+                        self.click_freq = if b.beat == 0 && self.click_accent {
+                            1500.0
+                        } else {
+                            1000.0
+                        };
                     }
                 }
             }
@@ -2741,6 +2781,91 @@ mod tests {
         let mut buf = vec![0.0f32; 4_800 * 2];
         e.process(&mut buf);
         assert!(buf.iter().any(|x| x.abs() > 0.05));
+    }
+
+    /// The loudest sample of one second of the click on a bar's first beat.
+    fn click_peak(commands: Vec<Command>) -> f32 {
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx.push(Command::SetMetronome { on: true }).is_ok());
+        for c in commands {
+            assert!(tx.push(c).is_ok());
+        }
+        assert!(tx.push(Command::SetPosition { beat: 0.99 }).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 4_800 * 2];
+        e.process(&mut buf);
+        buf.iter().fold(0f32, |m, x| m.max(x.abs()))
+    }
+
+    #[test]
+    fn click_volume_follows_the_setting() {
+        let loud = click_peak(vec![]);
+        let quiet = click_peak(vec![Command::SetClick {
+            gain_db: -20.0,
+            accent: true,
+        }]);
+        assert!(loud > 0.05, "{loud}");
+        // The click starts at 0.3 (-10.5 dB), so -20 dB is a third of it.
+        assert!((quiet / loud - 0.1 / 0.3).abs() < 0.03, "{quiet} / {loud}");
+        // A level that is not a number leaves the last one.
+        let kept = click_peak(vec![Command::SetClick {
+            gain_db: f32::NAN,
+            accent: true,
+        }]);
+        assert!((kept / loud - 1.0).abs() < 0.03, "{kept} / {loud}");
+    }
+
+    #[test]
+    fn the_accent_can_be_switched_off() {
+        for (accent, want) in [(true, 1500.0), (false, 1000.0)] {
+            let (mut e, mut tx, _s) = rig();
+            assert!(tx.push(Command::SetMetronome { on: true }).is_ok());
+            assert!(tx
+                .push(Command::SetClick {
+                    gain_db: -10.0,
+                    accent
+                })
+                .is_ok());
+            // Just before the first beat of bar 2.
+            assert!(tx.push(Command::SetPosition { beat: 3.999 }).is_ok());
+            assert!(tx.push(Command::Play).is_ok());
+            let mut buf = vec![0.0f32; 64 * 2];
+            e.process(&mut buf);
+            assert!(e.click_remaining > 0);
+            assert_eq!(e.click_freq, want, "accent {accent}");
+        }
+    }
+
+    /// Zero crossings of the left channel while an A4 note plays for half a second.
+    fn crossings_of_a4(tuning: Option<f32>) -> usize {
+        let (mut e, mut tx, _s) = rig();
+        if let Some(a4_hz) = tuning {
+            assert!(tx.push(Command::SetTuning { a4_hz }).is_ok());
+        }
+        let song = Song::new(vec![note(0.0, 4.0)], vec![TrackMix::default()]);
+        assert!(tx.push(Command::SetSong(Box::new(song))).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 24_000 * 2];
+        e.process(&mut buf);
+        let left: Vec<f32> = buf.iter().step_by(2).copied().collect();
+        left.windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count()
+    }
+
+    #[test]
+    fn tuning_moves_the_pitch_of_an_instrument() {
+        let default = crossings_of_a4(None);
+        assert!(default > 100, "{default}");
+        assert_eq!(crossings_of_a4(Some(440.0)), default);
+        let high = crossings_of_a4(Some(453.0)) as f32;
+        let low = crossings_of_a4(Some(427.0)) as f32;
+        // 453 Hz over 427 Hz is 6.1 % higher.
+        let ratio = high / low;
+        assert!((ratio - 453.0 / 427.0).abs() < 0.02, "ratio {ratio}");
+        // Out of Logic's range it is held at the range's end; not a number is ignored.
+        assert_eq!(crossings_of_a4(Some(1000.0)) as f32, high);
+        assert_eq!(crossings_of_a4(Some(f32::NAN)), default);
     }
 
     #[test]
