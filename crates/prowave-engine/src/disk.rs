@@ -544,7 +544,10 @@ struct Stream {
     producer: Producer<Block>,
     shared: Arc<ClipShared>,
     ratio: f64,
+    /// Length of the clip in device-rate frames (the trimmed length).
     out_len: u64,
+    /// Device-rate frames of the file before the clip's first frame (a trimmed start).
+    offset: u64,
     gen: Option<u16>,
     out_frame: u64,
     buf: Vec<f32>,
@@ -556,7 +559,7 @@ struct Stream {
 impl Stream {
     fn seek_out(&mut self, frame: u64) {
         self.out_frame = frame.min(self.out_len);
-        let s = (self.out_frame as f64 * self.ratio) as u64;
+        let s = ((self.out_frame + self.offset) as f64 * self.ratio) as u64;
         self.buf.clear();
         self.eof = false;
         match self.src.seek(s) {
@@ -615,15 +618,17 @@ impl Stream {
             data: [0.0; BLOCK_FRAMES * 2],
         };
         if self.reverse && n > 0 {
-            let first = self.out_len - self.out_frame - 1;
-            let last = self.out_len - self.out_frame - n as u64;
+            let end = self.offset + self.out_len;
+            let first = end - self.out_frame - 1;
+            let last = end - self.out_frame - n as u64;
             let lo = (last as f64 * self.ratio).floor() as u64;
             let hi = (first as f64 * self.ratio).floor() as u64 + 1;
             match self.ensure_reverse_window(lo, hi) {
                 Ok(()) => {
                     for i in 0..n {
-                        let pos =
-                            (self.out_len - (self.out_frame + i as u64) - 1) as f64 * self.ratio;
+                        let pos = (self.offset + self.out_len - (self.out_frame + i as u64) - 1)
+                            as f64
+                            * self.ratio;
                         let i0 = pos.floor() as u64;
                         let frac = (pos - i0 as f64) as f32;
                         let (l0, r0) = self.frame(i0);
@@ -638,7 +643,7 @@ impl Stream {
             return block;
         }
         for i in 0..n {
-            let pos = (self.out_frame + i as u64) as f64 * self.ratio;
+            let pos = (self.offset + self.out_frame + i as u64) as f64 * self.ratio;
             let i0 = pos.floor() as u64;
             let frac = (pos - i0 as f64) as f32;
             self.ensure(i0 + 1);
@@ -649,7 +654,8 @@ impl Stream {
         }
         self.out_frame += n as u64;
         // Drop source frames we will never read again.
-        let keep_from = ((self.out_frame as f64 * self.ratio).floor() as u64).saturating_sub(1);
+        let keep_from =
+            (((self.offset + self.out_frame) as f64 * self.ratio).floor() as u64).saturating_sub(1);
         if keep_from > self.buf_base {
             let drop_frames = ((keep_from - self.buf_base) as usize).min(self.buf.len() / 2);
             self.buf.drain(..drop_frames * 2);
