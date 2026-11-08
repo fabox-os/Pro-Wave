@@ -1085,6 +1085,11 @@ pub fn recordings_dir() -> PathBuf {
     session_media_dir().join("recordings")
 }
 
+/// Where File > Bounce > Regions in Place… writes its audio until the project is saved.
+pub fn bounces_dir() -> PathBuf {
+    session_media_dir().join("bounces")
+}
+
 /// A track's input from a project file, which can hold any number.
 fn input_source(channel: u16, stereo: bool) -> InputSource {
     let channel = channel.min(prowave_engine::MAX_INPUT_CHANNELS as u16 - 2);

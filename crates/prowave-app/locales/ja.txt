@@ -787,3 +787,4 @@ Mastering Wide Hall = Mastering Wide Hall
 Bouncing {}% = バウンス {}%
 Bounced to {} = {} にバウンスしました
 Bounce cancelled = バウンスをキャンセルしました
+Bounced {} in place = {} をその場でバウンスしました

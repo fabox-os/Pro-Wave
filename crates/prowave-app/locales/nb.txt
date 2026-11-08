@@ -787,3 +787,4 @@ Mastering Wide Hall = Mastering Wide Hall
 Bouncing {}% = Bounce {} %
 Bounced to {} = Bouncet til {}
 Bounce cancelled = Bounce avbrutt
+Bounced {} in place = {} bouncet på stedet

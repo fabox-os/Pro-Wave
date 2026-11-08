@@ -787,3 +787,4 @@ Mastering Wide Hall = Mastering Wide Hall
 Bouncing {}% = 导出 {}%
 Bounced to {} = 已导出到 {}
 Bounce cancelled = 已取消导出
+Bounced {} in place = 已在原位置导出 {}

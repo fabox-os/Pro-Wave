@@ -787,3 +787,4 @@ Mastering Wide Hall = Mastering Wide Hall
 Bouncing {}% = Bounce {}%
 Bounced to {} = Bounce guardado em {}
 Bounce cancelled = Bounce cancelado
+Bounced {} in place = {} com bounce no local

@@ -787,3 +787,4 @@ Mastering Wide Hall = Mastering Wide Hall
 Bouncing {}% = Боунс {}%
 Bounced to {} = Боунс збережено в {}
 Bounce cancelled = Боунс скасовано
+Bounced {} in place = {} боунс на місці

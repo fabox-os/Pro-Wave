@@ -787,3 +787,4 @@ Mastering Wide Hall = Mastering Wide Hall
 Bouncing {}% = Bounce {} %
 Bounced to {} = Bounce įrašytas į {}
 Bounce cancelled = Bounce atšauktas
+Bounced {} in place = {} bouncinta vietoje

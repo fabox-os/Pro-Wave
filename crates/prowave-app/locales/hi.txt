@@ -787,3 +787,4 @@ Mastering Wide Hall = Mastering Wide Hall
 Bouncing {}% = बाउंस {}%
 Bounced to {} = {} में बाउंस किया
 Bounce cancelled = बाउंस रद्द किया
+Bounced {} in place = {} को यथास्थान बाउंस किया

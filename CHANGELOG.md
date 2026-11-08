@@ -17,6 +17,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Export > Track as Audio File…:** the selected track is bounced alone into a WAV. The other tracks are soloed off while it runs — the track keeps its effects, its sends and the buses they feed — and everyone's solo states are put back when it ends. It is the same real-time bounce as above, so it takes the song's length; a track with no regions is not exported.
 
+✅ **Bounce in place:** **File > Bounce > Regions in Place…** (and **Record > Bounce In Place**) renders the selected MIDI region with its track's instrument, effects and sends, over the region's own span, and replaces the region with the audio where it was. It is one undo step, and the audio lives in the session's media folder until the project is saved, when it travels inside the `.prowave`.
+
 ### Still to do or test
 
 ❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
