@@ -19,6 +19,7 @@ pub const MAX_INSERTS: usize = 8;
 pub enum FxKind {
     ChannelEq,
     Compressor,
+    MultiComp,
     Reverb,
     Delay,
     Chorus,
@@ -110,6 +111,23 @@ const COMP_PARAMS: [ParamInfo; 5] = [
     pl("Attack", 0.1, 100.0, 10.0, "ms"),
     pl("Release", 10.0, 1000.0, 120.0, "ms"),
     p("Make-up", 0.0, 24.0, 0.0, "dB"),
+];
+/// The Multi-Band Compressor: three bands with their own threshold, ratio and make-up gain,
+/// the two crossovers between them, and one attack and release for all three.
+const MULTICOMP_PARAMS: [ParamInfo; 13] = [
+    p("Low Threshold", -60.0, 0.0, -18.0, "dB"),
+    p("Low Ratio", 1.0, 20.0, 3.0, ":1"),
+    p("Low Gain", 0.0, 24.0, 0.0, "dB"),
+    pl("Low/Mid", 50.0, 2000.0, 250.0, "Hz"),
+    p("Mid Threshold", -60.0, 0.0, -18.0, "dB"),
+    p("Mid Ratio", 1.0, 20.0, 3.0, ":1"),
+    p("Mid Gain", 0.0, 24.0, 0.0, "dB"),
+    pl("Mid/High", 1000.0, 12000.0, 3000.0, "Hz"),
+    p("High Threshold", -60.0, 0.0, -18.0, "dB"),
+    p("High Ratio", 1.0, 20.0, 3.0, ":1"),
+    p("High Gain", 0.0, 24.0, 0.0, "dB"),
+    pl("Attack", 0.1, 100.0, 10.0, "ms"),
+    pl("Release", 10.0, 1000.0, 120.0, "ms"),
 ];
 /// Space Designer (Logic's own ranges and starting values): see [`crate::convolver::sd`] for
 /// where each one sits.
@@ -396,9 +414,10 @@ fn limiter_len(sr: f32) -> usize {
 }
 
 impl FxKind {
-    pub const ALL: [FxKind; 12] = [
+    pub const ALL: [FxKind; 13] = [
         FxKind::ChannelEq,
         FxKind::Compressor,
+        FxKind::MultiComp,
         FxKind::Reverb,
         FxKind::Delay,
         FxKind::Chorus,
@@ -416,6 +435,7 @@ impl FxKind {
         match self {
             FxKind::ChannelEq => "Channel EQ",
             FxKind::Compressor => "Compressor",
+            FxKind::MultiComp => "Multi-Band Compressor",
             FxKind::Reverb => "Space D",
             FxKind::Delay => "Tape Delay",
             FxKind::Chorus => "Chorus",
@@ -446,6 +466,10 @@ impl FxKind {
         Some(match n.as_str() {
             "channel eq" | "eq" => FxKind::ChannelEq,
             "compressor" => FxKind::Compressor,
+            "multi-band compressor"
+            | "multiband compressor"
+            | "multi band compressor"
+            | "multipressor" => FxKind::MultiComp,
             "space d" | "space designer" | "reverb" => FxKind::Reverb,
             "tape delay" | "delay" | "echo" => FxKind::Delay,
             "chorus" => FxKind::Chorus,
@@ -465,6 +489,7 @@ impl FxKind {
         match self {
             FxKind::ChannelEq => &EQ_PARAMS,
             FxKind::Compressor => &COMP_PARAMS,
+            FxKind::MultiComp => &MULTICOMP_PARAMS,
             FxKind::Reverb => &REVERB_PARAMS,
             FxKind::Delay => &DELAY_PARAMS,
             FxKind::Chorus => &CHORUS_PARAMS,
@@ -787,6 +812,69 @@ struct CompState {
     reduction: f32,
 }
 
+/// The Multi-Band Compressor's filters and one gain reduction per band. Each crossover is
+/// Linkwitz-Riley 4th order (two Butterworth sections), so the three bands add back to the
+/// input when no band compresses.
+#[derive(Clone, Debug)]
+struct MultiCompState {
+    /// Low band: two low-pass sections at the low/mid crossover, per channel.
+    low: [[Biquad; 2]; 2],
+    /// Mid band: two high-pass sections at the low/mid crossover, then two low-pass sections
+    /// at the mid/high crossover, per channel.
+    mid: [[Biquad; 4]; 2],
+    /// High band: two high-pass sections at the mid/high crossover, per channel.
+    high: [[Biquad; 2]; 2],
+    /// Gain reduction per band (low, mid, high) in dB.
+    reduction: [f32; 3],
+}
+
+impl MultiCompState {
+    fn new() -> Self {
+        Self {
+            low: [[Biquad::unity(); 2]; 2],
+            mid: [[Biquad::unity(); 4]; 2],
+            high: [[Biquad::unity(); 2]; 2],
+            reduction: [0.0; 3],
+        }
+    }
+}
+
+/// The crossover filters of the Multi-Band Compressor at its two split frequencies.
+fn multicomp_filters(
+    pr: &[f32; MAX_FX_PARAMS],
+    sr: f32,
+) -> ([Biquad; 2], [Biquad; 4], [Biquad; 2]) {
+    // A 4th-order Linkwitz-Riley crossover: two Butterworth (Q = 0.71) sections in a row.
+    let q = std::f32::consts::FRAC_1_SQRT_2;
+    let low = pr[3].clamp(20.0, sr * 0.45);
+    let high = pr[7].clamp(low * 1.05, sr * 0.45);
+    let low_pass = Biquad::make(Shape::Low, low, q, 0.0, sr);
+    let low_high_pass = Biquad::make(Shape::High, low, q, 0.0, sr);
+    let high_pass = Biquad::make(Shape::High, high, q, 0.0, sr);
+    let high_low_pass = Biquad::make(Shape::Low, high, q, 0.0, sr);
+    (
+        [low_pass, low_pass],
+        [low_high_pass, low_high_pass, high_low_pass, high_low_pass],
+        [high_pass, high_pass],
+    )
+}
+
+/// The gain reduction a compressor takes for a level, in dB, with Logic's 6 dB soft knee.
+#[inline]
+fn compression_reduction(level_db: f32, threshold: f32, ratio: f32) -> f32 {
+    let over = level_db - threshold;
+    let knee = 6.0;
+    let slope = 1.0 - 1.0 / ratio.max(1.0);
+    if over <= -knee / 2.0 {
+        0.0
+    } else if over >= knee / 2.0 {
+        over * slope
+    } else {
+        let x = over + knee / 2.0;
+        slope * x * x / (2.0 * knee)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct DelayState {
     lines: [Line; 2],
@@ -947,6 +1035,7 @@ enum State {
     Limiter(Box<LimiterState>),
     Eq([[Biquad; 3]; 2]),
     Comp(CompState),
+    MultiComp(Box<MultiCompState>),
     Reverb(Box<SpaceState>),
     Delay(Box<DelayState>),
     Chorus(Box<ChorusState>),
@@ -979,6 +1068,7 @@ impl Fx {
         let state = match kind {
             FxKind::ChannelEq => State::Eq([[Biquad::unity(); 3]; 2]),
             FxKind::Compressor => State::Comp(CompState { reduction: 0.0 }),
+            FxKind::MultiComp => State::MultiComp(Box::new(MultiCompState::new())),
             FxKind::Reverb => {
                 State::Reverb(Box::new(SpaceState::new(sr, &kind.clamp_params(params))))
             }
@@ -1134,6 +1224,32 @@ impl Fx {
                     }
                 }
             }
+            State::MultiComp(s) => {
+                let (low, mid, high) = multicomp_filters(&pr, sr);
+                for ch in 0..2 {
+                    for (old, n) in s.low[ch].iter_mut().zip(low) {
+                        *old = Biquad {
+                            z1: old.z1,
+                            z2: old.z2,
+                            ..n
+                        };
+                    }
+                    for (old, n) in s.mid[ch].iter_mut().zip(mid) {
+                        *old = Biquad {
+                            z1: old.z1,
+                            z2: old.z2,
+                            ..n
+                        };
+                    }
+                    for (old, n) in s.high[ch].iter_mut().zip(high) {
+                        *old = Biquad {
+                            z1: old.z1,
+                            z2: old.z2,
+                            ..n
+                        };
+                    }
+                }
+            }
             State::Filter(f) => {
                 let shape = match pr[2].round() as i32 {
                     1 => Shape::High,
@@ -1224,6 +1340,7 @@ impl Fx {
         let db = |g: f32| (-20.0 * g.max(1e-6).log10()).max(0.0);
         match &self.state {
             State::Comp(c) if !self.bypass => c.reduction,
+            State::MultiComp(c) if !self.bypass => c.reduction.iter().fold(0.0, |m, r| m.max(*r)),
             State::Gate(g) if !self.bypass => db(g.gain),
             State::Limiter(l) if !self.bypass => db(l.gain),
             _ => 0.0,
@@ -1247,24 +1364,55 @@ impl Fx {
             }
             State::Comp(c) => {
                 let level = l.abs().max(r.abs()).max(1e-6);
-                let level_db = 20.0 * level.log10();
-                let over = level_db - pr[0];
-                let knee = 6.0;
-                let slope = 1.0 - 1.0 / pr[1];
-                let target = if over <= -knee / 2.0 {
-                    0.0
-                } else if over >= knee / 2.0 {
-                    over * slope
-                } else {
-                    let x = over + knee / 2.0;
-                    slope * x * x / (2.0 * knee)
-                };
+                let target = compression_reduction(20.0 * level.log10(), pr[0], pr[1]);
                 // Attack when the reduction grows, release when it falls.
                 let ms = if target > c.reduction { pr[2] } else { pr[3] };
                 let k = 1.0 - (-1.0 / (ms * 0.001 * sr)).exp();
                 c.reduction += (target - c.reduction) * k;
                 let g = 10f32.powf((pr[4] - c.reduction) / 20.0);
                 (l * g, r * g)
+            }
+            State::MultiComp(s) => {
+                let [ll, lr] = &mut s.low;
+                let [ml, mr] = &mut s.mid;
+                let [hl, hr] = &mut s.high;
+                // Filter each channel once into its three bands.
+                let bands = [
+                    [
+                        ll.iter_mut().fold(l, |v, f| f.tick(v)),
+                        lr.iter_mut().fold(r, |v, f| f.tick(v)),
+                    ],
+                    [
+                        ml.iter_mut().fold(l, |v, f| f.tick(v)),
+                        mr.iter_mut().fold(r, |v, f| f.tick(v)),
+                    ],
+                    [
+                        hl.iter_mut().fold(l, |v, f| f.tick(v)),
+                        hr.iter_mut().fold(r, |v, f| f.tick(v)),
+                    ],
+                ];
+                let mut out = [0.0f32; 2];
+                for (band, [left, right]) in bands.iter().enumerate() {
+                    let (threshold, ratio, make_up) = match band {
+                        0 => (pr[0], pr[1], pr[2]),
+                        1 => (pr[4], pr[5], pr[6]),
+                        _ => (pr[8], pr[9], pr[10]),
+                    };
+                    // Both channels share one reduction, so the stereo image holds.
+                    let level = left.abs().max(right.abs()).max(1e-6);
+                    let target = compression_reduction(20.0 * level.log10(), threshold, ratio);
+                    let ms = if target > s.reduction[band] {
+                        pr[11]
+                    } else {
+                        pr[12]
+                    };
+                    let k = 1.0 - (-1.0 / (ms * 0.001 * sr)).exp();
+                    s.reduction[band] += (target - s.reduction[band]) * k;
+                    let g = 10f32.powf((make_up - s.reduction[band]) / 20.0);
+                    out[0] += left * g;
+                    out[1] += right * g;
+                }
+                (out[0], out[1])
             }
             State::Reverb(s) => {
                 use crate::convolver::sd;
@@ -1493,6 +1641,18 @@ impl Fx {
             }
             State::Limiter(l) => **l = LimiterState::new(sr),
             State::Comp(c) => c.reduction = 0.0,
+            State::MultiComp(c) => {
+                c.reduction = [0.0; 3];
+                for b in c
+                    .low
+                    .iter_mut()
+                    .flatten()
+                    .chain(c.mid.iter_mut().flatten())
+                    .chain(c.high.iter_mut().flatten())
+                {
+                    *b = b.cleared();
+                }
+            }
             State::Reverb(s) => {
                 s.conv.clear();
                 for b in s.eq.iter_mut().flatten() {
@@ -1718,6 +1878,43 @@ mod tests {
             let mut fx = Fx::new(k, k.defaults(), true, SR);
             assert_eq!(fx.process(0.25, -0.5), (0.25, -0.5), "{k:?}");
         }
+    }
+
+    #[test]
+    fn the_multiband_compressor_leaves_the_sound_alone_when_no_band_compresses() {
+        // A 0 dB threshold with a ratio of 1 reduces nothing, so the three bands must add back
+        // to the input (the crossovers are Linkwitz-Riley, which sums flat).
+        let mut fx = with(
+            FxKind::MultiComp,
+            &[(0, 0.0), (1, 1.0), (4, 0.0), (5, 1.0), (8, 0.0), (9, 1.0)],
+        );
+        let input = sine(440.0, 0.5, 0.5);
+        let out = run(&mut fx, &input);
+        let settled = 4_800..;
+        let ratio = rms(&out[settled.clone()]) / rms(&input[settled]);
+        assert!((ratio - 1.0).abs() < 0.02, "{ratio}");
+        assert!(out.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn the_multiband_compressor_turns_down_only_the_band_over_its_threshold() {
+        // Only the low band compresses, hard.
+        let only_low = &[
+            (0, -60.0),
+            (1, 20.0),
+            (4, 0.0),
+            (5, 1.0),
+            (8, 0.0),
+            (9, 1.0),
+        ];
+        let level = |hz: f32| {
+            let mut fx = with(FxKind::MultiComp, only_low);
+            let input = sine(hz, 0.6, 0.5);
+            let out = run(&mut fx, &input);
+            rms(&out[9_600..]) / rms(&input[9_600..])
+        };
+        assert!(level(60.0) < 0.3, "{}", level(60.0));
+        assert!((level(8_000.0) - 1.0).abs() < 0.05, "{}", level(8_000.0));
     }
 
     #[test]
