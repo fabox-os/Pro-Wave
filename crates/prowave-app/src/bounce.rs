@@ -31,9 +31,11 @@ pub struct Bounce {
     samples: Vec<f32>,
     pub start_beat: f64,
     pub end_beat: f64,
-    /// The playhead's place and the cycle before the bounce, put back when it ends.
+    /// The playhead's place, the cycle and the metronome before the bounce, put back when it
+    /// ends.
     was_at: f64,
     was_cycle: bool,
+    was_metronome: bool,
     path: PathBuf,
     sample_rate: u32,
 }
@@ -58,14 +60,30 @@ impl Bounce {
             end_beat,
             was_at: project.position_beats,
             was_cycle: project.cycle,
+            was_metronome: project.metronome,
             path,
             sample_rate: engine.sample_rate(),
         };
-        // A bounce plays once through, from its start.
-        project.cycle = false;
-        project.position_beats = start_beat;
-        project.playing = true;
+        // A bounce plays once through, from its start, without the metronome's clicks (they
+        // are mixed before the master fader, so they would be in the file).
+        bounce.take_transport(project);
         Ok(bounce)
+    }
+
+    /// Takes the transport for the bounce: no cycle, no metronome, playing from the start.
+    fn take_transport(&self, project: &mut Project) {
+        project.cycle = false;
+        project.metronome = false;
+        project.position_beats = self.start_beat;
+        project.playing = true;
+    }
+
+    /// Puts the transport back the way it was before the bounce.
+    fn restore_transport(&self, project: &mut Project) {
+        project.playing = false;
+        project.cycle = self.was_cycle;
+        project.metronome = self.was_metronome;
+        project.position_beats = self.was_at;
     }
 
     /// Takes the frames the engine has ready. `false` when the bounce should end.
@@ -92,9 +110,7 @@ impl Bounce {
         reached_end: bool,
     ) -> Result<Option<PathBuf>, String> {
         engine.send(Command::SetCapture(None));
-        project.playing = false;
-        project.cycle = self.was_cycle;
-        project.position_beats = self.was_at;
+        self.restore_transport(project);
         self.collect();
         if !reached_end {
             return Ok(None);
@@ -127,6 +143,7 @@ mod tests {
             end_beat,
             was_at: 0.0,
             was_cycle: false,
+            was_metronome: false,
             path: PathBuf::from("bounce.wav"),
             sample_rate: 48_000,
         }
@@ -156,5 +173,24 @@ mod tests {
         project.playing = false;
         assert!(!running.poll(&project));
         assert!((running.progress(&project) - 3.0 / 16.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_bounce_silences_the_metronome_and_gives_the_transport_back() {
+        let mut running = bounced(4.0, 12.0);
+        running.was_at = 30.0;
+        running.was_cycle = true;
+        running.was_metronome = true;
+        let mut project = Project::empty();
+        project.cycle = true;
+        project.metronome = true;
+        running.take_transport(&mut project);
+        assert!(!project.cycle && !project.metronome, "the clicks stay out");
+        assert!(project.playing);
+        assert_eq!(project.position_beats, 4.0);
+        running.restore_transport(&mut project);
+        assert!(project.cycle && project.metronome);
+        assert!(!project.playing);
+        assert_eq!(project.position_beats, 30.0);
     }
 }
