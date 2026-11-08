@@ -20,12 +20,14 @@ mod disk;
 mod flex;
 mod fx;
 mod gain_smoothing;
+pub mod hydrogen;
 #[cfg(not(target_arch = "wasm32"))]
 mod mapped;
 mod monitor;
 mod mtc;
 mod output;
 mod routing;
+mod sf2;
 mod soundfont;
 mod synth;
 mod tempo_map;

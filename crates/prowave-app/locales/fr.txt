@@ -789,3 +789,4 @@ Bounced to {} = Bounce écrit dans {}
 Bounce cancelled = Bounce annulé
 Bounced {} in place = {} bouncé sur place
 Bounced {} but the region changed during the bounce, so it was not replaced = Bounce écrit dans {}, mais la région a changé pendant le bounce, elle n'a donc pas été remplacée
+Choose Hydrogen Drum Kit… = Choisir un kit de batterie Hydrogen…
