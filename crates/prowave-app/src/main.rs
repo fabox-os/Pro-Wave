@@ -48,6 +48,7 @@ mod recent_files;
 mod recorder;
 mod region_edit;
 mod score;
+mod score_export;
 mod scripter;
 mod side_panes;
 mod signature_track;
@@ -145,6 +146,8 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
+    /// File > Export > Score as MusicXML… picked this frame.
+    pub export_xml_cmd: bool,
     /// File > Export > Track as Audio File… picked this frame.
     pub export_track_cmd: bool,
     /// File > Bounce > Regions in Place… (and Record > Bounce In Place) picked this frame.
@@ -234,6 +237,7 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
+            export_xml_cmd: false,
             export_track_cmd: false,
             bounce_region_cmd: false,
             bounce_join_cmd: false,
@@ -361,6 +365,21 @@ impl App {
         if let Err(e) = import::import_audio(&mut self.project, path, ctx) {
             self.ui.status = Some(i18n::trf("cannot import {}: {}", &[&path.display(), &e]));
         }
+    }
+
+    /// File > Export > Score as MusicXML…: asks where to write and exports every track's notes.
+    fn export_score(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MusicXML", &["musicxml", "xml"])
+            .set_file_name(format!("{}.musicxml", self.project.name))
+            .save_file()
+        else {
+            return;
+        };
+        self.ui.status = Some(match score_export::export(&self.project, &path) {
+            Ok(notes) => i18n::trf("exported {} notes to {}", &[&notes, &path.display()]),
+            Err(e) => e,
+        });
     }
 
     /// File > Bounce > Project or Section…: asks where to write and starts the bounce.
@@ -1171,6 +1190,9 @@ impl eframe::App for App {
         }
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
+        }
+        if std::mem::take(&mut self.ui.export_xml_cmd) {
+            self.export_score();
         }
         if std::mem::take(&mut self.ui.bounce_cmd) {
             self.start_bounce();
