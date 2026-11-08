@@ -784,3 +784,6 @@ Low Pass = Low Pass
 Mastering Glue - Small Room = Mastering Glue - Small Room
 Mastering Plate - Vocal Sheen = Mastering Plate - Vocal Sheen
 Mastering Wide Hall = Mastering Wide Hall
+Bouncing {}% = Bounce {} %
+Bounced to {} = Na-bounce sa {}
+Bounce cancelled = Kinansela ang bounce

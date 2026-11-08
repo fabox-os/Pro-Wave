@@ -784,3 +784,6 @@ Low Pass = Нижніх частот
 Mastering Glue - Small Room = Mastering Glue - Small Room
 Mastering Plate - Vocal Sheen = Mastering Plate - Vocal Sheen
 Mastering Wide Hall = Mastering Wide Hall
+Bouncing {}% = Боунс {}%
+Bounced to {} = Боунс збережено в {}
+Bounce cancelled = Боунс скасовано

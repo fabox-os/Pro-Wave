@@ -9,6 +9,7 @@ mod apple_loops;
 mod audio_rec;
 mod automation;
 mod bench;
+mod bounce;
 mod clock_follow;
 mod clock_in;
 mod engine_sync;
@@ -142,6 +143,8 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
+    /// File > Bounce picked this frame; run by `App` (which owns the engine).
+    pub bounce_cmd: Option<bounce::Cmd>,
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
     pub steps: step_editor::StepView,
     /// True while the pointer is over the Piano Roll (it owns Delete/Cmd+R then).
@@ -217,6 +220,7 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
+            bounce_cmd: None,
             piano_focus: false,
             audition: Vec::new(),
             file_cmd: None,
@@ -252,6 +256,8 @@ struct App {
     project: Project,
     ui: UiState,
     sync: Option<engine_sync::EngineSync>,
+    /// File > Bounce in progress.
+    bounce: Option<bounce::Bounce>,
     /// The `.prowave` file the project was opened from or last saved to.
     path: Option<std::path::PathBuf>,
     /// Content at the last open/save, to detect unsaved changes (see `file_commands`).
@@ -333,6 +339,89 @@ impl App {
         if let Err(e) = import::import_audio(&mut self.project, path, ctx) {
             self.ui.status = Some(i18n::trf("cannot import {}: {}", &[&path.display(), &e]));
         }
+    }
+
+    /// File > Bounce > Project or Section…, and stopping a bounce.
+    fn run_bounce_cmd(&mut self, cmd: bounce::Cmd) {
+        match cmd {
+            bounce::Cmd::ProjectOrSection => self.start_bounce(),
+            bounce::Cmd::Cancel => self.end_bounce(),
+        }
+    }
+
+    /// Asks where to write and starts a bounce of the project, or of the cycle section.
+    fn start_bounce(&mut self) {
+        let (start, end) = if self.project.cycle {
+            (self.project.cycle_start, self.project.cycle_end)
+        } else {
+            let end = self
+                .project
+                .tracks
+                .iter()
+                .flat_map(|t| t.regions.iter())
+                .map(|r| self.project.region_end_beats(r))
+                .fold(0.0, f64::max);
+            (0.0, end)
+        };
+        if end <= start || self.bounce.is_some() {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("WAV", &["wav", "WAV"])
+            .set_file_name(format!("{}.wav", self.project.name))
+            .save_file()
+        else {
+            return;
+        };
+        let Some(sync) = self.sync.as_mut() else {
+            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
+            return;
+        };
+        match bounce::Bounce::start(&mut sync.engine, &mut self.project, start, end, path) {
+            Ok(running) => self.bounce = Some(running),
+            Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    fn end_bounce(&mut self) {
+        let Some(running) = self.bounce.take() else {
+            return;
+        };
+        let result = match self.sync.as_mut() {
+            Some(sync) => running.finish(&mut sync.engine, &mut self.project, false),
+            None => Ok(None),
+        };
+        self.ui.status = Some(match result {
+            Ok(_) => i18n::tr("Bounce cancelled").to_string(),
+            Err(e) => e,
+        });
+    }
+
+    /// Runs a bounce once a frame: gathers the engine's frames and stops at the end beat (or
+    /// when the transport stops).
+    fn run_bounce(&mut self, ctx: &egui::Context) {
+        let Some(running) = self.bounce.as_mut() else {
+            return;
+        };
+        if running.poll(&self.project) {
+            let percent = (running.progress(&self.project) * 100.0).round();
+            self.ui.status = Some(i18n::trf("Bouncing {}%", &[&format!("{percent:.0}")]));
+            ctx.request_repaint();
+            return;
+        }
+        let reached_end = self.project.playing && self.project.position_beats >= running.end_beat;
+        let Some(running) = self.bounce.take() else {
+            return;
+        };
+        let result = match self.sync.as_mut() {
+            Some(sync) => running.finish(&mut sync.engine, &mut self.project, reached_end),
+            None => Ok(None),
+        };
+        self.ui.status = Some(match result {
+            Ok(Some(path)) => i18n::trf("Bounced to {}", &[&path.display()]),
+            Ok(None) => i18n::tr("Bounce cancelled").to_string(),
+            Err(e) => e,
+        });
     }
 }
 
@@ -723,6 +812,7 @@ impl eframe::App for App {
             self.import(&path, &ctx);
         }
         self.record_audio(&ctx);
+        self.run_bounce(&ctx);
         self.play_and_record_midi(&ctx);
         if std::mem::take(&mut self.ui.update_check) {
             self.updater.start_check(true);
@@ -769,6 +859,9 @@ impl eframe::App for App {
         }
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
+        }
+        if let Some(cmd) = self.ui.bounce_cmd.take() {
+            self.run_bounce_cmd(cmd);
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
@@ -1132,6 +1225,7 @@ fn main() -> eframe::Result {
                 project,
                 ui: UiState::new(),
                 sync,
+                bounce: None,
                 path: None,
                 native_menu: None,
                 bench: bench_out.clone().map(bench::Probe::new),

@@ -784,3 +784,6 @@ Low Pass = लो पास
 Mastering Glue - Small Room = Mastering Glue - Small Room
 Mastering Plate - Vocal Sheen = Mastering Plate - Vocal Sheen
 Mastering Wide Hall = Mastering Wide Hall
+Bouncing {}% = बाउंस {}%
+Bounced to {} = {} में बाउंस किया
+Bounce cancelled = बाउंस रद्द किया

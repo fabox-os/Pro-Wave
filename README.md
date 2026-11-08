@@ -56,7 +56,8 @@ to update this section.
   multi-band EQ and the **Amp Designer** for guitar and bass (five amplifiers, three cabinets and
   a microphone position); buses, automation and mix groups; Library patches that change a track's
   instrument and sound; Region and Track inspectors applied non-destructively.
-- **Projects:** `.prowave` files (a zip with `project.json` and the audio in `media/`).
+- **Projects:** `.prowave` files (a zip with `project.json` and the audio in `media/`), and
+  **File > Bounce > Project or Section…** writes the mix to a WAV.
 - **Time signatures:** any signature, including compound meters such as 6/8 and 7/8.
 
 ## Downloads

@@ -784,3 +784,6 @@ Low Pass = 低通
 Mastering Glue - Small Room = Mastering Glue - Small Room
 Mastering Plate - Vocal Sheen = Mastering Plate - Vocal Sheen
 Mastering Wide Hall = Mastering Wide Hall
+Bouncing {}% = 导出 {}%
+Bounced to {} = 已导出到 {}
+Bounce cancelled = 已取消导出
