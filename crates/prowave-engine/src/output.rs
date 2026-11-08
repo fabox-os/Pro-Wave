@@ -443,6 +443,12 @@ impl Engine {
         &self.device_name
     }
 
+    /// How busy the disk streaming thread has been lately, 0 to 1 (the app's HD meter): zero
+    /// when the project has no audio regions.
+    pub fn disk_load(&self) -> f32 {
+        self.disk.load()
+    }
+
     /// Streams `file` from disk as an audio region on `track` starting at `start_beat`.
     /// Put the result in [`crate::Song::with_clips`] and send it with `Command::SetSong`.
     pub fn stream_clip(&self, file: &AudioFile, track: u16, start_beat: f64) -> AudioClip {

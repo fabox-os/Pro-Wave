@@ -1043,6 +1043,11 @@ impl EngineSync {
         self.engine.shared().take_dsp_load()
     }
 
+    /// How busy the disk streaming thread has been lately, 0 to 1 (the LCD's HD meter).
+    pub fn disk_load(&self) -> f32 {
+        self.engine.disk_load()
+    }
+
     pub fn master_peaks(&mut self) -> (f32, f32) {
         self.engine.state().peaks
     }
