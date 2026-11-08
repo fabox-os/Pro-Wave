@@ -792,3 +792,7 @@ Bounce cancelled = Bounce abgebrochen
 Bounced {} in place = {} an Ort und Stelle gebounct
 Bounced {} but the region changed during the bounce, so it was not replaced = {} gebounct, aber die Region wurde während des Bounces geändert, daher nicht ersetzt
 Choose Hydrogen Drum Kit… = Hydrogen-Drumkit wählen…
+Current = Aktuell
+Undo {} = Rückgängig {}
+Redo {} = Wiederholen {}
+Nothing to undo yet = Noch nichts rückgängig zu machen

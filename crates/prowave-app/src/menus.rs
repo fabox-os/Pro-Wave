@@ -531,6 +531,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             .is_some_and(|t| t.auto.has_lane()),
         // Record > Record / Record Repeat.
         "Record / Record Repeat" => true,
+        // Edit > Undo History…: the history window (empty until the first edit).
+        "Undo History…" => true,
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -793,6 +795,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             }
             p.recording = true;
         }
+        "Undo History…" => s.show_undo_history = true,
         "Redo" => s.undo_cmd = Some(UndoCmd::Redo),
         "Delete Undo History" => s.undo_cmd = Some(UndoCmd::Clear),
         "Delete" => crate::tracks_area::delete_selected(p, &mut s.tracks),
@@ -1217,7 +1220,8 @@ mod tests {
                     s.export_track_cmd,
                     s.bounce_region_cmd,
                     s.bounce_join_cmd,
-                    s.mixer.auto_editor.track
+                    s.mixer.auto_editor.track,
+                    s.show_undo_history
                 ),
                 (
                     s.ui_scale,
