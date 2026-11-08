@@ -24,6 +24,12 @@ use std::collections::HashMap;
 const TOOLBAR_H: f32 = 30.0;
 const LABEL_W: f32 = 88.0;
 const GAP: f32 = 2.0;
+/// The strip's bottom block: the 2-point inset, the M/S buttons (26 points above the bottom)
+/// and the name label (22 points).
+const STRIP_FOOTER_H: f32 = 50.0;
+/// The shortest fader that still shows its scale and has a useful travel. A shorter one is
+/// what a too-short Mixer panel left on screen (see [`min_panel_height`]).
+const MIN_FADER_H: f32 = 72.0;
 
 const TOOLBAR_BG: Color32 = Color32::from_rgb(0x3c, 0x3c, 0x3c);
 const MIXER_BG: Color32 = Color32::from_rgb(0x33, 0x33, 0x33);
@@ -630,6 +636,46 @@ pub fn send_rows_for(p: &Project, keys: &[StripKey]) -> usize {
         .max()
         .unwrap_or(0)
         + 1
+}
+
+/// The strips the mixer shows, in order: the tracks (or only the selected one), then the
+/// Stereo Out and the Master when their filter buttons are on.
+fn strip_keys(p: &Project, v: &MixerView) -> Vec<StripKey> {
+    let mut keys: Vec<StripKey> = if p.tracks.is_empty() {
+        Vec::new()
+    } else {
+        match v.mode {
+            MixerMode::Single => vec![StripKey::Track(p.selected_track.min(p.tracks.len() - 1))],
+            MixerMode::Tracks | MixerMode::All => (0..p.tracks.len())
+                .filter(|i| strip_visible(p.tracks[*i].kind, &v.filters))
+                .map(StripKey::Track)
+                .collect(),
+        }
+    };
+    if v.filters[5] {
+        keys.push(StripKey::StereoOut);
+    }
+    if v.filters[6] && v.mode != MixerMode::Single {
+        keys.push(StripKey::Master);
+    }
+    keys
+}
+
+/// How tall the Mixer's bottom panel must be for its channel strips to be whole: the toolbar,
+/// the rows from Setting to dB, a fader of at least [`MIN_FADER_H`], and the M/S buttons and
+/// name label at the bottom. A shorter panel cuts the fader off (issue #36).
+pub fn min_panel_height(p: &Project, v: &MixerView) -> f32 {
+    let keys = strip_keys(p, v);
+    let r = rows(0.0, fx_rows_for(p, &keys), send_rows_for(p, &keys));
+    TOOLBAR_H + r.fader_top + STRIP_FOOTER_H + MIN_FADER_H
+}
+
+/// The height of the Mixer's bottom panel when `room` points are left under the control bar:
+/// about half the room, 500 at most (a taller panel would only stretch the faders and meters),
+/// but never less than a whole strip needs. The panel never takes more than the room there is.
+pub fn panel_height(room: f32, p: &Project, v: &MixerView) -> f32 {
+    let usual = (room * 0.48).clamp(160.0, 500.0);
+    usual.max(min_panel_height(p, v)).min(room.max(0.0))
 }
 
 /// The strip's send slots, one per row: the sends it has, then one empty slot to add another.
@@ -2021,24 +2067,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
     g.rect_filled(body, 0.0, MIXER_BG);
 
     // Which strips, in order.
-    let filters = v.filters;
-    let mut keys: Vec<StripKey> = if p.tracks.is_empty() {
-        Vec::new()
-    } else {
-        match v.mode {
-            MixerMode::Single => vec![StripKey::Track(p.selected_track.min(p.tracks.len() - 1))],
-            MixerMode::Tracks | MixerMode::All => (0..p.tracks.len())
-                .filter(|i| strip_visible(p.tracks[*i].kind, &filters))
-                .map(StripKey::Track)
-                .collect(),
-        }
-    };
-    if filters[5] {
-        keys.push(StripKey::StereoOut);
-    }
-    if filters[6] && v.mode != MixerMode::Single {
-        keys.push(StripKey::Master);
-    }
+    let keys = strip_keys(p, v);
 
     let strip_w = if v.wide { 96.0 } else { 80.0 };
     let total_w = keys.len() as f32 * (strip_w + GAP);
@@ -2398,6 +2427,42 @@ mod tests {
         for _ in 0..3 {
             h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
         }
+    }
+
+    #[test]
+    fn the_mixer_panel_keeps_a_whole_strip_visible_on_a_short_screen() {
+        let mut p = mixer_project();
+        let s = UiState::new();
+
+        // A 768-point screen leaves about 600 points under the control bar. Half of it (288)
+        // cut the fader off: only the Pan knob and the top of the fader showed (issue #36).
+        let room = 600.0;
+        let height = panel_height(room, &p, &s.mixer);
+        let keys = strip_keys(&p, &s.mixer);
+        let r = rows(0.0, fx_rows_for(&p, &keys), send_rows_for(&p, &keys));
+        assert!(
+            height - TOOLBAR_H - STRIP_FOOTER_H - r.fader_top >= MIN_FADER_H,
+            "a {height}-point panel left no fader"
+        );
+        // It never takes more than the room there is, however short the window.
+        assert!(panel_height(300.0, &p, &s.mixer) <= 300.0);
+        // A tall window keeps the familiar half-the-room panel, 500 at most.
+        assert_eq!(panel_height(2000.0, &p, &s.mixer), 500.0);
+        // More sends make the strips taller, and the panel grows with them.
+        let before = min_panel_height(&p, &s.mixer);
+        p.tracks[0].sends = vec![
+            SendSlot {
+                bus: Some(1),
+                level: 0.5,
+                pre: false,
+            },
+            SendSlot {
+                bus: Some(2),
+                level: 0.5,
+                pre: false,
+            },
+        ];
+        assert!(min_panel_height(&p, &s.mixer) > before);
     }
 
     #[test]

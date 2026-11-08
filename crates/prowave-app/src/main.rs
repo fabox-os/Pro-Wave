@@ -1070,15 +1070,17 @@ impl eframe::App for App {
         }
         if s.show_mixer || s.bottom == Bottom::PianoRoll {
             // About half of the space under the control bar (500 points at most), so the Tracks
-            // area keeps room on short screens. The Piano Roll can be pulled taller; the mixer
-            // has a fixed height, as in Logic: its strips have a natural size and a taller panel
-            // would only stretch the faders and meters. (It follows the window, so it is never
-            // outside its range when the window shrinks.)
+            // area keeps room on short screens, but never less than a whole channel strip tall:
+            // a shorter panel cut every strip's fader off at the bottom (issue #36). The Piano
+            // Roll can be pulled taller; the mixer has a fixed height, as in Logic. (It follows
+            // the window, so it is never outside its range when the window shrinks.)
             let room = ui.available_height();
             let usual = (room * 0.48).clamp(160.0, 500.0);
             let panel = egui::Panel::bottom("bottom").frame(egui::Frame::new());
             let panel = if s.bottom == Bottom::Mixer {
-                panel.resizable(false).exact_size(usual)
+                panel
+                    .resizable(false)
+                    .exact_size(mixer::panel_height(room, p, &s.mixer))
             } else {
                 panel.resizable(true).default_size(usual)
             };
