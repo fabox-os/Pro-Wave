@@ -29,9 +29,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Hydrogen drum kits:** an instrument track can now play a free Hydrogen drum kit. In the Inspector, **Choose Hydrogen Drum Kit…** takes the kit's `drumkit.xml`; each instrument of the kit plays on its own MIDI note with its velocity layers and gain, and the samples (WAV, AIFF, FLAC or OGG) are read from the kit's folder. The kit is saved in the project by its path, like a SoundFont. Kits that name no note number their instruments from C1, as Hydrogen does.
 
-### Fixed
 
-✅ **The Mixer's channel strips on a short window:** the bottom panel is now never shorter than a whole strip needs (its rows, a usable fader, the M/S buttons and the name), so the faders are no longer cut off. On a 768-point-tall screen the panel took about half the room and left only the Pan knob and the top of each fader visible (issue #36).
 
 ### Still to do or test
 
