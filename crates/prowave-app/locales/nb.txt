@@ -792,3 +792,4 @@ Bounce cancelled = Bounce avbrutt
 Bounced {} in place = {} bouncet på stedet
 Bounced {} but the region changed during the bounce, so it was not replaced = Bouncet til {}, men regionen endret seg under bouncen, så den ble ikke erstattet
 Choose Hydrogen Drum Kit… = Velg Hydrogen-trommesett…
+Send {} = Send {}
