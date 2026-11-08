@@ -761,7 +761,7 @@ fn send_slot(
 }
 
 /// The effects an Audio FX slot can hold, in the order of its menu.
-const FX_MENU: [prowave_engine::FxKind; 12] = prowave_engine::FxKind::ALL;
+const FX_MENU: &[prowave_engine::FxKind] = &prowave_engine::FxKind::ALL;
 
 /// What the user chose in an Audio FX slot's menu.
 enum InsertAct {
@@ -848,7 +848,7 @@ fn insert_slot(
             });
             ui.separator();
             ui.menu_button(tr("Replace With"), |ui| {
-                for kind in FX_MENU {
+                for &kind in FX_MENU {
                     if ui.selectable_label(kind == fx.kind, kind.name()).clicked() {
                         act = Some(InsertAct::Replace(kind));
                         ui.close();
@@ -860,7 +860,7 @@ fn insert_slot(
                 ui.close();
             }
         } else {
-            for kind in FX_MENU {
+            for &kind in FX_MENU {
                 if ui.button(kind.name()).clicked() {
                     act = Some(InsertAct::Add(kind));
                     ui.close();

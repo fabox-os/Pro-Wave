@@ -14,7 +14,7 @@ names); no Apple artwork or code is copied.
 | **1 — Engine core + tracks** | **Done.** Tempo/signature maps, audio/MIDI/Pattern/Drummer regions, disk streaming, recording, `.prowave` files, aux/bus/sends, VCA, folder and External MIDI tracks. Missing: `bounces/` in the project file |
 | **2 — MIDI & sequencer** | **Mostly done.** Piano Roll with quantize, velocity and MIDI Transform; the MIDI FX chain; MIDI file import/export; Event List; Step Sequencer; Score v0; Drummer and Pattern regions. Missing: MPE, SysEx, MIDI 2.0, articulation IDs, score beams/voices/printing/MusicXML, Drummer Track v0 |
 | **3 — Flex & Smart Tempo** | **Mostly done.** Smart Tempo detection and editor, Adapt Project Tempo, Flex Time modes, Flex Pitch (correct to key, make a MIDI track), Groove Track. Missing: dragging Flex markers, per-note Flex Pitch (drift, vibrato, formant), a non-steady tempo grid in the editor |
-| **4 — Mixer & channel strip DSP** | **Mostly done.** Twelve effects, buses and sends, automation, mix groups, 64-bit summing, delay compensation. Missing: automation of sends and the Output slot, two-handle Bezier curves, plug-in and instrument latency in the PDC, a multi-band compressor |
+| **4 — Mixer & channel strip DSP** | **Mostly done.** Thirteen effects, buses and sends, automation, mix groups, 64-bit summing, delay compensation. Missing: automation of sends and the Output slot, two-handle Bezier curves, plug-in and instrument latency in the PDC |
 | **5–6 — Instruments & effects** | **Started.** The built-in synth with acoustic and electronic drum kits, and the **Amp Designer** (2026-11-03). Missing: Sampler/Quick Sampler, Drum Machine Designer, ES2, the vintage keyboards, the reverb/delay suites, Pedalboard, Mastering Assistant |
 | **7–9** | **Not started:** plug-in hosting, Live Loops and the rest of the UI polish, the WASM build and the rest of Bounce/Export (a real-time Bounce Project or Section and MIDI export exist) |
 
@@ -100,7 +100,8 @@ How the Linux build was made from Windows (cross-compiling, no WSL/Docker needed
   and mix groups, and delay compensation for effects that look ahead.
 - **Automation in the engine:** volume, pan and every effect parameter, in Read/Touch/Latch/Write,
   sample-accurate within the block and with curved stretches.
-- **Effects (`fx.rs`):** Channel EQ, Compressor, Space D reverb, Tape Delay, Chorus, Phaser,
+- **Effects (`fx.rs`):** Channel EQ, Compressor, Multi-Band Compressor, Space D reverb, Tape
+  Delay, Chorus, Phaser,
   Overdrive, Filter, Noise Gate, Limiter, Multi-Band EQ and the **Amp Designer**. All are
   allocation-free in `process`, keep their memory when a knob moves (no clicks), clamp every
   parameter so a damaged project cannot blow up, and turn a non-finite sample into silence.
@@ -305,7 +306,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 
 | Roadmap item | | What's there / what's missing |
 |---|---|---|
-| Real effects | 🟡 | Channel EQ (3-band), Multi-Band EQ (6 bands), Compressor, Noise Gate, Limiter, Space D reverb, Tape Delay, Chorus, Phaser, Overdrive, Filter, Amp Designer ✅. **Missing:** 8-band Channel EQ with FFT analyzer, six compressor models, convolution reverb, Delay Designer, modulation suite, distortion suite, pedal board, Mastering Assistant |
+| Real effects | 🟡 | Channel EQ (3-band), Multi-Band EQ (6 bands), Compressor, Multi-Band Compressor, Noise Gate, Limiter, Space D reverb, Tape Delay, Chorus, Phaser, Overdrive, Filter, Amp Designer ✅. **Missing:** 8-band Channel EQ with FFT analyzer, six compressor models, convolution reverb, Delay Designer, modulation suite, distortion suite, pedal board, Mastering Assistant |
 | Sends / buses / aux, groups, VCA | ✅ | Up to four sends per strip (pre/post), Bus 1-8 with Aux strips, Mix Groups, VCA tracks |
 | Automation, plug-in delay compensation | 🟡 | Read/Touch/Latch/Write for the fader, pan and every effect parameter, curved stretches, sample-accurate ✅; PDC for look-ahead effects ✅. **Missing:** automation of sends and Output, trim, two-handle Bezier, latency of plug-ins and instruments (not hosted yet) |
 | **DoD:** 24 tracks with EQ/Comp on each, automation, PDC null test | 🟡 | 24 tracks and automation are tested; a null test is covered by the PDC tests for the effects |
@@ -324,7 +325,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 - **Amp Designer:** a pedal board, impulse-response cabinets, and a listen with real guitar and
   bass recordings.
 - **Mixer:** automation of sends and the Output slot, two-handle Bezier curves, plug-in
-  (CLAP / VST3 / AU) hosting, a multi-band compressor.
+  (CLAP / VST3 / AU) hosting.
 - **Flex Time:** dragging Flex markers with the mouse; per-note Flex Pitch (drift, vibrato,
   formant); audio tracks following a Groove Track.
 - **Smart Tempo:** Adapt Region Tempo while recording, a non-steady tempo grid in the editor.
