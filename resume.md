@@ -317,6 +317,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 - **Phase 8:** Smart Controls, the full Key Commands window, Live Loops, Video track — not started (Quick Help, Toolbar, Note Pad, Loop Browser and All Files exist).
 - **Phase 9:** WASM/AudioWorklet build; Bounce Project or Section ✅, Export Track as Audio File ✅, Bounce in Place ✅ and Edit > Bounce and Join ✅ (real time, to a WAV); MusicXML export ✅; Export All Tracks, AAF/ADM BWF — not started (MIDI export exists).
 - **`.logicx` import** (`prowave-logicx-import` per `LOGICX-FORMAT-SPEC.md`) — not started.
+- **GarageBand import:** **File > Import > Other Projects…** reads a `.band` bundle through the new `prowave-garageband-import` crate (bundle detection, `MetaData.plist`, media list) and imports its audio files as tracks; MIDI regions, region positions and the iOS zip are still to come (`GARAGEBAND-FORMAT-SPEC.md`).
 
 ## 📋 Still to do next (from the 0.2.x releases)
 
