@@ -248,7 +248,8 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
   Amp Designer is a model, not a captured amplifier (no impulse-response cabinets yet).
 - Cut/Copy/Paste of regions and many menu items are still shown **disabled** (not implemented).
 - Score: no beams, voices, chord symbols, printing or MusicXML. MIDI files: no program
-  changes, lyrics, markers, MPE or MIDI 2.0 (SMPTE-timed files import at the project's tempo).
+  changes, lyrics, MPE or MIDI 2.0 (SMPTE-timed files import at the project's tempo, and markers
+  travel with the file both ways).
 - Cargo-deny ignores 4 "unmaintained" advisories (transitive via winit/egui on Linux, no fix
   available); documented in `deny.toml`.
 
@@ -284,7 +285,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 
 | Roadmap item | | What's there / what's missing |
 |---|---|---|
-| MIDI 1.0 parser, MPE, Articulation ID, SysEx | 🟡 | Standard MIDI files import and export (round-trip tests; damaged files refused), metrical and SMPTE time divisions ✅; pitch bend, channel pressure and SysEx in regions and files ✅. **Missing:** program changes, other controllers, lyrics, markers, MPE, MIDI 2.0 |
+| MIDI 1.0 parser, MPE, Articulation ID, SysEx | 🟡 | Standard MIDI files import and export (round-trip tests; damaged files refused), metrical and SMPTE time divisions ✅; pitch bend, channel pressure and SysEx in regions and files ✅; markers both ways ✅. **Missing:** program changes, other controllers, lyrics, MPE, MIDI 2.0 |
 | Piano Roll: full Logic parity | 🟡 | Editing, quantize (time and scale) with strength/swing, velocity lane, MIDI Transform, key commands ✅. **Missing:** brush, time handles, CC MIDI Draw, flam, note colour parity |
 | Score Editor v0 | 🟡 | Clefs, key and time signatures, accidentals, rests, ties, click to add, right-click to delete ✅. **Missing:** beams, chords' stems, voices, printing, MusicXML |
 | Event List, Step Editor, MIDI Transform, MIDI FX chain | 🟡 | Event list (MIDI events), Step Sequencer (Pattern regions), MIDI Transform, and the MIDI FX chain (Transposer, Velocity, Scale, Chord Trigger, Repeater, Arpeggiator, Randomizer, Modulator, Scripter) ✅. **Missing:** the Marker/Tempo/Signature tabs of the Event list, per-event editing, the channel-strip MIDI FX slot |
