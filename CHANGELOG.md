@@ -15,6 +15,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Record menu:** three entries that were greyed out now work. **Record Toggle** starts and stops recording (the same as the control bar's button), **Record Enable** arms or disarms the selected track's R button, and **Record Project Settings** opens Project Settings on its Recording tab.
 
+✅ **Mix > Edit Groups…:** a window with every mix group in one list, where each group can be renamed and its links chosen (Volume, Pan, Mute, Solo). It shows how many tracks each group has, adds groups (up to 64, numbered automatically) and deletes them; the mixer strip's Group popup stays the way to put a track into a group.
+
 ✅ **Bounce:** **File > Bounce > Project or Section…** plays the song — or the cycle section, when the cycle is on — through the engine and writes what is heard into a 32-bit float WAV. Every effect (the master bus's included), send, automation lane, audio region and instrument is in the file, because the engine hands over its finished master frames. A bounce runs at playing speed; the transport and the cycle are put back where they were afterwards, and stopping the transport cancels it without writing a file.
 
 ✅ **Export > Track as Audio File…:** the selected track is bounced alone into a WAV. The other tracks are soloed off while it runs — the track keeps its effects, its sends and the buses they feed — and everyone's solo states are put back when it ends. It is the same real-time bounce as above, so it takes the song's length; a track with no regions is not exported.
