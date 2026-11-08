@@ -1148,7 +1148,13 @@ mod tests {
                     s.browser.open
                 ),
                 s.bottom == Bottom::Mixer,
-                (s.file_cmd, s.chooser.is_some(), s.undo_cmd, s.midi_cmd, s.bounce_cmd),
+                (
+                    s.file_cmd,
+                    s.chooser.is_some(),
+                    s.undo_cmd,
+                    s.midi_cmd,
+                    s.bounce_cmd
+                ),
                 (
                     s.ui_scale,
                     s.tracks.bar_w,
