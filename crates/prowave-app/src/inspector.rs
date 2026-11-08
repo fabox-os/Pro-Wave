@@ -54,6 +54,27 @@ fn soundfont_label(sf: &SoundFontUse) -> String {
     }
 }
 
+/// Gives track `ti` the SoundFont or Hydrogen drum kit at `path`, playing its first preset.
+fn use_soundfont_file(p: &mut Project, ti: usize, path: String) {
+    // Read the file again, even if it was loaded before.
+    crate::soundfonts::forget(&path);
+    let first = match crate::soundfonts::load(&path) {
+        Ok(bank) => bank
+            .presets()
+            .first()
+            .map_or((0, 0), |pr| (pr.bank, pr.program)),
+        Err(e) => {
+            tracing::warn!("{e}");
+            (0, 0)
+        }
+    };
+    p.tracks[ti].soundfont = Some(SoundFontUse {
+        path,
+        bank: first.0,
+        program: first.1,
+    });
+}
+
 fn gain_text(db: f32) -> String {
     if db == 0.0 {
         "0 dB".into()
@@ -762,24 +783,16 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                                 .add_filter("SoundFont", &["sf2", "SF2"])
                                 .pick_file()
                             {
-                                let path = path.to_string_lossy().into_owned();
-                                // Read the file again, even if it was loaded before.
-                                crate::soundfonts::forget(&path);
-                                let first = match crate::soundfonts::load(&path) {
-                                    Ok(bank) => bank
-                                        .presets()
-                                        .first()
-                                        .map_or((0, 0), |pr| (pr.bank, pr.program)),
-                                    Err(e) => {
-                                        tracing::warn!("{e}");
-                                        (0, 0)
-                                    }
-                                };
-                                p.tracks[ti].soundfont = Some(SoundFontUse {
-                                    path,
-                                    bank: first.0,
-                                    program: first.1,
-                                });
+                                use_soundfont_file(p, ti, path.to_string_lossy().into_owned());
+                            }
+                            ui.close();
+                        }
+                        if ui.button(tr("Choose Hydrogen Drum Kit…")).clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Hydrogen drum kit", &["xml", "XML"])
+                                .pick_file()
+                            {
+                                use_soundfont_file(p, ti, path.to_string_lossy().into_owned());
                             }
                             ui.close();
                         }
