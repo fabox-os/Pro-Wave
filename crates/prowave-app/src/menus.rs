@@ -519,6 +519,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             master_has_room(p)
         }
         "Paste" => crate::region_edit::can_paste(p, &s.region_clip),
+        "Paste Replace" => crate::region_edit::can_paste(p, &s.region_clip),
         "Select All" => p.tracks.iter().any(|t| !t.regions.is_empty()),
         "Join" => crate::region_edit::can_join(p, &s.tracks),
         "Split at Playhead" => crate::region_edit::can_split(p, &s.tracks),
@@ -801,6 +802,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         }
         "Cut" => crate::region_edit::cut_selected(p, &mut s.tracks, &mut s.region_clip),
         "Paste" => crate::region_edit::paste_at_playhead(p, &mut s.tracks, &s.region_clip),
+        "Paste Replace" => crate::region_edit::paste_replace(p, &mut s.tracks, &s.region_clip),
         "Split at Playhead" => crate::region_edit::split_at_playhead(p, &mut s.tracks),
         "Deselect All" => s.tracks.clear_selection(),
         "Go to End" => {
