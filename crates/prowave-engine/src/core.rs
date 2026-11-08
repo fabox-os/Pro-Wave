@@ -16,7 +16,7 @@ use crate::synth::{kit_voice, osc, Kit, Svf, SynthPatch};
 use crate::tempo_map::{SmpteRate, TempoMap};
 use crate::triple::{triple_buffer, Reader, Writer};
 use rtrb::{Consumer, Producer};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Tracks the engine mixes (Logic: 1000 tracks per project).
@@ -339,6 +339,9 @@ pub enum Command {
         clicks: u8,
         beats_per_click: f64,
     },
+    /// Every finished frame (the master mix, after the master fader) goes into this sink, for
+    /// a bounce; a full ring drops the frame and counts it. `None` stops capturing.
+    SetCapture(Option<CaptureSink>),
     /// The live input, for monitoring. Replaces the one before.
     SetInput(Option<Box<InputFeed>>),
     /// The tracks that hear their input now (the first `count` of `tracks`).
@@ -517,6 +520,13 @@ impl Command {
     }
 }
 
+/// Where a bounce's master frames go: the ring the UI side reads, and how many frames the ring
+/// had no room for (shared with the reader, so a lossy bounce can be refused).
+pub struct CaptureSink {
+    pub frames: Producer<[f32; 2]>,
+    pub dropped: Arc<AtomicU64>,
+}
+
 pub enum Garbage {
     Song(Box<Song>),
     Notes(Vec<NoteEvent>),
@@ -528,6 +538,8 @@ pub enum Garbage {
     Automation(Vec<AutoLane>),
     Input(Box<InputFeed>),
     SoundFont(Box<SfPlayer>),
+    /// A finished bounce's capture sink, handed back to the UI thread to be dropped there.
+    Capture(Box<CaptureSink>),
 }
 
 /// What the engine shows the UI after each audio block: the playhead, the transport and the
@@ -754,6 +766,8 @@ pub struct EngineCore {
     count_wait: u32,
     count_step: u32,
     input: Option<Box<InputFeed>>,
+    /// Where the finished master frames go while a bounce is running.
+    capture: Option<CaptureSink>,
     monitors: [MonitorTrack; MAX_MONITORS],
     monitor_count: usize,
     track_gain_l: Vec<f32>,
@@ -903,6 +917,7 @@ impl EngineCore {
             count_wait: 0,
             count_step: 1,
             input: None,
+            capture: None,
             monitors: [MonitorTrack::default(); MAX_MONITORS],
             monitor_count: 0,
             track_gain_l: vec![1.0; MAX_TRACKS],
@@ -1552,6 +1567,11 @@ impl EngineCore {
                         self.master.set(linear.clamp(0.0, 2.0), samples);
                     }
                 }
+                Command::SetCapture(sink) => {
+                    if let Some(old) = std::mem::replace(&mut self.capture, sink) {
+                        let _ = self.trash.push(Garbage::Capture(Box::new(old)));
+                    }
+                }
                 Command::SetCycle {
                     on,
                     start_beat,
@@ -2153,6 +2173,12 @@ impl EngineCore {
             pk_r = pk_r.max(r.abs());
             frame[0] = l;
             frame[1] = r;
+            // A bounce gets exactly what is heard: the mix after the master effects and fader.
+            if let Some(capture) = self.capture.as_mut() {
+                if capture.frames.push([l, r]).is_err() {
+                    capture.dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             // Render events at the current sample position, then advance to the next one.
             if self.playing {
                 let prev = self.beat;
@@ -3926,6 +3952,64 @@ mod tests {
         render(&mut e, 0.1);
         let back = e.chains[0].as_ref().map(|c| c.fx[0].current()[6]);
         assert_eq!(back, Some(12.0));
+    }
+
+    #[test]
+    fn the_capture_ring_gets_the_master_output() {
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx
+            .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 4.0)])))
+            .is_ok());
+        let (frames, mut received) = rtrb::RingBuffer::<[f32; 2]>::new(4096);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let capture = CaptureSink {
+            frames,
+            dropped: dropped.clone(),
+        };
+        assert!(tx.push(Command::SetCapture(Some(capture))).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut out = vec![0.0f32; 512 * 2];
+        e.process(&mut out);
+        let mut frames = Vec::new();
+        while let Ok(frame) = received.pop() {
+            frames.push(frame);
+        }
+        assert_eq!(frames.len(), 512);
+        for (i, frame) in frames.iter().enumerate() {
+            assert_eq!((frame[0], frame[1]), (out[2 * i], out[2 * i + 1]));
+        }
+        // Stopping the capture lets no more frames through.
+        assert!(tx.push(Command::SetCapture(None)).is_ok());
+        e.process(&mut out);
+        let mut after = 0;
+        while received.pop().is_ok() {
+            after += 1;
+        }
+        assert_eq!(after, 0);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0, "nothing was lost");
+    }
+
+    #[test]
+    fn a_full_capture_ring_counts_the_frames_it_loses() {
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx
+            .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 4.0)])))
+            .is_ok());
+        let (frames, _received) = rtrb::RingBuffer::<[f32; 2]>::new(4);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let capture = CaptureSink {
+            frames,
+            dropped: dropped.clone(),
+        };
+        assert!(tx.push(Command::SetCapture(Some(capture))).is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut out = vec![0.0f32; 512 * 2];
+        e.process(&mut out);
+        assert_eq!(
+            dropped.load(Ordering::Relaxed),
+            512 - 4,
+            "a ring of 4 keeps 4"
+        );
     }
 
     #[test]

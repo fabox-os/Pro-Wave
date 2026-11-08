@@ -13,6 +13,14 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Effects on the Stereo Out strip (the master bus):** the Stereo Out strip now has real Audio FX slots, with the same menu as a track strip (add, replace, bypass, move, remove; double-click opens the window). The whole mix goes through them before the master fader, and they are saved with the project. **Mix > Space Designer > Mastering Glue - Small Room** (and the other two presets) puts a Space Designer there and opens it. Gain reduction and Space Designer input meters work for it. The master effects have no automation lanes yet.
 
+✅ **Bounce:** **File > Bounce > Project or Section…** plays the song — or the cycle section, when the cycle is on — through the engine and writes what is heard into a 32-bit float WAV. Every effect (the master bus's included), send, automation lane, audio region and instrument is in the file, because the engine hands over its finished master frames. A bounce runs at playing speed; the transport and the cycle are put back where they were afterwards, and stopping the transport cancels it without writing a file.
+
+✅ **Export > Track as Audio File…:** the selected track is bounced alone into a WAV. The other tracks are soloed off while it runs — the track keeps its effects, its sends and the buses they feed — and everyone's solo states are put back when it ends. It is the same real-time bounce as above, so it takes the song's length; a track with no regions is not exported.
+
+✅ **Bounce in place:** **File > Bounce > Regions in Place…** (and **Record > Bounce In Place**) renders the selected MIDI region with its track's instrument, effects and sends, over the region's own span, and replaces the region with the audio where it was. It is one undo step, and the audio lives in the session's media folder until the project is saved, when it travels inside the `.prowave`.
+
+✅ **Bounce and Join:** **Edit > Bounce and Join** renders all the selected regions of one track — from the earliest to the latest, the gaps included — and puts the audio back as one region, named after the earliest. Like Bounce in Place it is one undo step and the audio travels inside the `.prowave`.
+
 ### Still to do or test
 
 ❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate

@@ -361,6 +361,8 @@ mod tests {
             project,
             ui: crate::UiState::new(),
             sync: None,
+            bounce: None,
+            region_bounce: None,
             path: None,
             native_menu: None,
             bench: None,

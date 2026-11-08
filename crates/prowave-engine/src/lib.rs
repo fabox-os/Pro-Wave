@@ -44,8 +44,8 @@ pub use crate::convolver::{
     IR_NAMES, IR_PARAMS, MAX_IR_SECONDS,
 };
 pub use crate::core::{
-    dsp_load, AudioClip, ClipEdit, Command, ControlEvent, EngineCore, EngineState, FadeCurve,
-    Garbage, MidiOutEvent, NoteEvent, Shared, Song, StateReader, TrackMix, MASTER_TRACK,
+    dsp_load, AudioClip, CaptureSink, ClipEdit, Command, ControlEvent, EngineCore, EngineState,
+    FadeCurve, Garbage, MidiOutEvent, NoteEvent, Shared, Song, StateReader, TrackMix, MASTER_TRACK,
     MAX_TRACKS,
 };
 pub use crate::disk::{

@@ -9,6 +9,7 @@ mod apple_loops;
 mod audio_rec;
 mod automation;
 mod bench;
+mod bounce;
 mod clock_follow;
 mod clock_in;
 mod engine_sync;
@@ -142,6 +143,16 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
+    /// File > Export > Track as Audio File… picked this frame.
+    pub export_track_cmd: bool,
+    /// File > Bounce > Regions in Place… (and Record > Bounce In Place) picked this frame.
+    pub bounce_region_cmd: bool,
+    /// Edit > Bounce and Join picked this frame.
+    pub bounce_join_cmd: bool,
+    /// File > Bounce picked this frame; run by `App` (which owns the engine).
+    pub bounce_cmd: bool,
+    /// A bounce is running (greys the Bounce entry).
+    pub bouncing: bool,
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
     pub steps: step_editor::StepView,
     /// True while the pointer is over the Piano Roll (it owns Delete/Cmd+R then).
@@ -217,6 +228,11 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
+            export_track_cmd: false,
+            bounce_region_cmd: false,
+            bounce_join_cmd: false,
+            bounce_cmd: false,
+            bouncing: false,
             piano_focus: false,
             audition: Vec::new(),
             file_cmd: None,
@@ -252,6 +268,10 @@ struct App {
     project: Project,
     ui: UiState,
     sync: Option<engine_sync::EngineSync>,
+    /// File > Bounce in progress.
+    bounce: Option<bounce::Bounce>,
+    /// The regions a region bounce will replace when it ends: (track, regions).
+    region_bounce: Option<(usize, Vec<usize>)>,
     /// The `.prowave` file the project was opened from or last saved to.
     path: Option<std::path::PathBuf>,
     /// Content at the last open/save, to detect unsaved changes (see `file_commands`).
@@ -334,6 +354,357 @@ impl App {
             self.ui.status = Some(i18n::trf("cannot import {}: {}", &[&path.display(), &e]));
         }
     }
+
+    /// File > Bounce > Project or Section…: asks where to write and starts the bounce.
+    fn start_bounce(&mut self) {
+        let (start, end) = if self.project.cycle {
+            (self.project.cycle_start, self.project.cycle_end)
+        } else {
+            let end = self
+                .project
+                .tracks
+                .iter()
+                .flat_map(|t| t.regions.iter())
+                .map(|r| self.project.region_end_beats(r))
+                .fold(0.0, f64::max);
+            (0.0, end)
+        };
+        if end <= start || self.bounce.is_some() {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("WAV", &["wav", "WAV"])
+            .set_file_name(format!("{}.wav", self.project.name))
+            .save_file()
+        else {
+            return;
+        };
+        let Some(sync) = self.sync.as_mut() else {
+            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
+            return;
+        };
+        match bounce::Bounce::start(&mut sync.engine, &mut self.project, start, end, path) {
+            Ok(running) => {
+                self.bounce = Some(running);
+                self.region_bounce = None;
+                // Send the seek and Play in this same frame, so the engine starts capturing
+                // exactly when playback starts (no silent lead-in in the file).
+                if let Some(sync) = self.sync.as_mut() {
+                    sync.sync(&mut self.project);
+                }
+            }
+            Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    /// File > Export > Track as Audio File…: bounces the selected track alone to a WAV, with its
+    /// effects and sends (the other tracks are soloed off while it runs, then put back).
+    fn export_track(&mut self) {
+        let track = self.project.selected_track;
+        let Some(selected) = self.project.tracks.get(track) else {
+            return;
+        };
+        if selected.regions.is_empty() || self.bounce.is_some() {
+            return;
+        }
+        let name = selected.name.clone();
+        let end = self
+            .project
+            .tracks
+            .iter()
+            .flat_map(|t| t.regions.iter())
+            .map(|r| self.project.region_end_beats(r))
+            .fold(0.0, f64::max);
+        if end <= 0.0 {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("WAV", &["wav", "WAV"])
+            .set_file_name(format!("{name}.wav"))
+            .save_file()
+        else {
+            return;
+        };
+        let Some(sync) = self.sync.as_mut() else {
+            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
+            return;
+        };
+        match bounce::Bounce::start_track(
+            &mut sync.engine,
+            &mut self.project,
+            track,
+            0.0,
+            end,
+            path,
+        ) {
+            Ok(running) => {
+                self.bounce = Some(running);
+                self.region_bounce = None;
+                // Seek and Play in this same frame, so the capture starts with the sound.
+                if let Some(sync) = self.sync.as_mut() {
+                    sync.sync(&mut self.project);
+                }
+            }
+            Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    /// File > Bounce > Regions in Place… and Record > Bounce In Place: plays the selected MIDI
+    /// region's track alone over the region's span, then replaces the region with the audio.
+    fn bounce_region_in_place(&mut self) {
+        let Some((track, region)) = self.ui.tracks.selected else {
+            return;
+        };
+        self.start_region_bounce(track, vec![region]);
+    }
+
+    /// Edit > Bounce and Join: bounces the selected regions of one track into one audio region,
+    /// covering the span from the earliest to the latest (the gaps included).
+    fn bounce_and_join(&mut self) {
+        let Some((track, first)) = self.ui.tracks.selected else {
+            return;
+        };
+        let mut regions: Vec<usize> = std::iter::once(first)
+            .chain(
+                self.ui
+                    .tracks
+                    .extra
+                    .iter()
+                    .filter(|(t, _)| *t == track)
+                    .map(|(_, r)| *r),
+            )
+            .collect();
+        regions.sort_unstable();
+        regions.dedup();
+        self.start_region_bounce(track, regions);
+    }
+
+    /// Bounces `regions` of `track` over their span and remembers to put the audio there.
+    fn start_region_bounce(&mut self, track: usize, regions: Vec<usize>) {
+        if self.bounce.is_some() {
+            return;
+        }
+        let Some((start, end, name)) = join_span(&self.project, track, &regions) else {
+            return;
+        };
+        let dir = project_io::bounces_dir();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.ui.status = Some(format!("{}: {e}", dir.display()));
+            return;
+        }
+        let path = bounce::free_path(&dir, &format!("{} {start:.3}", file_name(&name)));
+        let Some(sync) = self.sync.as_mut() else {
+            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
+            return;
+        };
+        match bounce::Bounce::start_regions(
+            &mut sync.engine,
+            &mut self.project,
+            track,
+            &regions,
+            start,
+            end,
+            path,
+        ) {
+            Ok(running) => {
+                self.bounce = Some(running);
+                self.region_bounce = Some((track, regions));
+                // Seek and Play in this same frame, so the capture starts with the sound.
+                if let Some(sync) = self.sync.as_mut() {
+                    sync.sync(&mut self.project);
+                }
+            }
+            Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    /// Puts a finished region bounce where the MIDI regions were: they become one audio region.
+    fn place_bounce(
+        &mut self,
+        track: usize,
+        regions: Vec<usize>,
+        path: &std::path::Path,
+        ctx: &egui::Context,
+    ) {
+        let Ok(file) = prowave_engine::AudioFile::open(path) else {
+            self.ui.status = Some(format!("{}: cannot open the bounced audio", path.display()));
+            return;
+        };
+        let audio = crate::import::audio_region(file, ctx);
+        let Some((start_beat, end_beat, name)) = join_span(&self.project, track, &regions) else {
+            return;
+        };
+        let start_bar = self.project.beats_to_bar(start_beat) + 1.0;
+        let len_bars =
+            (self.project.beats_to_bar(end_beat) - self.project.beats_to_bar(start_beat)).max(1e-9);
+        let Some(t) = self.project.tracks.get_mut(track) else {
+            return;
+        };
+        let mut removed: Vec<usize> = regions
+            .into_iter()
+            .filter(|r| *r < t.regions.len())
+            .collect();
+        removed.sort_unstable();
+        removed.dedup();
+        for r in removed.into_iter().rev() {
+            t.regions.remove(r);
+        }
+        t.regions.push(crate::model::Region {
+            name: name.clone(),
+            start_bar: start_bar as f32,
+            len_bars: len_bars as f32,
+            notes: Vec::new(),
+            controls: Vec::new(),
+            folder: None,
+            generated: None,
+            audio: Some(audio),
+            params: crate::model::RegionParams::default(),
+        });
+        t.regions
+            .sort_by(|a, b| a.start_bar.total_cmp(&b.start_bar));
+        // The engine streams the new audio: rebuild its song.
+        self.project.song_rev += 1;
+        self.history.record(&self.project);
+        self.ui.status = Some(i18n::trf("Bounced {} in place", &[&name]));
+    }
+
+    /// Runs a bounce once a frame: gathers the engine's frames and stops at the end beat (or
+    /// when the transport stops, which cancels it).
+    fn run_bounce(&mut self, ctx: &egui::Context) {
+        let Some(running) = self.bounce.as_mut() else {
+            self.ui.bouncing = false;
+            return;
+        };
+        self.ui.bouncing = true;
+        if running.poll(&self.project) {
+            let percent = (running.progress(&self.project) * 100.0).round();
+            self.ui.status = Some(i18n::trf("Bouncing {}%", &[&format!("{percent:.0}")]));
+            ctx.request_repaint();
+            return;
+        }
+        let reached_end = self.project.playing && self.project.position_beats >= running.end_beat;
+        let Some(running) = self.bounce.take() else {
+            self.ui.bouncing = false;
+            return;
+        };
+        self.ui.bouncing = false;
+        let result = match self.sync.as_mut() {
+            Some(sync) => running.finish(&mut sync.engine, &mut self.project, reached_end),
+            None => Ok(None),
+        };
+        let placed = self.region_bounce.take();
+        match result {
+            Ok(Some(done)) => {
+                self.ui.status = Some(i18n::trf("Bounced to {}", &[&done.path.display()]));
+                if let Some((track, regions)) = placed {
+                    if done.placeable {
+                        self.place_bounce(track, regions, &done.path, ctx);
+                    } else {
+                        // The file is kept, but the regions are not what it was bounced from.
+                        self.ui.status = Some(i18n::trf(
+                            "Bounced {} but the region changed during the bounce, so it was not replaced",
+                            &[&done.path.display()],
+                        ));
+                    }
+                }
+            }
+            Ok(None) => self.ui.status = Some(i18n::tr("Bounce cancelled").to_string()),
+            Err(e) => self.ui.status = Some(e),
+        }
+    }
+}
+
+/// A region name made safe for a file name (the bounce's media).
+fn file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(48)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        "Bounce".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+#[cfg(test)]
+mod file_name_tests {
+    use super::*;
+
+    #[test]
+    fn bounce_file_names_are_safe() {
+        assert_eq!(file_name("Drums: verse"), "Drums_ verse");
+        assert_eq!(file_name("Kick & Snare"), "Kick _ Snare");
+        assert_eq!(file_name("   "), "Bounce");
+        assert_eq!(file_name(&"x".repeat(100)).chars().count(), 48);
+    }
+
+    #[test]
+    fn joining_regions_covers_them_all() {
+        use crate::model::{Note, Region, RegionParams, TrackKind};
+        let mut project = Project::empty();
+        project.tracks[0].kind = TrackKind::Instrument;
+        for (bar, len, name) in [(1.0, 2.0, "One"), (4.0, 2.0, "Two")] {
+            project.tracks[0].regions.push(Region {
+                name: name.to_string(),
+                start_bar: bar,
+                len_bars: len,
+                notes: vec![Note {
+                    start: 0.0,
+                    len: 1.0,
+                    pitch: 60,
+                    vel: 100,
+                }],
+                controls: Vec::new(),
+                folder: None,
+                generated: None,
+                audio: None,
+                params: RegionParams::default(),
+            });
+        }
+        let (start, end, name) = join_span(&project, 0, &[0, 1]).unwrap_or_else(|| panic!("span"));
+        assert_eq!((start, end, name.as_str()), (0.0, 20.0, "One"));
+
+        // A region without notes is not bounced, so the span shrinks to the other one.
+        project.tracks[0].regions[1].notes.clear();
+        let (start, end, _) = join_span(&project, 0, &[0, 1]).unwrap_or_else(|| panic!("span"));
+        assert_eq!((start, end), (0.0, 8.0));
+        assert!(join_span(&project, 0, &[1]).is_none());
+    }
+}
+
+/// The span a region bounce covers: the earliest and latest of `regions` on `track`, in beats,
+/// and the name the audio region takes (the earliest region's). Only MIDI regions with notes
+/// count; `None` when there is nothing to bounce.
+fn join_span(p: &Project, track: usize, regions: &[usize]) -> Option<(f64, f64, String)> {
+    let t = p.tracks.get(track)?;
+    let mut spans: Vec<(f64, f64, String)> = regions
+        .iter()
+        .filter_map(|r| t.regions.get(*r))
+        .filter(|r| r.audio.is_none() && !r.notes.is_empty())
+        .map(|r| {
+            (
+                p.region_start_beats(r),
+                p.region_end_beats(r),
+                r.name.clone(),
+            )
+        })
+        .collect();
+    if spans.is_empty() {
+        return None;
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let start = spans[0].0;
+    let end = spans.iter().map(|s| s.1).fold(start, f64::max);
+    (end > start).then(|| (start, end, spans[0].2.clone()))
 }
 
 impl App {
@@ -723,6 +1094,7 @@ impl eframe::App for App {
             self.import(&path, &ctx);
         }
         self.record_audio(&ctx);
+        self.run_bounce(&ctx);
         self.play_and_record_midi(&ctx);
         if std::mem::take(&mut self.ui.update_check) {
             self.updater.start_check(true);
@@ -769,6 +1141,18 @@ impl eframe::App for App {
         }
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
+        }
+        if std::mem::take(&mut self.ui.bounce_cmd) {
+            self.start_bounce();
+        }
+        if std::mem::take(&mut self.ui.export_track_cmd) {
+            self.export_track();
+        }
+        if std::mem::take(&mut self.ui.bounce_region_cmd) {
+            self.bounce_region_in_place();
+        }
+        if std::mem::take(&mut self.ui.bounce_join_cmd) {
+            self.bounce_and_join();
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
@@ -1132,6 +1516,8 @@ fn main() -> eframe::Result {
                 project,
                 ui: UiState::new(),
                 sync,
+                bounce: None,
+                region_bounce: None,
                 path: None,
                 native_menu: None,
                 bench: bench_out.clone().map(bench::Probe::new),
