@@ -18,6 +18,7 @@ mod file_browser;
 mod file_commands;
 mod flex_edit;
 mod fx_ui;
+mod garageband;
 mod graphics;
 mod groove;
 mod group_editor;
@@ -47,6 +48,7 @@ mod recent_files;
 mod recorder;
 mod region_edit;
 mod score;
+mod score_export;
 mod scripter;
 mod side_panes;
 mod signature_track;
@@ -144,6 +146,8 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
+    /// File > Export > Score as MusicXML… picked this frame.
+    pub export_xml_cmd: bool,
     /// File > Export > Track as Audio File… picked this frame.
     pub export_track_cmd: bool,
     /// File > Bounce > Regions in Place… (and Record > Bounce In Place) picked this frame.
@@ -154,6 +158,8 @@ pub struct UiState {
     pub bounce_cmd: bool,
     /// A bounce is running (greys the Bounce entry).
     pub bouncing: bool,
+    /// File > Import > Other Projects… picked this frame (a GarageBand bundle).
+    pub open_band_cmd: bool,
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
     pub steps: step_editor::StepView,
     /// True while the pointer is over the Piano Roll (it owns Delete/Cmd+R then).
@@ -231,11 +237,13 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
+            export_xml_cmd: false,
             export_track_cmd: false,
             bounce_region_cmd: false,
             bounce_join_cmd: false,
             bounce_cmd: false,
             bouncing: false,
+            open_band_cmd: false,
             piano_focus: false,
             audition: Vec::new(),
             file_cmd: None,
@@ -359,6 +367,21 @@ impl App {
         }
     }
 
+    /// File > Export > Score as MusicXML…: asks where to write and exports every track's notes.
+    fn export_score(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MusicXML", &["musicxml", "xml"])
+            .set_file_name(format!("{}.musicxml", self.project.name))
+            .save_file()
+        else {
+            return;
+        };
+        self.ui.status = Some(match score_export::export(&self.project, &path) {
+            Ok(notes) => i18n::trf("exported {} notes to {}", &[&notes, &path.display()]),
+            Err(e) => e,
+        });
+    }
+
     /// File > Bounce > Project or Section…: asks where to write and starts the bounce.
     fn start_bounce(&mut self) {
         let (start, end) = if self.project.cycle {
@@ -396,6 +419,28 @@ impl App {
                 if let Some(sync) = self.sync.as_mut() {
                     sync.sync(&mut self.project);
                 }
+            }
+            Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    /// File > Import > Other Projects…: the audio files of a GarageBand bundle become tracks
+    /// (see `garageband`; the arrangement inside the project is not read yet).
+    fn import_band(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(i18n::tr("Other Projects…"))
+            .pick_folder()
+        else {
+            return;
+        };
+        match garageband::import(&mut self.project, &path, ctx) {
+            Ok(n) => {
+                self.ui.status = Some(i18n::trf(
+                    "imported {} tracks from {}",
+                    &[&n, &path.display()],
+                ));
+                // The whole import is one undo step.
+                self.history.record(&self.project);
             }
             Err(e) => self.ui.status = Some(e),
         }
@@ -1146,6 +1191,9 @@ impl eframe::App for App {
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
         }
+        if std::mem::take(&mut self.ui.export_xml_cmd) {
+            self.export_score();
+        }
         if std::mem::take(&mut self.ui.bounce_cmd) {
             self.start_bounce();
         }
@@ -1157,6 +1205,9 @@ impl eframe::App for App {
         }
         if std::mem::take(&mut self.ui.bounce_join_cmd) {
             self.bounce_and_join();
+        }
+        if std::mem::take(&mut self.ui.open_band_cmd) {
+            self.import_band(&ctx);
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
