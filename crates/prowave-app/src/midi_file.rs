@@ -57,6 +57,8 @@ pub struct FileTrack {
     /// Controllers (the sustain pedal is 64), pitch bend, channel pressure and the bytes of
     /// SysEx messages, in tick order.
     pub controls: Vec<FileControl>,
+    /// The program change the track starts with, if the file has one.
+    pub program: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -291,6 +293,10 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
                             val: u16::from(a),
                         });
                     }
+                    0xc0 => {
+                        let i = slot(ch, &mut channels);
+                        channels[i].program = Some(a);
+                    }
                     _ => {}
                 }
             }
@@ -411,6 +417,9 @@ pub fn write(file: &MidiFile) -> Vec<u8> {
         let mut ev = Events(Vec::new());
         ev.push(0, 0, meta(0x03, t.name.as_bytes()));
         let ch = t.channel & 0x0f;
+        if let Some(program) = t.program {
+            ev.push(0, 0, vec![0xc0 | ch, program.min(127)]);
+        }
         for n in &t.notes {
             ev.push(
                 n.start,
@@ -520,6 +529,7 @@ pub fn export(p: &Project, only: Option<(usize, usize)>) -> MidiFile {
         let mut track = FileTrack {
             name: t.name.clone(),
             channel,
+            program: t.midi_program,
             ..FileTrack::default()
         };
         let mut played = Vec::new();
@@ -592,6 +602,7 @@ pub fn import(p: &mut Project, file: &MidiFile) -> usize {
             break;
         }
         let ti = p.add_track(kind);
+        p.tracks[ti].midi_program = ft.program;
         if !ft.name.is_empty() {
             p.tracks[ti].name = ft.name.clone();
         }
@@ -724,6 +735,7 @@ mod tests {
                 FileTrack {
                     name: "Piano".into(),
                     channel: 0,
+                    program: None,
                     notes: vec![
                         FileNote {
                             start: 0,
@@ -760,6 +772,7 @@ mod tests {
                 FileTrack {
                     name: "Drums".into(),
                     channel: 9,
+                    program: None,
                     notes: vec![FileNote {
                         start: 960,
                         len: 120,
@@ -1275,6 +1288,7 @@ mod tests {
             tracks: vec![FileTrack {
                 name: "Keys".into(),
                 channel: 2,
+                program: None,
                 notes: vec![FileNote {
                     start: 0,
                     len: 480,
@@ -1329,5 +1343,49 @@ mod tests {
         chunk(&mut f2, b"MTrk", &top);
         let got = parse(&f2).expect("reads");
         assert_eq!(got.tracks[0].controls[0].val, 16383);
+    }
+
+    #[test]
+    fn a_program_change_is_kept_when_a_file_comes_in_and_goes_out() {
+        // Read: program 42 on channel 2.
+        let mut body = Vec::new();
+        body.extend([0, 0xc2, 42]);
+        body.extend([0, 0x92, 60, 100]);
+        body.extend([0x83, 0x60, 0x82, 60, 64]); // delta 480, note off
+        body.extend([0, 0xff, 0x2f, 0]);
+        let mut file = Vec::new();
+        chunk(&mut file, b"MThd", &[0, 0, 0, 1, 0x01, 0xe0]);
+        chunk(&mut file, b"MTrk", &body);
+        let parsed = parse(&file).expect("the file reads");
+        assert_eq!(parsed.tracks[0].program, Some(42));
+
+        let mut p = Project::empty();
+        p.tracks.clear();
+        import(&mut p, &parsed);
+        assert_eq!(p.tracks[0].midi_program, Some(42));
+
+        // Write: an external MIDI track's program goes into the file.
+        let mut q = Project::empty();
+        let ti = q.add_track(TrackKind::ExternalMidi);
+        q.tracks[ti].midi_program = Some(7);
+        q.tracks[ti].regions.push(Region {
+            name: "Lead".to_string(),
+            start_bar: 1.0,
+            len_bars: 1.0,
+            notes: vec![Note {
+                start: 0.0,
+                len: 1.0,
+                pitch: 60,
+                vel: 100,
+            }],
+            controls: Vec::new(),
+            folder: None,
+            audio: None,
+            params: RegionParams::default(),
+            generated: None,
+        });
+        let out = write(&export(&q, None));
+        let again = parse(&out).expect("the exported file reads");
+        assert_eq!(again.tracks[0].program, Some(7));
     }
 }

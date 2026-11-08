@@ -792,3 +792,4 @@ Bounce cancelled = Bounce cancelado
 Bounced {} in place = {} con bounce en el sitio
 Bounced {} but the region changed during the bounce, so it was not replaced = Bounce guardado en {}, pero la región cambió durante el bounce, así que no se reemplazó
 Choose Hydrogen Drum Kit… = Elegir un kit de batería Hydrogen…
+exported {} notes to {} = {} notas exportadas a {}
