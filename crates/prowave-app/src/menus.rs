@@ -507,6 +507,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             p.tracks.get(p.selected_track).is_some()
         }
         "Configure Track Header…" | "Show Master Track" => true,
+        // Mix > Edit Groups…: with no group yet it still opens, to make the first one.
+        "Edit Groups…" => true,
         // Opens the Space Designer on the selected track (adding one when it has none). The
         // mastering presets go on the Stereo Out strip (the master bus).
         "Show" => p
@@ -674,6 +676,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             s.track_dialog = track_dialogs::open_for(label, p);
         }
         "Show Master Track" => p.show_master_track = !p.show_master_track,
+        "Edit Groups…" => s.show_groups = true,
         "Select All" => s.tracks.select_all(p),
         "Join" => crate::region_edit::join_selected(p, &mut s.tracks),
         "Show Mixer" | "Mixer" => {
@@ -1225,7 +1228,8 @@ mod tests {
                     p.show_master_track,
                     p.header_hidden.len(),
                     s.track_dialog.is_some(),
-                    p.tracks.get(p.selected_track).is_some_and(|t| t.rec)
+                    p.tracks.get(p.selected_track).is_some_and(|t| t.rec),
+                    s.show_groups
                 ),
                 (
                     s.tracks.show_tempo,
@@ -1248,6 +1252,15 @@ mod tests {
         assert!(checked("Show Piano Roll", &p, &s) && !checked("Show Mixer", &p, &s));
         apply("Show Mixer", &mut p, &mut s);
         assert!(checked("Show Mixer", &p, &s));
+    }
+
+    #[test]
+    fn the_edit_groups_entry_is_available_and_opens_its_window() {
+        let mut s = crate::UiState::new();
+        let mut p = Project::demo();
+        assert!(enabled("Edit Groups…", &p, &s), "usable even with no group");
+        apply("Edit Groups…", &mut p, &mut s);
+        assert!(s.show_groups);
     }
 
     #[test]

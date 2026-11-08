@@ -20,6 +20,7 @@ mod flex_edit;
 mod fx_ui;
 mod graphics;
 mod groove;
+mod group_editor;
 mod groups;
 mod i18n;
 mod import;
@@ -182,6 +183,8 @@ pub struct UiState {
     /// Whether there is something to undo / redo (greys the Edit entries).
     pub can_undo: bool,
     pub can_redo: bool,
+    /// Mix > Edit Groups… window is open.
+    pub show_groups: bool,
 }
 
 impl UiState {
@@ -247,6 +250,7 @@ impl UiState {
             undo_cmd: None,
             can_undo: false,
             can_redo: false,
+            show_groups: false,
         }
     }
 
@@ -1162,6 +1166,7 @@ impl eframe::App for App {
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
+        group_editor::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
         self.track_history(&ctx);
