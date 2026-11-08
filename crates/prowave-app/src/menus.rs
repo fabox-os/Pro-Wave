@@ -531,6 +531,11 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             .is_some_and(|t| t.auto.has_lane()),
         // Record > Record / Record Repeat.
         "Record / Record Repeat" => true,
+        // File > Export > Score as MusicXML…: something must have notes.
+        "Score as MusicXML…" => p
+            .tracks
+            .iter()
+            .any(|t| t.regions.iter().any(|r| !r.notes.is_empty())),
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -755,6 +760,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         }
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
         "Selection as MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Export),
+        "Score as MusicXML…" => s.export_xml_cmd = true,
         "Project or Section…" => s.bounce_cmd = true,
         "Track as Audio File…" => s.export_track_cmd = true,
         "Regions in Place…" | "Bounce In Place" => s.bounce_region_cmd = true,
@@ -1217,7 +1223,8 @@ mod tests {
                     s.export_track_cmd,
                     s.bounce_region_cmd,
                     s.bounce_join_cmd,
-                    s.mixer.auto_editor.track
+                    s.mixer.auto_editor.track,
+                    s.export_xml_cmd
                 ),
                 (
                     s.ui_scale,
