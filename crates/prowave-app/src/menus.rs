@@ -556,6 +556,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Record Toggle" => true,
         "Record Enable" => p.tracks.get(p.selected_track).is_some(),
         "Record Project Settings" => true,
+        // File > Show in File Manager: a project that has been saved is on disk.
+        "Show in File Manager" => s.has_path,
         "Delete Track" => p.tracks.len() > 1,
         "Release Track Stack" => p
             .tracks
@@ -766,6 +768,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             }
         }
         "Record Project Settings" => s.settings_tab = Some(SettingsTab::Recording),
+        "Show in File Manager" => s.reveal_cmd = true,
         "New Pattern Region" | "New Drummer Region" => {
             // On the selected track, at the bar the playhead is in.
             let bar = p.beats_to_bar(p.position_beats).floor() as f32 + 1.0;
@@ -1217,7 +1220,8 @@ mod tests {
                     s.export_track_cmd,
                     s.bounce_region_cmd,
                     s.bounce_join_cmd,
-                    s.mixer.auto_editor.track
+                    s.mixer.auto_editor.track,
+                    s.reveal_cmd
                 ),
                 (
                     s.ui_scale,

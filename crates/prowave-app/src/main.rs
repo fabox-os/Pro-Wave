@@ -154,6 +154,10 @@ pub struct UiState {
     pub bounce_cmd: bool,
     /// A bounce is running (greys the Bounce entry).
     pub bouncing: bool,
+    /// File > Show in File Manager picked this frame.
+    pub reveal_cmd: bool,
+    /// The project has a file on disk (greys the File Manager entry until it is saved).
+    pub has_path: bool,
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
     pub steps: step_editor::StepView,
     /// True while the pointer is over the Piano Roll (it owns Delete/Cmd+R then).
@@ -236,6 +240,8 @@ impl UiState {
             bounce_join_cmd: false,
             bounce_cmd: false,
             bouncing: false,
+            reveal_cmd: false,
+            has_path: false,
             piano_focus: false,
             audition: Vec::new(),
             file_cmd: None,
@@ -306,6 +312,17 @@ struct App {
 }
 
 impl App {
+    /// File > Show in File Manager: opens the folder that holds the project file, with the
+    /// project selected where the system supports it.
+    fn reveal_project(&mut self) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        if let Err(e) = file_commands::reveal(&path) {
+            self.ui.status = Some(format!("{}: {e}", path.display()));
+        }
+    }
+
     /// File > Import > MIDI File… and File > Export > Selection as MIDI File…
     fn run_midi_cmd(&mut self, cmd: midi_file::MidiCmd) {
         let (p, s) = (&mut self.project, &mut self.ui);
@@ -936,6 +953,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let _frame_time = bench::frame_timer();
+        self.ui.has_path = self.path.is_some();
         let dt = ctx.input(|i| i.stable_dt) as f64;
         ui_scale::apply(&ctx, self.ui.ui_scale);
         tracks_area::poll_normalize(&ctx, &mut self.project, &mut self.ui);
@@ -1157,6 +1175,9 @@ impl eframe::App for App {
         }
         if std::mem::take(&mut self.ui.bounce_join_cmd) {
             self.bounce_and_join();
+        }
+        if std::mem::take(&mut self.ui.reveal_cmd) {
+            self.reveal_project();
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
