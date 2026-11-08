@@ -11,15 +11,6 @@ use std::path::PathBuf;
 
 use crate::model::Project;
 
-/// What the File > Bounce menu asked for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cmd {
-    /// Bounce the project, or the cycle section when the cycle is on.
-    ProjectOrSection,
-    /// Stop the bounce without writing anything.
-    Cancel,
-}
-
 /// The engine's ring holds about 1.4 s at 48 kHz, far more than one frame's audio, so a slow
 /// frame cannot lose the mix.
 const RING_FRAMES: usize = 65_536;

@@ -144,7 +144,9 @@ pub struct UiState {
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
     /// File > Bounce picked this frame; run by `App` (which owns the engine).
-    pub bounce_cmd: Option<bounce::Cmd>,
+    pub bounce_cmd: bool,
+    /// A bounce is running (greys the Bounce entry).
+    pub bouncing: bool,
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
     pub steps: step_editor::StepView,
     /// True while the pointer is over the Piano Roll (it owns Delete/Cmd+R then).
@@ -220,7 +222,8 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
-            bounce_cmd: None,
+            bounce_cmd: false,
+            bouncing: false,
             piano_focus: false,
             audition: Vec::new(),
             file_cmd: None,
@@ -341,15 +344,7 @@ impl App {
         }
     }
 
-    /// File > Bounce > Project or Section…, and stopping a bounce.
-    fn run_bounce_cmd(&mut self, cmd: bounce::Cmd) {
-        match cmd {
-            bounce::Cmd::ProjectOrSection => self.start_bounce(),
-            bounce::Cmd::Cancel => self.end_bounce(),
-        }
-    }
-
-    /// Asks where to write and starts a bounce of the project, or of the cycle section.
+    /// File > Bounce > Project or Section…: asks where to write and starts the bounce.
     fn start_bounce(&mut self) {
         let (start, end) = if self.project.cycle {
             (self.project.cycle_start, self.project.cycle_end)
@@ -390,26 +385,14 @@ impl App {
         }
     }
 
-    fn end_bounce(&mut self) {
-        let Some(running) = self.bounce.take() else {
-            return;
-        };
-        let result = match self.sync.as_mut() {
-            Some(sync) => running.finish(&mut sync.engine, &mut self.project, false),
-            None => Ok(None),
-        };
-        self.ui.status = Some(match result {
-            Ok(_) => i18n::tr("Bounce cancelled").to_string(),
-            Err(e) => e,
-        });
-    }
-
     /// Runs a bounce once a frame: gathers the engine's frames and stops at the end beat (or
-    /// when the transport stops).
+    /// when the transport stops, which cancels it).
     fn run_bounce(&mut self, ctx: &egui::Context) {
         let Some(running) = self.bounce.as_mut() else {
+            self.ui.bouncing = false;
             return;
         };
+        self.ui.bouncing = true;
         if running.poll(&self.project) {
             let percent = (running.progress(&self.project) * 100.0).round();
             self.ui.status = Some(i18n::trf("Bouncing {}%", &[&format!("{percent:.0}")]));
@@ -418,8 +401,10 @@ impl App {
         }
         let reached_end = self.project.playing && self.project.position_beats >= running.end_beat;
         let Some(running) = self.bounce.take() else {
+            self.ui.bouncing = false;
             return;
         };
+        self.ui.bouncing = false;
         let result = match self.sync.as_mut() {
             Some(sync) => running.finish(&mut sync.engine, &mut self.project, reached_end),
             None => Ok(None),
@@ -867,8 +852,8 @@ impl eframe::App for App {
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
         }
-        if let Some(cmd) = self.ui.bounce_cmd.take() {
-            self.run_bounce_cmd(cmd);
+        if std::mem::take(&mut self.ui.bounce_cmd) {
+            self.start_bounce();
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
