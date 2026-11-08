@@ -144,6 +144,8 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
+    /// File > Import > Audio File… picked this frame.
+    pub import_audio_cmd: bool,
     /// File > Export > Track as Audio File… picked this frame.
     pub export_track_cmd: bool,
     /// File > Bounce > Regions in Place… (and Record > Bounce In Place) picked this frame.
@@ -231,6 +233,7 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
+            import_audio_cmd: false,
             export_track_cmd: false,
             bounce_region_cmd: false,
             bounce_join_cmd: false,
@@ -356,6 +359,35 @@ impl App {
         }
         if let Err(e) = import::import_audio(&mut self.project, path, ctx) {
             self.ui.status = Some(i18n::trf("cannot import {}: {}", &[&path.display(), &e]));
+        }
+    }
+
+    /// File > Import > Audio File…: the same import as dropping a file on the window.
+    fn import_audio_file(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                i18n::tr("Audio File…"),
+                &[
+                    "wav", "wave", "aif", "aiff", "aifc", "flac", "mp3", "caf", "ogg", "oga",
+                    "m4a", "mp4",
+                ],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        match import::import_audio(&mut self.project, &path, ctx) {
+            Ok(()) => {
+                // The whole import is one undo step.
+                self.history.record(&self.project);
+                self.ui.status = Some(i18n::trf(
+                    "imported {} tracks from {}",
+                    &[&1, &path.display()],
+                ));
+            }
+            Err(e) => {
+                self.ui.status = Some(i18n::trf("cannot import {}: {}", &[&path.display(), &e]))
+            }
         }
     }
 
@@ -1145,6 +1177,9 @@ impl eframe::App for App {
         }
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
+        }
+        if std::mem::take(&mut self.ui.import_audio_cmd) {
+            self.import_audio_file(&ctx);
         }
         if std::mem::take(&mut self.ui.bounce_cmd) {
             self.start_bounce();

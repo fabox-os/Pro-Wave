@@ -531,6 +531,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             .is_some_and(|t| t.auto.has_lane()),
         // Record > Record / Record Repeat.
         "Record / Record Repeat" => true,
+        // File > Import > Audio File…: any audio file the engine can read.
+        "Audio File…" => true,
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -754,6 +756,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             show_space_designer(&mut p.master_inserts, s, crate::mixer::MASTER_STRIP, preset);
         }
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
+        "Audio File…" => s.import_audio_cmd = true,
         "Selection as MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Export),
         "Project or Section…" => s.bounce_cmd = true,
         "Track as Audio File…" => s.export_track_cmd = true,
@@ -1217,7 +1220,8 @@ mod tests {
                     s.export_track_cmd,
                     s.bounce_region_cmd,
                     s.bounce_join_cmd,
-                    s.mixer.auto_editor.track
+                    s.mixer.auto_editor.track,
+                    s.import_audio_cmd
                 ),
                 (
                     s.ui_scale,
