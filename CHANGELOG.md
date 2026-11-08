@@ -28,6 +28,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Mix and Record menu entries:** **Mix > Show Automation** opens the Automation editor on the selected track, **Mix > Delete Automation** clears the lane it shows, and **Record > Record / Record Repeat** records from the cycle start when the cycle is on (otherwise from the playhead). All three were greyed out.
 
 ✅ **Hydrogen drum kits:** an instrument track can now play a free Hydrogen drum kit. In the Inspector, **Choose Hydrogen Drum Kit…** takes the kit's `drumkit.xml`; each instrument of the kit plays on its own MIDI note with its velocity layers and gain, and the samples (WAV, AIFF, FLAC or OGG) are read from the kit's folder. The kit is saved in the project by its path, like a SoundFont. Kits that name no note number their instruments from C1, as Hydrogen does.
+✅ **MIDI program changes:** a program change in an imported MIDI file is kept on the track it names, and exporting writes an External MIDI track's program back into the file, so a round trip does not lose it.
 
 ### Still to do or test
 

@@ -284,7 +284,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 
 | Roadmap item | | What's there / what's missing |
 |---|---|---|
-| MIDI 1.0 parser, MPE, Articulation ID, SysEx | 🟡 | Standard MIDI files import and export (round-trip tests; damaged files refused) ✅. **Missing:** SMPTE-timed files, program changes, pitch bend, lyrics, markers, MPE, SysEx, MIDI 2.0 |
+| MIDI 1.0 parser, MPE, Articulation ID, SysEx | 🟡 | Standard MIDI files import and export (round-trip tests; damaged files refused); program changes are kept both ways ✅. **Missing:** SMPTE-timed files, pitch bend, lyrics, markers, MPE, SysEx, MIDI 2.0 |
 | Piano Roll: full Logic parity | 🟡 | Editing, quantize (time and scale) with strength/swing, velocity lane, MIDI Transform, key commands ✅. **Missing:** brush, time handles, CC MIDI Draw, flam, note colour parity |
 | Score Editor v0 | 🟡 | Clefs, key and time signatures, accidentals, rests, ties, click to add, right-click to delete ✅. **Missing:** beams, chords' stems, voices, printing, MusicXML |
 | Event List, Step Editor, MIDI Transform, MIDI FX chain | 🟡 | Event list (MIDI events), Step Sequencer (Pattern regions), MIDI Transform, and the MIDI FX chain (Transposer, Velocity, Scale, Chord Trigger, Repeater, Arpeggiator, Randomizer, Modulator, Scripter) ✅. **Missing:** the Marker/Tempo/Signature tabs of the Event list, per-event editing, the channel-strip MIDI FX slot |
