@@ -788,3 +788,4 @@ Bouncing {}% = Bounce {}%
 Bounced to {} = Bounce salvo em {}
 Bounce cancelled = Bounce cancelado
 Bounced {} in place = {} com bounce no local
+Bounced {} but the region changed during the bounce, so it was not replaced = Bounce salvo em {}, mas a região mudou durante o bounce, então não foi substituída

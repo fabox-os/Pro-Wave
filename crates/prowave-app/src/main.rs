@@ -492,15 +492,16 @@ impl App {
             self.ui.status = Some(format!("{}: {e}", dir.display()));
             return;
         }
-        let path = dir.join(format!("{} {start:.3}.wav", file_name(&name)));
+        let path = bounce::free_path(&dir, &format!("{} {start:.3}", file_name(&name)));
         let Some(sync) = self.sync.as_mut() else {
             self.ui.status = Some("cannot bounce: there is no audio output".to_string());
             return;
         };
-        match bounce::Bounce::start_track(
+        match bounce::Bounce::start_regions(
             &mut sync.engine,
             &mut self.project,
             track,
+            &regions,
             start,
             end,
             path,
@@ -593,10 +594,18 @@ impl App {
         };
         let placed = self.region_bounce.take();
         match result {
-            Ok(Some(path)) => {
-                self.ui.status = Some(i18n::trf("Bounced to {}", &[&path.display()]));
+            Ok(Some(done)) => {
+                self.ui.status = Some(i18n::trf("Bounced to {}", &[&done.path.display()]));
                 if let Some((track, regions)) = placed {
-                    self.place_bounce(track, regions, &path, ctx);
+                    if done.placeable {
+                        self.place_bounce(track, regions, &done.path, ctx);
+                    } else {
+                        // The file is kept, but the regions are not what it was bounced from.
+                        self.ui.status = Some(i18n::trf(
+                            "Bounced {} but the region changed during the bounce, so it was not replaced",
+                            &[&done.path.display()],
+                        ));
+                    }
                 }
             }
             Ok(None) => self.ui.status = Some(i18n::tr("Bounce cancelled").to_string()),

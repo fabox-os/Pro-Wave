@@ -788,3 +788,4 @@ Bouncing {}% = Bounce {} %
 Bounced to {} = Na-bounce sa {}
 Bounce cancelled = Kinansela ang bounce
 Bounced {} in place = Na-bounce ang {} sa lugar
+Bounced {} but the region changed during the bounce, so it was not replaced = Na-bounce sa {}, pero nagbago ang region habang nag-bounce, kaya hindi ito pinalitan

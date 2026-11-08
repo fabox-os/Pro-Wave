@@ -788,3 +788,4 @@ Bouncing {}% = バウンス {}%
 Bounced to {} = {} にバウンスしました
 Bounce cancelled = バウンスをキャンセルしました
 Bounced {} in place = {} をその場でバウンスしました
+Bounced {} but the region changed during the bounce, so it was not replaced = {} にバウンスしましたが、バウンス中にリージョンが変わったため置き換えませんでした

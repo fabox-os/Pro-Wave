@@ -788,3 +788,4 @@ Bouncing {}% = Bounce {}%
 Bounced to {} = Di-bounce ke {}
 Bounce cancelled = Bounce dibatalkan
 Bounced {} in place = {} di-bounce di tempat
+Bounced {} but the region changed during the bounce, so it was not replaced = Di-bounce ke {}, tetapi region berubah selama bounce, jadi tidak diganti

@@ -788,3 +788,4 @@ Bouncing {}% = 导出 {}%
 Bounced to {} = 已导出到 {}
 Bounce cancelled = 已取消导出
 Bounced {} in place = 已在原位置导出 {}
+Bounced {} but the region changed during the bounce, so it was not replaced = 已导出到 {}，但导出期间该区域已更改，因此未替换
