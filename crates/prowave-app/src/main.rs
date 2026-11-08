@@ -143,6 +143,8 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
+    /// File > Export > Track as Audio File… picked this frame.
+    pub export_track_cmd: bool,
     /// File > Bounce picked this frame; run by `App` (which owns the engine).
     pub bounce_cmd: bool,
     /// A bounce is running (greys the Bounce entry).
@@ -222,6 +224,7 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
+            export_track_cmd: false,
             bounce_cmd: false,
             bouncing: false,
             piano_focus: false,
@@ -377,6 +380,57 @@ impl App {
                 self.bounce = Some(running);
                 // Send the seek and Play in this same frame, so the engine starts capturing
                 // exactly when playback starts (no silent lead-in in the file).
+                if let Some(sync) = self.sync.as_mut() {
+                    sync.sync(&mut self.project);
+                }
+            }
+            Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    /// File > Export > Track as Audio File…: bounces the selected track alone to a WAV, with its
+    /// effects and sends (the other tracks are soloed off while it runs, then put back).
+    fn export_track(&mut self) {
+        let track = self.project.selected_track;
+        let Some(selected) = self.project.tracks.get(track) else {
+            return;
+        };
+        if selected.regions.is_empty() || self.bounce.is_some() {
+            return;
+        }
+        let name = selected.name.clone();
+        let end = self
+            .project
+            .tracks
+            .iter()
+            .flat_map(|t| t.regions.iter())
+            .map(|r| self.project.region_end_beats(r))
+            .fold(0.0, f64::max);
+        if end <= 0.0 {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("WAV", &["wav", "WAV"])
+            .set_file_name(format!("{name}.wav"))
+            .save_file()
+        else {
+            return;
+        };
+        let Some(sync) = self.sync.as_mut() else {
+            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
+            return;
+        };
+        match bounce::Bounce::start_track(
+            &mut sync.engine,
+            &mut self.project,
+            track,
+            0.0,
+            end,
+            path,
+        ) {
+            Ok(running) => {
+                self.bounce = Some(running);
+                // Seek and Play in this same frame, so the capture starts with the sound.
                 if let Some(sync) = self.sync.as_mut() {
                     sync.sync(&mut self.project);
                 }
@@ -854,6 +908,9 @@ impl eframe::App for App {
         }
         if std::mem::take(&mut self.ui.bounce_cmd) {
             self.start_bounce();
+        }
+        if std::mem::take(&mut self.ui.export_track_cmd) {
+            self.export_track();
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());

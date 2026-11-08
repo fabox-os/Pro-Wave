@@ -15,7 +15,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Bounce:** **File > Bounce > Project or Section…** plays the song — or the cycle section, when the cycle is on — through the engine and writes what is heard into a 32-bit float WAV. Every effect (the master bus's included), send, automation lane, audio region and instrument is in the file, because the engine hands over its finished master frames. A bounce runs at playing speed; the transport and the cycle are put back where they were afterwards, and stopping the transport cancels it without writing a file.
 
-✅ **Bounce:** **File > Bounce > Project or Section…** plays the song — or the cycle section, when the cycle is on — through the engine and writes what is heard into a 32-bit float WAV. Every effect (the master bus's included), send, automation lane, audio region and instrument is in the file, because the engine hands over its finished master frames. A bounce runs at playing speed; the transport and the cycle are put back where they were afterwards, and stopping the transport cancels it without writing a file.
+✅ **Export > Track as Audio File…:** the selected track is bounced alone into a WAV. The other tracks are soloed off while it runs — the track keeps its effects, its sends and the buses they feed — and everyone's solo states are put back when it ends. It is the same real-time bounce as above, so it takes the song's length; a track with no regions is not exported.
 
 ### Still to do or test
 

@@ -289,7 +289,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 | Score Editor v0 | 🟡 | Clefs, key and time signatures, accidentals, rests, ties, click to add, right-click to delete ✅. **Missing:** beams, chords' stems, voices, printing, MusicXML |
 | Event List, Step Editor, MIDI Transform, MIDI FX chain | 🟡 | Event list (MIDI events), Step Sequencer (Pattern regions), MIDI Transform, and the MIDI FX chain (Transposer, Velocity, Scale, Chord Trigger, Repeater, Arpeggiator, Randomizer, Modulator, Scripter) ✅. **Missing:** the Marker/Tempo/Signature tabs of the Event list, per-event editing, the channel-strip MIDI FX slot |
 | Drummer Track v0 | 🟡 | Drummer regions with Rock/Pop/Funk/Jazz/Hip Hop/Electronic, complexity/loudness pad, fills, Convert to MIDI ✅. **Missing:** named drummers, Follow Track, a dedicated Drummer Track UI |
-| **DoD:** Drummer + Bass + Keys, quantize, bounce | 🟡 | The song can be made and quantized, and **File > Bounce > Project or Section…** writes the mix to a 32-bit float WAV, at playing speed. Missing: an offline (faster than real-time) bounce, and region/track bounces |
+| **DoD:** Drummer + Bass + Keys, quantize, bounce | 🟡 | The song can be made and quantized, and **File > Bounce > Project or Section…** writes the mix to a 32-bit float WAV, at playing speed; **Export > Track as Audio File…** does one track. Missing: an offline (faster than real-time) bounce, and region bounces |
 
 ### Phase 3 — Flex & Smart Tempo
 
@@ -315,7 +315,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 - **Phase 5–6:** built-in synth and drum kits ✅; **Amp Designer** ✅ (2026-11-03). Missing: Sampler, Quick Sampler, Drum Machine Designer, Drum Kit Designer, ES2, Vintage B3/Clav/E-Piano, Retro Synth, Sculpture, Alchemy-Lite, Ultrabeat, Studio Strings/Horns, the full FX suite, Pedalboard, Mastering Assistant.
 - **Phase 7:** CLAP/VST3/AU hosting and the out-of-process sandbox — not started.
 - **Phase 8:** Smart Controls, the full Key Commands window, Live Loops, Video track — not started (Quick Help, Toolbar, Note Pad, Loop Browser and All Files exist).
-- **Phase 9:** WASM/AudioWorklet build; Bounce Project or Section ✅ (real time, to a WAV); Bounce Region/Track, Export All Tracks, MusicXML/AAF/ADM BWF — not started (MIDI export exists).
+- **Phase 9:** WASM/AudioWorklet build; Bounce Project or Section ✅ and Export Track as Audio File ✅ (real time, to a WAV); Bounce Region, Export All Tracks, MusicXML/AAF/ADM BWF — not started (MIDI export exists).
 - **`.logicx` import** (`prowave-logicx-import` per `LOGICX-FORMAT-SPEC.md`) — not started.
 
 ## 📋 Still to do next (from the 0.2.x releases)
@@ -328,7 +328,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 - **Flex Time:** dragging Flex markers with the mouse; per-note Flex Pitch (drift, vibrato,
   formant); audio tracks following a Groove Track.
 - **Smart Tempo:** Adapt Region Tempo while recording, a non-steady tempo grid in the editor.
-- **Bounce / Export:** the offline bounce (faster than real time), region and track bounces, and `bounces/` in the project file.
+- **Bounce / Export:** the offline bounce (faster than real time), region bounces, and `bounces/` in the project file.
 - **Apple Loops:** reading their tags and tempo (the audio formats they use now open).
 - **Linux / macOS:** sound, recording and latency on real hardware; the NVIDIA graphics
   fallbacks confirmed by a tester.

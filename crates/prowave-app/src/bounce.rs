@@ -22,11 +22,13 @@ pub struct Bounce {
     samples: Vec<f32>,
     pub start_beat: f64,
     pub end_beat: f64,
-    /// The playhead's place, the cycle and the metronome before the bounce, put back when it
-    /// ends.
+    /// The playhead's place, the cycle, the metronome and the solos before the bounce, put
+    /// back when it ends.
     was_at: f64,
     was_cycle: bool,
     was_metronome: bool,
+    /// Empty for a project bounce.
+    was_solos: Vec<bool>,
     path: PathBuf,
     sample_rate: u32,
 }
@@ -40,10 +42,49 @@ impl Bounce {
         end_beat: f64,
         path: PathBuf,
     ) -> Result<Self, String> {
+        Self::begin(engine, project, start_beat, end_beat, path, None)
+    }
+
+    /// Bounces one track: the other tracks are soloed off for the bounce, so only this track —
+    /// with its effects, sends and their returns — reaches the master.
+    pub fn start_track(
+        engine: &mut Engine,
+        project: &mut Project,
+        track: usize,
+        start_beat: f64,
+        end_beat: f64,
+        path: PathBuf,
+    ) -> Result<Self, String> {
+        if track >= project.tracks.len() {
+            return Err("no such track".to_string());
+        }
+        let solos: Vec<bool> = project.tracks.iter().map(|t| t.solo).collect();
+        Self::begin(
+            engine,
+            project,
+            start_beat,
+            end_beat,
+            path,
+            Some((track, solos)),
+        )
+    }
+
+    fn begin(
+        engine: &mut Engine,
+        project: &mut Project,
+        start_beat: f64,
+        end_beat: f64,
+        path: PathBuf,
+        solo: Option<(usize, Vec<bool>)>,
+    ) -> Result<Self, String> {
         let (producer, received) = RingBuffer::<[f32; 2]>::new(RING_FRAMES);
         if !engine.send(Command::SetCapture(Some(producer))) {
             return Err("the engine is busy; try the bounce again".to_string());
         }
+        let (solo_track, was_solos) = match solo {
+            Some((track, solos)) => (Some(track), solos),
+            None => (None, Vec::new()),
+        };
         let bounce = Self {
             received,
             samples: Vec::new(),
@@ -52,9 +93,15 @@ impl Bounce {
             was_at: project.position_beats,
             was_cycle: project.cycle,
             was_metronome: project.metronome,
+            was_solos,
             path,
             sample_rate: engine.sample_rate(),
         };
+        if let Some(track) = solo_track {
+            for (i, t) in project.tracks.iter_mut().enumerate() {
+                t.solo = i == track;
+            }
+        }
         // A bounce plays once through, from its start, without the metronome's clicks (they
         // are mixed before the master fader, so they would be in the file).
         bounce.take_transport(project);
@@ -75,6 +122,9 @@ impl Bounce {
         project.cycle = self.was_cycle;
         project.metronome = self.was_metronome;
         project.position_beats = self.was_at;
+        for (track, solo) in project.tracks.iter_mut().zip(&self.was_solos) {
+            track.solo = *solo;
+        }
     }
 
     /// Takes the frames the engine has ready. `false` when the bounce should end.
@@ -135,6 +185,7 @@ mod tests {
             was_at: 0.0,
             was_cycle: false,
             was_metronome: false,
+            was_solos: Vec::new(),
             path: PathBuf::from("bounce.wav"),
             sample_rate: 48_000,
         }
@@ -183,5 +234,25 @@ mod tests {
         assert!(project.cycle && project.metronome);
         assert!(!project.playing);
         assert_eq!(project.position_beats, 30.0);
+    }
+
+    #[test]
+    fn a_track_bounce_solos_the_track_and_gives_the_solos_back() {
+        let mut project = Project::empty();
+        project.add_track(crate::model::TrackKind::Instrument);
+        project.tracks[0].solo = false;
+        project.tracks[1].solo = true;
+        let mut running = bounced(0.0, 8.0);
+        running.was_solos = vec![false, true];
+        // What `start_track` does once the capture is running.
+        for (i, track) in project.tracks.iter_mut().enumerate() {
+            track.solo = i == 0;
+        }
+        assert!(project.tracks[0].solo && !project.tracks[1].solo);
+        running.restore_transport(&mut project);
+        assert!(
+            !project.tracks[0].solo && project.tracks[1].solo,
+            "the user's solos come back"
+        );
     }
 }
