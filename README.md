@@ -131,6 +131,7 @@ cargo xtask check                      # fmt, clippy -D warnings, tests, no-allo
 | [`AGENTS.md`](AGENTS.md) | Rules for contributors and AI agents: crate ownership, audio-thread rules, checks |
 | [`dist/README-linux.txt`](dist/README-linux.txt) | Installing and troubleshooting on Linux |
 | [`LOGICX-FORMAT-SPEC.md`](LOGICX-FORMAT-SPEC.md) | Notes for reading Logic Pro `.logicx` projects |
+| [`GARAGEBAND-FORMAT-SPEC.md`](GARAGEBAND-FORMAT-SPEC.md) | Notes for reading GarageBand `.band` projects (plan for issue #35) |
 | [`SECURITY.md`](SECURITY.md) | Reporting security problems |
 
 ## License
