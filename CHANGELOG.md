@@ -19,6 +19,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Bounce in place:** **File > Bounce > Regions in Place…** (and **Record > Bounce In Place**) renders the selected MIDI region with its track's instrument, effects and sends, over the region's own span, and replaces the region with the audio where it was. It is one undo step, and the audio lives in the session's media folder until the project is saved, when it travels inside the `.prowave`.
 
+✅ **Bounce and Join:** **Edit > Bounce and Join** renders all the selected regions of one track — from the earliest to the latest, the gaps included — and puts the audio back as one region, named after the earliest. Like Bounce in Place it is one undo step and the audio travels inside the `.prowave`.
+
 ### Still to do or test
 
 ❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate

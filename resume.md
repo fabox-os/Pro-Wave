@@ -315,7 +315,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 - **Phase 5–6:** built-in synth and drum kits ✅; **Amp Designer** ✅ (2026-11-03). Missing: Sampler, Quick Sampler, Drum Machine Designer, Drum Kit Designer, ES2, Vintage B3/Clav/E-Piano, Retro Synth, Sculpture, Alchemy-Lite, Ultrabeat, Studio Strings/Horns, the full FX suite, Pedalboard, Mastering Assistant.
 - **Phase 7:** CLAP/VST3/AU hosting and the out-of-process sandbox — not started.
 - **Phase 8:** Smart Controls, the full Key Commands window, Live Loops, Video track — not started (Quick Help, Toolbar, Note Pad, Loop Browser and All Files exist).
-- **Phase 9:** WASM/AudioWorklet build; Bounce Project or Section ✅, Export Track as Audio File ✅ and Bounce in Place ✅ (real time, to a WAV); Export All Tracks, MusicXML/AAF/ADM BWF — not started (MIDI export exists).
+- **Phase 9:** WASM/AudioWorklet build; Bounce Project or Section ✅, Export Track as Audio File ✅, Bounce in Place ✅ and Edit > Bounce and Join ✅ (real time, to a WAV); Export All Tracks, MusicXML/AAF/ADM BWF — not started (MIDI export exists).
 - **`.logicx` import** (`prowave-logicx-import` per `LOGICX-FORMAT-SPEC.md`) — not started.
 
 ## 📋 Still to do next (from the 0.2.x releases)

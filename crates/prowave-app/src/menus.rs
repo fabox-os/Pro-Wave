@@ -531,7 +531,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
                     .is_some_and(|t| !t.regions.is_empty())
         }
         // Bounce in place: the selected region must be MIDI (audio is already audio).
-        "Regions in Place…" | "Bounce In Place" => {
+        "Regions in Place…" | "Bounce In Place" | "Bounce and Join" => {
             !s.bouncing
                 && s.tracks.selected.is_some_and(|(t, r)| {
                     p.tracks
@@ -741,6 +741,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         "Project or Section…" => s.bounce_cmd = true,
         "Track as Audio File…" => s.export_track_cmd = true,
         "Regions in Place…" | "Bounce In Place" => s.bounce_region_cmd = true,
+        "Bounce and Join" => s.bounce_join_cmd = true,
         "New Pattern Region" | "New Drummer Region" => {
             // On the selected track, at the bar the playhead is in.
             let bar = p.beats_to_bar(p.position_beats).floor() as f32 + 1.0;
@@ -1175,7 +1176,8 @@ mod tests {
                     s.midi_cmd,
                     s.bounce_cmd,
                     s.export_track_cmd,
-                    s.bounce_region_cmd
+                    s.bounce_region_cmd,
+                    s.bounce_join_cmd
                 ),
                 (
                     s.ui_scale,
