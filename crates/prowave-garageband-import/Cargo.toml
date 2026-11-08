@@ -1,0 +1,13 @@
+[package]
+name = "prowave-garageband-import"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: what is inside a GarageBand .band project (bundle detection, metadata, media list)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+plist = "1"
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
