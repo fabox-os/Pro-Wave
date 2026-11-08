@@ -23,6 +23,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Bounce and Join:** **Edit > Bounce and Join** renders all the selected regions of one track — from the earliest to the latest, the gaps included — and puts the audio back as one region, named after the earliest. Like Bounce in Place it is one undo step and the audio travels inside the `.prowave`.
 
+✅ **Mix and Record menu entries:** **Mix > Show Automation** opens the Automation editor on the selected track, **Mix > Delete Automation** clears the lane it shows, and **Record > Record / Record Repeat** records from the cycle start when the cycle is on (otherwise from the playhead). All three were greyed out.
+
 ### Still to do or test
 
 ❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
