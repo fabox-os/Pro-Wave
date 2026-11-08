@@ -520,6 +520,15 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Select All" => p.tracks.iter().any(|t| !t.regions.is_empty()),
         "Join" => crate::region_edit::can_join(p, &s.tracks),
         "Split at Playhead" => crate::region_edit::can_split(p, &s.tracks),
+        // Mix > Show Automation: the Automation editor on the selected track.
+        "Show Automation" => p.tracks.get(p.selected_track).is_some(),
+        // Mix > Delete Automation: the lane the editor shows must have points.
+        "Delete Automation" => p
+            .tracks
+            .get(p.selected_track)
+            .is_some_and(|t| t.auto.has_lane()),
+        // Record > Record / Record Repeat.
+        "Record / Record Repeat" => true,
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -766,6 +775,21 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             p.add_track(TrackKind::Aux);
         }
         "Undo" => s.undo_cmd = Some(UndoCmd::Undo),
+        "Show Automation" => s.mixer.auto_editor.track = Some(p.selected_track),
+        "Delete Automation" => {
+            if let Some(t) = p.tracks.get_mut(p.selected_track) {
+                let shown = t.auto.shown;
+                t.auto.lane_mut(shown).clear();
+                t.auto.prune();
+            }
+        }
+        "Record / Record Repeat" => {
+            // Record Repeat starts again where the cycle starts.
+            if p.cycle {
+                p.position_beats = p.cycle_start;
+            }
+            p.recording = true;
+        }
         "Redo" => s.undo_cmd = Some(UndoCmd::Redo),
         "Delete Undo History" => s.undo_cmd = Some(UndoCmd::Clear),
         "Delete" => crate::tracks_area::delete_selected(p, &mut s.tracks),
@@ -1189,7 +1213,8 @@ mod tests {
                     s.bounce_cmd,
                     s.export_track_cmd,
                     s.bounce_region_cmd,
-                    s.bounce_join_cmd
+                    s.bounce_join_cmd,
+                    s.mixer.auto_editor.track
                 ),
                 (
                     s.ui_scale,
