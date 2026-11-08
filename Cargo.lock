@@ -3435,6 +3435,7 @@ dependencies = [
  "midir",
  "muda",
  "prowave-engine",
+ "prowave-garageband-import",
  "prowave-project",
  "rfd",
  "rhai",
