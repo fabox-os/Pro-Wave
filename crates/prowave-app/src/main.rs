@@ -378,7 +378,14 @@ impl App {
             return;
         };
         match bounce::Bounce::start(&mut sync.engine, &mut self.project, start, end, path) {
-            Ok(running) => self.bounce = Some(running),
+            Ok(running) => {
+                self.bounce = Some(running);
+                // Send the seek and Play in this same frame, so the engine starts capturing
+                // exactly when playback starts (no silent lead-in in the file).
+                if let Some(sync) = self.sync.as_mut() {
+                    sync.sync(&mut self.project);
+                }
+            }
             Err(e) => self.ui.status = Some(e),
         }
     }
