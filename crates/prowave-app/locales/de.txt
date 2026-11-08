@@ -792,3 +792,4 @@ Bounce cancelled = Bounce abgebrochen
 Bounced {} in place = {} an Ort und Stelle gebounct
 Bounced {} but the region changed during the bounce, so it was not replaced = {} gebounct, aber die Region wurde während des Bounces geändert, daher nicht ersetzt
 Choose Hydrogen Drum Kit… = Hydrogen-Drumkit wählen…
+exported {} notes to {} = {} Noten nach {} exportiert
