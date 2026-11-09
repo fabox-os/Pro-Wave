@@ -297,14 +297,24 @@ pub struct FxLane {
     pub points: Vec<AutoPoint>,
 }
 
-/// Automation of one channel strip: a lane for the fader (dB), one for the pan knob and one
-/// for each effect parameter, as points in order of beat, and what the strip is doing with them.
+/// The automation of one send level: the send slot (0..MAX_SENDS), and the points, whose values
+/// are knob positions 0..=1.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct SendLane {
+    pub slot: u8,
+    pub points: Vec<AutoPoint>,
+}
+
+/// Automation of one channel strip: a lane for the fader (dB), one for the pan knob, one for
+/// each effect parameter and one for each send level, as points in order of beat, and what the
+/// strip is doing with them.
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct Automation {
     pub mode: AutoMode,
     pub volume: Vec<AutoPoint>,
     pub pan: Vec<AutoPoint>,
     pub fx: Vec<FxLane>,
+    pub sends: Vec<SendLane>,
     /// The control held (Touch), or held and let go but still writing (Latch): the strip
     /// plays that control's own value, not its lane. Not saved.
     pub held: Option<AutoTarget>,
@@ -328,6 +338,11 @@ impl Automation {
                 .fx
                 .iter()
                 .find(|l| l.slot == slot && l.param == param)
+                .map_or(&[], |l| &l.points),
+            AutoTarget::Send { slot } => self
+                .sends
+                .iter()
+                .find(|l| l.slot == slot)
                 .map_or(&[], |l| &l.points),
         }
     }
@@ -355,6 +370,19 @@ impl Automation {
                 };
                 &mut self.fx[i].points
             }
+            AutoTarget::Send { slot } => {
+                let i = match self.sends.iter().position(|l| l.slot == slot) {
+                    Some(i) => i,
+                    None => {
+                        self.sends.push(SendLane {
+                            slot,
+                            points: Vec::new(),
+                        });
+                        self.sends.len() - 1
+                    }
+                };
+                &mut self.sends[i].points
+            }
         }
     }
 
@@ -375,6 +403,11 @@ impl Automation {
                 &l.points[..],
             )
         }))
+        .chain(
+            self.sends
+                .iter()
+                .map(|l| (AutoTarget::Send { slot: l.slot }, &l.points[..])),
+        )
     }
 
     /// Whether any lane has points.
@@ -382,9 +415,10 @@ impl Automation {
         self.lanes().any(|(_, pts)| !pts.is_empty())
     }
 
-    /// Takes away the effect lanes that have no points.
+    /// Takes away the effect and send lanes that have no points.
     pub fn prune(&mut self) {
         self.fx.retain(|l| !l.points.is_empty());
+        self.sends.retain(|l| !l.points.is_empty());
     }
 
     /// Whether the engine plays the lane of `target` (rather than the fader or knob).
@@ -430,7 +464,7 @@ impl Automation {
         match target {
             AutoTarget::Volume => (-60.0, 6.0),
             AutoTarget::Pan => (-1.0, 1.0),
-            AutoTarget::Fx { .. } => (0.0, 1.0),
+            AutoTarget::Fx { .. } | AutoTarget::Send { .. } => (0.0, 1.0),
         }
     }
 
@@ -444,7 +478,7 @@ impl Automation {
         let moved = match target {
             AutoTarget::Volume => 0.1,
             AutoTarget::Pan => 0.01,
-            AutoTarget::Fx { .. } => 0.004,
+            AutoTarget::Fx { .. } | AutoTarget::Send { .. } => 0.004,
         };
         let last = self.last.filter(|(b, _)| beat >= *b);
         if let Some((lb, lv)) = last {
@@ -468,6 +502,7 @@ impl Automation {
         self.volume.clear();
         self.pan.clear();
         self.fx.clear();
+        self.sends.clear();
         self.last = None;
     }
 

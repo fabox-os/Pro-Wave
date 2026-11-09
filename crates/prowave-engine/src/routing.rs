@@ -82,6 +82,9 @@ pub enum AutoTarget {
     /// Parameter `param` of the effect in slot `slot` of the strip, as a position 0..=1
     /// along the parameter's range (see `ParamInfo::from_norm`).
     Fx { slot: u8, param: u8 },
+    /// The level knob of send slot `slot` (0..[`MAX_SENDS`]), as a position 0..=1 (see
+    /// [`send_gain`]).
+    Send { slot: u8 },
 }
 
 /// One point of an automation lane. `curve` bends the stretch from this point to the next:
@@ -148,7 +151,7 @@ impl AutoLane {
         let (lo, hi) = match self.target {
             AutoTarget::Volume => (-96.0, 6.0),
             AutoTarget::Pan => (-1.0, 1.0),
-            AutoTarget::Fx { .. } => (0.0, 1.0),
+            AutoTarget::Fx { .. } | AutoTarget::Send { .. } => (0.0, 1.0),
         };
         self.points
             .retain(|p| p.beat.is_finite() && p.beat >= 0.0 && p.value.is_finite());
