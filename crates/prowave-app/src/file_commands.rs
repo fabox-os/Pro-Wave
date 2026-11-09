@@ -84,6 +84,38 @@ fn dialog() -> FileDialog {
     FileDialog::new().add_filter(tr("Pro Wave Project"), &[prowave_project::EXTENSION])
 }
 
+/// Opens the system's file manager with `path` (the project file) selected.
+pub fn reveal(path: &Path) -> std::io::Result<()> {
+    reveal_command(path).spawn().map(|_| ())
+}
+
+/// The command that shows `path` in the file manager: Explorer selects the file, Finder
+/// reveals it and `xdg-open` opens the folder that holds it.
+fn reveal_command(path: &Path) -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg(format!("/select,{}", path.display()));
+        cmd
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg("-R").arg(path);
+        cmd
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or(path),
+        );
+        cmd
+    }
+}
+
 /// The answer to the "save changes?" prompt.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Answer {
@@ -352,6 +384,46 @@ impl App {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_file_manager_command_selects_the_project_file() {
+        let cmd = reveal_command(Path::new(r"C:\Music\song.prowave"));
+        assert_eq!(
+            cmd.get_program(),
+            std::ffi::OsStr::new("explorer"),
+            "Explorer selects the file"
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, [r"/select,C:\Music\song.prowave"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_file_manager_command_reveals_the_project_file() {
+        let cmd = reveal_command(Path::new("/Users/me/Music/song.prowave"));
+        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("open"));
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["-R", "/Users/me/Music/song.prowave"]);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn the_file_manager_command_opens_the_project_folder() {
+        let cmd = reveal_command(Path::new("/home/me/Music/song.prowave"));
+        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("xdg-open"));
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["/home/me/Music"]);
+    }
 
     fn app() -> App {
         let project = Project::demo();

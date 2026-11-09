@@ -519,6 +519,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             master_has_room(p)
         }
         "Paste" => crate::region_edit::can_paste(p, &s.region_clip),
+        "Paste Replace" => crate::region_edit::can_paste(p, &s.region_clip),
         "Select All" => p.tracks.iter().any(|t| !t.regions.is_empty()),
         "Join" => crate::region_edit::can_join(p, &s.tracks),
         "Split at Playhead" => crate::region_edit::can_split(p, &s.tracks),
@@ -531,8 +532,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             .is_some_and(|t| t.auto.has_lane()),
         // Record > Record / Record Repeat.
         "Record / Record Repeat" => true,
-        // File > Import > Audio File…: any audio file the engine can read.
-        "Audio File…" => true,
+ main
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -558,6 +558,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Record Toggle" => true,
         "Record Enable" => p.tracks.get(p.selected_track).is_some(),
         "Record Project Settings" => true,
+main
         "Delete Track" => p.tracks.len() > 1,
         "Release Track Stack" => p
             .tracks
@@ -758,6 +759,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
         "Audio File…" => s.import_audio_cmd = true,
         "Selection as MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Export),
+        "Score as MusicXML…" => s.export_xml_cmd = true,
         "Project or Section…" => s.bounce_cmd = true,
         "Track as Audio File…" => s.export_track_cmd = true,
         "Regions in Place…" | "Bounce In Place" => s.bounce_region_cmd = true,
@@ -769,6 +771,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             }
         }
         "Record Project Settings" => s.settings_tab = Some(SettingsTab::Recording),
+ main
         "New Pattern Region" | "New Drummer Region" => {
             // On the selected track, at the bar the playhead is in.
             let bar = p.beats_to_bar(p.position_beats).floor() as f32 + 1.0;
@@ -796,6 +799,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             }
             p.recording = true;
         }
+        "Undo History…" => s.show_undo_history = true,
         "Redo" => s.undo_cmd = Some(UndoCmd::Redo),
         "Delete Undo History" => s.undo_cmd = Some(UndoCmd::Clear),
         "Delete" => crate::tracks_area::delete_selected(p, &mut s.tracks),
@@ -804,6 +808,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         }
         "Cut" => crate::region_edit::cut_selected(p, &mut s.tracks, &mut s.region_clip),
         "Paste" => crate::region_edit::paste_at_playhead(p, &mut s.tracks, &s.region_clip),
+        "Paste Replace" => crate::region_edit::paste_replace(p, &mut s.tracks, &s.region_clip),
         "Split at Playhead" => crate::region_edit::split_at_playhead(p, &mut s.tracks),
         "Deselect All" => s.tracks.clear_selection(),
         "Go to End" => {
@@ -1221,7 +1226,7 @@ mod tests {
                     s.bounce_region_cmd,
                     s.bounce_join_cmd,
                     s.mixer.auto_editor.track,
-                    s.import_audio_cmd
+ main
                 ),
                 (
                     s.ui_scale,

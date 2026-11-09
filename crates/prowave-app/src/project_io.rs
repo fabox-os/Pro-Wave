@@ -286,6 +286,18 @@ fn automation_from_doc(t: &prowave_project::TrackDoc) -> crate::model::Automatio
             }
         }
     }
+    for l in t.auto_send.iter().take(crate::model::MAX_SENDS) {
+        let target = AutoTarget::Send { slot: l.slot };
+        if usize::from(l.slot) < crate::model::MAX_SENDS && a.lane(target).is_empty() {
+            let points = points_from_doc(target, &l.points);
+            if !points.is_empty() {
+                a.sends.push(crate::model::SendLane {
+                    slot: l.slot,
+                    points,
+                });
+            }
+        }
+    }
     a
 }
 
@@ -372,6 +384,15 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
                 .map(|l| prowave_project::AutoFxDoc {
                     slot: l.slot,
                     param: l.param,
+                    points: points_to_doc(&l.points),
+                })
+                .collect(),
+            auto_send: t
+                .auto
+                .sends
+                .iter()
+                .map(|l| prowave_project::AutoSendDoc {
+                    slot: l.slot,
                     points: points_to_doc(&l.points),
                 })
                 .collect(),
@@ -1779,6 +1800,8 @@ pub(crate) mod tests {
         p.tracks[1].auto.set_point(delay_time, 2.0, 0.25);
         p.tracks[1].auto.set_point(delay_time, 6.0, 0.75);
         p.tracks[1].auto.fx[0].points[1].curve = 0.5;
+        let send_two = AutoTarget::Send { slot: 1 };
+        p.tracks[1].auto.set_point(send_two, 3.0, 0.4);
         let g = p.add_group("Keys").unwrap();
         p.groups[g].pan = false;
         assert!(p.assign_group(1, Some(g)));
@@ -1803,6 +1826,11 @@ pub(crate) mod tests {
         assert_eq!(t.auto.pan, [crate::model::AutoPoint::new(2.0, 0.5)]);
         assert_eq!(t.auto.fx, p.tracks[1].auto.fx);
         assert_eq!(t.auto.lane(delay_time)[1].curve, 0.5);
+        assert_eq!(t.auto.sends, p.tracks[1].auto.sends);
+        assert_eq!(
+            t.auto.lane(send_two),
+            [crate::model::AutoPoint::new(3.0, 0.4)]
+        );
         assert_eq!(q.groups, p.groups);
         assert_eq!(
             (q.tracks[1].group, q.tracks[2].group, q.tracks[0].group),
@@ -1871,6 +1899,12 @@ pub(crate) mod tests {
                 points: vec![[1.0, 7.0, 0.0]],
             })
             .collect();
+        doc.tracks[1].auto_send = (0..300)
+            .map(|k| prowave_project::AutoSendDoc {
+                slot: (k % 8) as u8,
+                points: vec![[1.0, 7.0, 0.0]],
+            })
+            .collect();
         doc.groups = (0..100)
             .map(|k| prowave_project::GroupDoc {
                 name: "g".repeat(200 + k),
@@ -1913,6 +1947,11 @@ pub(crate) mod tests {
             assert!(usize::from(l.slot) < prowave_engine::MAX_INSERTS);
             assert!(usize::from(l.param) < prowave_engine::MAX_FX_PARAMS);
             assert!(l.points.iter().all(|p| p.value == 1.0));
+        }
+        assert!(t.auto.sends.len() <= crate::model::MAX_SENDS);
+        for l in &t.auto.sends {
+            assert!(usize::from(l.slot) < crate::model::MAX_SENDS);
+            assert!(l.points.iter().all(|p| (0.0..=1.0).contains(&p.value)));
         }
         assert_eq!(q.groups.len(), crate::model::MAX_GROUPS);
         assert!(q.groups.iter().all(|g| g.name.chars().count() <= 64));

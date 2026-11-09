@@ -18,6 +18,7 @@ mod file_browser;
 mod file_commands;
 mod flex_edit;
 mod fx_ui;
+mod garageband;
 mod graphics;
 mod groove;
 mod group_editor;
@@ -47,6 +48,7 @@ mod recent_files;
 mod recorder;
 mod region_edit;
 mod score;
+mod score_export;
 mod scripter;
 mod side_panes;
 mod signature_track;
@@ -70,6 +72,7 @@ mod ui_scale;
 #[cfg(test)]
 mod ui_test;
 mod undo;
+mod undo_history;
 mod updater;
 mod widgets;
 mod window_chrome;
@@ -144,8 +147,7 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
-    /// File > Import > Audio File… picked this frame.
-    pub import_audio_cmd: bool,
+ main
     /// File > Export > Track as Audio File… picked this frame.
     pub export_track_cmd: bool,
     /// File > Bounce > Regions in Place… (and Record > Bounce In Place) picked this frame.
@@ -156,6 +158,7 @@ pub struct UiState {
     pub bounce_cmd: bool,
     /// A bounce is running (greys the Bounce entry).
     pub bouncing: bool,
+main
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
     pub steps: step_editor::StepView,
     /// True while the pointer is over the Piano Roll (it owns Delete/Cmd+R then).
@@ -233,12 +236,13 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
-            import_audio_cmd: false,
+ main
             export_track_cmd: false,
             bounce_region_cmd: false,
             bounce_join_cmd: false,
             bounce_cmd: false,
             bouncing: false,
+ main
             piano_focus: false,
             audition: Vec::new(),
             file_cmd: None,
@@ -309,6 +313,17 @@ struct App {
 }
 
 impl App {
+    /// File > Show in File Manager: opens the folder that holds the project file, with the
+    /// project selected where the system supports it.
+    fn reveal_project(&mut self) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        if let Err(e) = file_commands::reveal(&path) {
+            self.ui.status = Some(format!("{}: {e}", path.display()));
+        }
+    }
+
     /// File > Import > MIDI File… and File > Export > Selection as MIDI File…
     fn run_midi_cmd(&mut self, cmd: midi_file::MidiCmd) {
         let (p, s) = (&mut self.project, &mut self.ui);
@@ -362,33 +377,7 @@ impl App {
         }
     }
 
-    /// File > Import > Audio File…: the same import as dropping a file on the window.
-    fn import_audio_file(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter(
-                i18n::tr("Audio File…"),
-                &[
-                    "wav", "wave", "aif", "aiff", "aifc", "flac", "mp3", "caf", "ogg", "oga",
-                    "m4a", "mp4",
-                ],
-            )
-            .pick_file()
-        else {
-            return;
-        };
-        match import::import_audio(&mut self.project, &path, ctx) {
-            Ok(()) => {
-                // The whole import is one undo step.
-                self.history.record(&self.project);
-                self.ui.status = Some(i18n::trf(
-                    "imported {} tracks from {}",
-                    &[&1, &path.display()],
-                ));
-            }
-            Err(e) => {
-                self.ui.status = Some(i18n::trf("cannot import {}: {}", &[&path.display(), &e]))
-            }
-        }
+main
     }
 
     /// File > Bounce > Project or Section…: asks where to write and starts the bounce.
@@ -428,6 +417,28 @@ impl App {
                 if let Some(sync) = self.sync.as_mut() {
                     sync.sync(&mut self.project);
                 }
+            }
+            Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    /// File > Import > Other Projects…: the audio files of a GarageBand bundle become tracks
+    /// (see `garageband`; the arrangement inside the project is not read yet).
+    fn import_band(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(i18n::tr("Other Projects…"))
+            .pick_folder()
+        else {
+            return;
+        };
+        match garageband::import(&mut self.project, &path, ctx) {
+            Ok(n) => {
+                self.ui.status = Some(i18n::trf(
+                    "imported {} tracks from {}",
+                    &[&n, &path.display()],
+                ));
+                // The whole import is one undo step.
+                self.history.record(&self.project);
             }
             Err(e) => self.ui.status = Some(e),
         }
@@ -968,6 +979,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let _frame_time = bench::frame_timer();
+        self.ui.has_path = self.path.is_some();
         let dt = ctx.input(|i| i.stable_dt) as f64;
         ui_scale::apply(&ctx, self.ui.ui_scale);
         tracks_area::poll_normalize(&ctx, &mut self.project, &mut self.ui);
@@ -1102,15 +1114,17 @@ impl eframe::App for App {
         }
         if s.show_mixer || s.bottom == Bottom::PianoRoll {
             // About half of the space under the control bar (500 points at most), so the Tracks
-            // area keeps room on short screens. The Piano Roll can be pulled taller; the mixer
-            // has a fixed height, as in Logic: its strips have a natural size and a taller panel
-            // would only stretch the faders and meters. (It follows the window, so it is never
-            // outside its range when the window shrinks.)
+            // area keeps room on short screens, but never less than a whole channel strip tall:
+            // a shorter panel cut every strip's fader off at the bottom (issue #36). The Piano
+            // Roll can be pulled taller; the mixer has a fixed height, as in Logic. (It follows
+            // the window, so it is never outside its range when the window shrinks.)
             let room = ui.available_height();
             let usual = (room * 0.48).clamp(160.0, 500.0);
             let panel = egui::Panel::bottom("bottom").frame(egui::Frame::new());
             let panel = if s.bottom == Bottom::Mixer {
-                panel.resizable(false).exact_size(usual)
+                panel
+                    .resizable(false)
+                    .exact_size(mixer::panel_height(room, p, &s.mixer))
             } else {
                 panel.resizable(true).default_size(usual)
             };
@@ -1124,6 +1138,7 @@ impl eframe::App for App {
             .show(ui, |ui| tracks_area::show(ui, p, s, &meters));
         fx_ui::show(&ctx, p, s, &meters);
         automation::show(&ctx, p, s);
+        undo_history::show(&ctx, p, s, &mut self.history);
 
         side_panes::quick_help(&ctx, &mut self.ui);
         for path in std::mem::take(&mut self.ui.open_paths) {
@@ -1178,8 +1193,7 @@ impl eframe::App for App {
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
         }
-        if std::mem::take(&mut self.ui.import_audio_cmd) {
-            self.import_audio_file(&ctx);
+main
         }
         if std::mem::take(&mut self.ui.bounce_cmd) {
             self.start_bounce();
@@ -1192,6 +1206,8 @@ impl eframe::App for App {
         }
         if std::mem::take(&mut self.ui.bounce_join_cmd) {
             self.bounce_and_join();
+        }
+ main
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());

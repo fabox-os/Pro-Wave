@@ -84,6 +84,29 @@ pub(crate) fn paste_at_playhead(p: &mut Project, v: &mut TracksView, clip: &Regi
     p.song_rev += 1;
 }
 
+/// Edit > Paste Replace: puts the clipboard at the playhead like Paste, after removing the
+/// regions on the selected track that the pasted span covers.
+pub(crate) fn paste_replace(p: &mut Project, v: &mut TracksView, clip: &RegionClip) {
+    if !can_paste(p, clip) {
+        return;
+    }
+    // How long the clipboard is, from its earliest region.
+    let base = clip.iter().map(|r| r.start_bar).fold(f32::MAX, f32::min);
+    let span = clip
+        .iter()
+        .map(|r| r.start_bar + r.len_bars - base)
+        .fold(0.0f32, f32::max);
+    let from = p.beats_to_bar(p.position_beats) as f32 + 1.0;
+    let to = from + span;
+    let Some(track) = p.tracks.get_mut(p.selected_track) else {
+        return;
+    };
+    track
+        .regions
+        .retain(|r| r.start_bar + r.len_bars <= from + 1e-6 || r.start_bar >= to - 1e-6);
+    paste_at_playhead(p, v, clip);
+}
+
 /// Smallest piece (in quarter notes) a split may leave on either side.
 const MIN_PIECE: f64 = 1e-6;
 
@@ -443,6 +466,20 @@ mod tests {
         let mut audio = p.tracks[0].regions[0].clone();
         audio.audio = Some(test_audio());
         assert!(!can_paste(&p, &vec![audio]));
+    }
+
+    #[test]
+    fn paste_replace_removes_what_the_clipboard_covers() {
+        let (mut p, mut v) = rig();
+        v.select_many(&[(0, 0)]);
+        let mut clip = Vec::new();
+        copy_selected(&p, &v, &mut clip);
+        p.position_beats = 4.0; // bar 2
+        let before = p.tracks[0].regions.len();
+        paste_replace(&mut p, &mut v, &clip);
+        // The old region overlapped the pasted span and is gone; the pasted one is there.
+        assert_eq!(p.tracks[0].regions.len(), before, "one out, one in");
+        assert_eq!(p.tracks[0].regions[0].start_bar, 2.0);
     }
 
     #[test]
