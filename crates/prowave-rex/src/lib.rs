@@ -212,13 +212,27 @@ impl RexFile {
         if sdat.data.is_empty() {
             return Err("the `SDAT` chunk is empty".to_string());
         }
+        // A 24-bit file's stream holds 24-bit samples; dropping the low 8 bits leaves a 16-bit
+        // waveform rather than clipping everything above full scale. Other depths are coded
+        // as 16-bit samples, as the format notes describe.
+        let extra_shift = if bit_depth == 24 { 8 } else { 0 };
         match bit_depth {
             16 => {}
+            24 => warnings.push(
+                "the file says 24-bit; the decoded waveform is reduced to 16-bit samples"
+                    .to_string(),
+            ),
             other => warnings.push(format!(
                 "the file says {other}-bit; the DWOP codec's 16-bit samples are used"
             )),
         }
-        let (samples, ran_out) = dwop::decode(sdat.data, usize::from(channels), frames, budget);
+        let (samples, ran_out) = dwop::decode(
+            sdat.data,
+            usize::from(channels),
+            frames,
+            budget,
+            extra_shift,
+        );
         if ran_out {
             warnings
                 .push("the audio stream ends early; the rest of the loop is silence".to_string());

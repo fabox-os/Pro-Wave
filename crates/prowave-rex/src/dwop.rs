@@ -402,14 +402,18 @@ fn encode_remainder(rem: u64, cs: u64, rv: u64, nb: i32) -> Option<(u64, Option<
 /// Decodes a whole `SDAT` stream.
 ///
 /// Returns interleaved samples for `channels` (1 or 2) and whether the stream ran out early.
-/// Never decodes more than `frames` frames per channel.
+/// Never decodes more than `frames` frames per channel. The stream holds samples at the file's
+/// declared depth; `extra_shift` drops bits to reach the crate's 16-bit output (8 for 24-bit
+/// files, 0 otherwise).
 pub(crate) fn decode(
     data: &[u8],
     channels: usize,
     frames: u32,
     max_samples: usize,
+    extra_shift: u32,
 ) -> (Vec<i16>, bool) {
     let channels = channels.clamp(1, 2);
+    let extra_shift = extra_shift.min(31);
     let frames = (frames as usize).min(max_samples / channels) as u32;
     let mut out = Vec::with_capacity(frames as usize * channels);
     let mut br = BitReader::new(data);
@@ -425,18 +429,18 @@ pub(crate) fn decode(
             ran_out = true;
             break;
         };
+        // The decoded value is doubled; the right channel stores right-minus-left.
+        let l = l >> 1;
         if channels == 2 {
             let Some(r) = right.decode(&mut br) else {
                 ran_out = true;
                 break;
             };
-            // Right is stored as right-minus-left.
-            let l_out = l >> 1;
-            let delta = r >> 1;
-            out.push(clamp_i16(l_out));
-            out.push(clamp_i16(l_out.saturating_add(delta)));
+            let r = l.saturating_add(r >> 1);
+            out.push(clamp_i16(l >> extra_shift));
+            out.push(clamp_i16(r >> extra_shift));
         } else {
-            out.push(clamp_i16(l >> 1));
+            out.push(clamp_i16(l >> extra_shift));
         }
     }
     if ran_out && out.len() < frames as usize * channels {
@@ -486,7 +490,7 @@ mod tests {
             })
             .collect();
         let bytes = encode(&samples, 1).unwrap();
-        let (decoded, ran_out) = decode(&bytes, 1, samples.len() as u32, MAX);
+        let (decoded, ran_out) = decode(&bytes, 1, samples.len() as u32, MAX, 0);
         assert!(!ran_out, "the stream should be complete");
         assert_eq!(decoded, samples);
     }
@@ -501,7 +505,7 @@ mod tests {
             samples.push(b as i16);
         }
         let bytes = encode(&samples, 2).unwrap();
-        let (decoded, ran_out) = decode(&bytes, 2, 4000, MAX);
+        let (decoded, ran_out) = decode(&bytes, 2, 4000, MAX, 0);
         assert!(!ran_out);
         assert_eq!(decoded, samples);
     }
@@ -511,7 +515,7 @@ mod tests {
         for value in [0i16, 1, -1, i16::MAX, i16::MIN] {
             let samples = vec![value; 500];
             let bytes = encode(&samples, 1).unwrap();
-            let (decoded, _) = decode(&bytes, 1, 500, MAX);
+            let (decoded, _) = decode(&bytes, 1, 500, MAX, 0);
             assert_eq!(decoded, samples, "value {value}");
         }
     }
@@ -521,7 +525,7 @@ mod tests {
         let samples: Vec<i16> = (0..20000).map(|i| (i * 7919 % 3001) as i16).collect();
         let bytes = encode(&samples, 1).unwrap();
         let truncated = &bytes[..bytes.len() / 10];
-        let (decoded, ran_out) = decode(truncated, 1, 20000, MAX);
+        let (decoded, ran_out) = decode(truncated, 1, 20000, MAX, 0);
         assert!(ran_out);
         assert_eq!(decoded.len(), 20000, "the caller still gets full length");
     }
@@ -532,7 +536,7 @@ mod tests {
             .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
             .collect();
         for channels in 1..=2 {
-            let (decoded, _) = decode(&bytes, channels, 1000, MAX);
+            let (decoded, _) = decode(&bytes, channels, 1000, MAX, 0);
             assert_eq!(decoded.len(), 1000 * channels);
         }
     }
@@ -541,7 +545,19 @@ mod tests {
     fn respects_the_sample_budget() {
         let samples = vec![0i16; 1000];
         let bytes = encode(&samples, 1).unwrap();
-        let (decoded, _) = decode(&bytes, 1, 1000, 100);
+        let (decoded, _) = decode(&bytes, 1, 1000, 100, 0);
         assert!(decoded.len() <= 100);
+    }
+
+    #[test]
+    fn decodes_at_a_reduced_bit_depth() {
+        let samples: Vec<i16> = (0..4000)
+            .map(|i| ((i as f32 * 0.03).sin() * 20000.0) as i16)
+            .collect();
+        let bytes = encode(&samples, 1).unwrap();
+        let (decoded, ran_out) = decode(&bytes, 1, samples.len() as u32, MAX, 8);
+        assert!(!ran_out);
+        let expected: Vec<i16> = samples.iter().map(|s| s >> 8).collect();
+        assert_eq!(decoded, expected);
     }
 }
