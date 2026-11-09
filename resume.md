@@ -12,7 +12,6 @@ names); no Apple artwork or code is copied.
 |---|---|
 | **0 — Foundation** | **Done.** CI is green on Linux, Windows and macOS; lock-free engine, logging, crash reports, CPU meter, 24- and 1000-track tests. ASIO is built but no ASIO driver has been tried; latency is measured on Windows only |
 | **1 — Engine core + tracks** | **Done.** Tempo/signature maps, audio/MIDI/Pattern/Drummer regions, disk streaming, recording, `.prowave` files, aux/bus/sends, VCA, folder and External MIDI tracks. Missing: `bounces/` in the project file |
-| **2 — MIDI & sequencer** | **Mostly done.** Piano Roll with quantize, velocity and MIDI Transform; the MIDI FX chain; MIDI file import/export; Event List; Step Sequencer; Score v0; Drummer and Pattern regions. Missing: MPE, SysEx, MIDI 2.0, articulation IDs, score beams/voices/printing/MusicXML import, Drummer Track v0 |
 | **3 — Flex & Smart Tempo** | **Mostly done.** Smart Tempo detection and editor, Adapt Project Tempo, Flex Time modes, Flex Pitch (correct to key, make a MIDI track), Groove Track. Missing: dragging Flex markers, per-note Flex Pitch (drift, vibrato, formant), a non-steady tempo grid in the editor |
 
 | **5–6 — Instruments & effects** | **Started.** The built-in synth with acoustic and electronic drum kits, and the **Amp Designer** (2026-11-03). Missing: Sampler/Quick Sampler, Drum Machine Designer, ES2, the vintage keyboards, the reverb/delay suites, Pedalboard, Mastering Assistant |
@@ -248,8 +247,6 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 - The synth approximates instrument families; there are no sampled instruments, and the
   Amp Designer is a model, not a captured amplifier (no impulse-response cabinets yet).
 - Cut/Copy/Paste of regions and many menu items are still shown **disabled** (not implemented).
-- Score: no beams, voices, chord symbols, printing or MusicXML import (MusicXML export is in File > Export). MIDI files: no SMPTE-timed
-  files, program changes, other controllers, pitch bend, lyrics, markers, MPE or SysEx.
 - Cargo-deny ignores 4 "unmaintained" advisories (transitive via winit/egui on Linux, no fix
   available); documented in `deny.toml`.
 
@@ -285,7 +282,6 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 
 | Roadmap item | | What's there / what's missing |
 |---|---|---|
-| MIDI 1.0 parser, MPE, Articulation ID, SysEx | 🟡 | Standard MIDI files import and export (round-trip tests; damaged files refused); program changes are kept both ways ✅. **Missing:** SMPTE-timed files, pitch bend, lyrics, markers, MPE, SysEx, MIDI 2.0 |
 | Piano Roll: full Logic parity | 🟡 | Editing, quantize (time and scale) with strength/swing, velocity lane, MIDI Transform, key commands ✅. **Missing:** brush, time handles, CC MIDI Draw, flam, note colour parity |
 | Score Editor v0 | 🟡 | Clefs, key and time signatures, accidentals, rests, ties, click to add, right-click to delete ✅; MusicXML export (File > Export) ✅. **Missing:** beams, chords' stems, voices, printing, MusicXML import |
 | Event List, Step Editor, MIDI Transform, MIDI FX chain | 🟡 | Event list (MIDI events), Step Sequencer (Pattern regions), MIDI Transform, and the MIDI FX chain (Transposer, Velocity, Scale, Chord Trigger, Repeater, Arpeggiator, Randomizer, Modulator, Scripter) ✅. **Missing:** the Marker/Tempo/Signature tabs of the Event list, per-event editing, the channel-strip MIDI FX slot |
