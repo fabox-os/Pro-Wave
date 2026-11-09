@@ -1480,6 +1480,27 @@ fn window_app_id() -> String {
         .unwrap_or_else(|| "prowave-studio".to_string())
 }
 
+/// What `--help` prints.
+fn print_help() {
+    println!(
+        "Pro Wave {} — a music production app in Rust (egui + cpal)",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!();
+    println!("Usage: prowave [options] [project.prowave] [audio files...]");
+    println!();
+    println!("  --play                    start playing on launch");
+    println!("  --piano                   open the Piano Roll on launch");
+    println!("  -h, --help                print this help and exit");
+    println!("  -V, --version             print the version and exit");
+    println!("  --bench <file>            measure startup, memory and DSP load, then exit");
+    println!(
+        "  --layout-shots <folder>   save pictures of the layout at four window sizes, then exit"
+    );
+    println!();
+    println!("A .prowave path opens that project; other paths are imported as audio files.");
+}
+
 fn main() -> eframe::Result {
     bench::mark_start();
     // Started by an update that is waiting for the program to close: put the update in place.
@@ -1487,6 +1508,19 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let all_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // `--version` and `--help` answer without opening a window.
+    let flag = |name: &str| {
+        let name = std::ffi::OsStr::new(name);
+        all_args.iter().any(|a| a.as_os_str() == name)
+    };
+    if flag("--version") || flag("-V") {
+        println!("Pro Wave {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if flag("--help") || flag("-h") {
+        print_help();
+        return Ok(());
+    }
     let bench_out = bench::requested(&all_args);
     let shots_dir = bench::shots_requested(&all_args);
     if bench_out.is_none() && shots_dir.is_none() {

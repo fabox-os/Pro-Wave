@@ -28,12 +28,6 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Mix and Record menu entries:** **Mix > Show Automation** opens the Automation editor on the selected track, **Mix > Delete Automation** clears the lane it shows, and **Record > Record / Record Repeat** records from the cycle start when the cycle is on (otherwise from the playhead). All three were greyed out.
 
 ✅ **Hydrogen drum kits:** an instrument track can now play a free Hydrogen drum kit. In the Inspector, **Choose Hydrogen Drum Kit…** takes the kit's `drumkit.xml`; each instrument of the kit plays on its own MIDI note with its velocity layers and gain, and the samples (WAV, AIFF, FLAC or OGG) are read from the kit's folder. The kit is saved in the project by its path, like a SoundFont. Kits that name no note number their instruments from C1, as Hydrogen does.
-✅ **SMPTE-timed MIDI files:** a MIDI file that counts time in SMPTE frames (24, 25, 29.97 or 30 frames a second, with its ticks a frame) now imports instead of being refused. Its absolute times become bars and beats at the project's tempo, so the recording lands where it sounds. Files with a broken frame rate or no ticks a frame are still refused.
-
-✅ **MIDI markers:** a MIDI file's markers now import onto the Marker track at their bars, and exporting a project writes its markers back into the file. Names are kept up to 64 characters, and a file with more than 1024 markers keeps the first 1024.
-
-
-✅ **The HD meter measures disk load:** the LCD's HD meter, empty until now, shows how much of the time the disk streaming thread spends decoding and copying audio regions (it turns red from 90 %, like the CPU meter). It reads zero when the project has no audio regions.
 
 ### Still to do or test
 
