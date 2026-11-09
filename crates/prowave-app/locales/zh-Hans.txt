@@ -792,7 +792,4 @@ Bounce cancelled = 已取消导出
 Bounced {} in place = 已在原位置导出 {}
 Bounced {} but the region changed during the bounce, so it was not replaced = 已导出到 {}，但导出期间该区域已更改，因此未替换
 Choose Hydrogen Drum Kit… = 选择 Hydrogen 鼓组…
-Current = 当前
-Undo {} = 撤销 {}
-Redo {} = 重做 {}
-Nothing to undo yet = 暂无可撤销的操作
+

@@ -52,10 +52,10 @@ to update this section.
 - **Piano Roll:** draw, select, move, resize and delete notes; quantize (with strength and swing),
   scale quantize, velocity lane, playable keyboard.
 - **Mixer:** channel strips with sends, pan, faders and meters, and real effects in the Audio FX
-  slots: EQ, compressor, reverb, delay, chorus, phaser, overdrive, filter, gate, limiter,
-  multi-band EQ and the **Amp Designer** for guitar and bass (five amplifiers, three cabinets and
-  a microphone position); buses, automation and mix groups; Library patches that change a track's
-  instrument and sound; Region and Track inspectors applied non-destructively.
+  slots: EQ, compressor, multi-band compressor, reverb, delay, chorus, phaser, overdrive, filter,
+  gate, limiter, multi-band EQ and the **Amp Designer** for guitar and bass (five amplifiers, three
+  cabinets and a microphone position); buses, automation and mix groups; Library patches that
+  change a track's instrument and sound; Region and Track inspectors applied non-destructively.
 - **Projects:** `.prowave` files (a zip with `project.json` and the audio in `media/`), and
   **File > Bounce > Project or Section…** writes the mix to a WAV.
 - **Time signatures:** any signature, including compound meters such as 6/8 and 7/8.
@@ -132,6 +132,7 @@ cargo xtask check                      # fmt, clippy -D warnings, tests, no-allo
 | [`AGENTS.md`](AGENTS.md) | Rules for contributors and AI agents: crate ownership, audio-thread rules, checks |
 | [`dist/README-linux.txt`](dist/README-linux.txt) | Installing and troubleshooting on Linux |
 | [`LOGICX-FORMAT-SPEC.md`](LOGICX-FORMAT-SPEC.md) | Notes for reading Logic Pro `.logicx` projects |
+| [`GARAGEBAND-FORMAT-SPEC.md`](GARAGEBAND-FORMAT-SPEC.md) | Notes for reading GarageBand `.band` projects (plan for issue #35) |
 | [`SECURITY.md`](SECURITY.md) | Reporting security problems |
 
 ## License

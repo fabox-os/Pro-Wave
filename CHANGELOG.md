@@ -30,6 +30,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Hydrogen drum kits:** an instrument track can now play a free Hydrogen drum kit. In the Inspector, **Choose Hydrogen Drum Kit…** takes the kit's `drumkit.xml`; each instrument of the kit plays on its own MIDI note with its velocity layers and gain, and the samples (WAV, AIFF, FLAC or OGG) are read from the kit's folder. The kit is saved in the project by its path, like a SoundFont. Kits that name no note number their instruments from C1, as Hydrogen does.
 ✅ **Edit > Undo History…:** the Edit menu's entry opens a window listing the edits this session can go back to (Undo 1, Undo 2…) and the ones it can redo; click one to jump there. The entry was greyed out.
 
+
 ### Still to do or test
 
 ❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
