@@ -402,6 +402,9 @@ Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
   `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
   with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
   regions, plug-ins, Session Players) is the next step.
+- **REX2 loops:** `REX-FORMAT-SPEC.md` and the `prowave-rex` crate read `.rx2`/`.rex` (container,
+  tempo, slices and the DWOP decoder, with a matching writer for the tests). The app does not import
+  them yet, and 24-bit files decode through the 16-bit codec.
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.
