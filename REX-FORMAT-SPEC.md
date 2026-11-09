@@ -94,8 +94,10 @@ entries with a length above 1 as `RexSlice`s and the others as marker positions 
 ## DWOP audio codec
 
 `SDAT` is the bitstream itself, with no header. Bits are read MSB-first from the first byte.
-The reader is shared by the channels; each channel keeps its own predictor and range state and
-starts from the same values:
+Readers consume it in 32-bit words, and every real file's payload is a multiple of four bytes,
+so the writer pads the last word with zero bits; a reader that drops a trailing partial word
+would otherwise lose the loop's final samples. The reader is shared by the channels; each
+channel keeps its own predictor and range state and starts from the same values:
 
 | Variable | Initial value |
 |---|---:|
