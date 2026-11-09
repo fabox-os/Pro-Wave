@@ -1196,16 +1196,16 @@ mod tests {
         let mut s = UiState::new();
         let meters = Meters::default();
         let mut h = crate::ui_test::Harness::new(1000.0, 860.0);
-        for slot in 0..kinds.len() {
+        for (slot, kind) in kinds.iter().enumerate() {
             s.mixer.fx_window = Some((0, slot));
             for _ in 0..3 {
                 h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
             }
             assert_eq!(
                 p.tracks[0].inserts[slot],
-                Insert::new(kinds[slot]),
+                Insert::new(*kind),
                 "{} changed while it was only looked at",
-                kinds[slot].name()
+                kind.name()
             );
             assert_eq!(s.mixer.fx_window, Some((0, slot)));
         }
