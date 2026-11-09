@@ -1174,6 +1174,44 @@ mod tests {
     use crate::model::Insert;
 
     #[test]
+    fn every_effect_window_draws_without_changing_its_insert() {
+        use crate::model::Insert;
+        let kinds = [
+            FxKind::ChannelEq,
+            FxKind::MultiEq,
+            FxKind::Compressor,
+            FxKind::MultiComp,
+            FxKind::Delay,
+            FxKind::Chorus,
+            FxKind::Phaser,
+            FxKind::Overdrive,
+            FxKind::Filter,
+            FxKind::Gate,
+            FxKind::Limiter,
+            FxKind::Amp,
+            FxKind::Reverb,
+        ];
+        let mut p = Project::empty();
+        p.tracks[0].inserts = kinds.iter().copied().map(Insert::new).collect();
+        let mut s = UiState::new();
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 860.0);
+        for slot in 0..kinds.len() {
+            s.mixer.fx_window = Some((0, slot));
+            for _ in 0..3 {
+                h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+            }
+            assert_eq!(
+                p.tracks[0].inserts[slot],
+                Insert::new(kinds[slot]),
+                "{} changed while it was only looked at",
+                kinds[slot].name()
+            );
+            assert_eq!(s.mixer.fx_window, Some((0, slot)));
+        }
+    }
+
+    #[test]
     fn the_window_edits_the_insert_and_closes_with_it() {
         let mut p = Project::empty();
         p.tracks[0].inserts = vec![
