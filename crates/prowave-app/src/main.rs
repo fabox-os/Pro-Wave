@@ -377,19 +377,7 @@ impl App {
         }
     }
 
-    /// File > Export > Score as MusicXML…: asks where to write and exports every track's notes.
-    fn export_score(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("MusicXML", &["musicxml", "xml"])
-            .set_file_name(format!("{}.musicxml", self.project.name))
-            .save_file()
-        else {
-            return;
-        };
-        self.ui.status = Some(match score_export::export(&self.project, &path) {
-            Ok(notes) => i18n::trf("exported {} notes to {}", &[&notes, &path.display()]),
-            Err(e) => e,
-        });
+main
     }
 
     /// File > Bounce > Project or Section…: asks where to write and starts the bounce.
@@ -1205,8 +1193,7 @@ impl eframe::App for App {
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
         }
-        if std::mem::take(&mut self.ui.export_xml_cmd) {
-            self.export_score();
+main
         }
         if std::mem::take(&mut self.ui.bounce_cmd) {
             self.start_bounce();

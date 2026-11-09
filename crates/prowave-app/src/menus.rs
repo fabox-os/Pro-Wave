@@ -757,6 +757,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             show_space_designer(&mut p.master_inserts, s, crate::mixer::MASTER_STRIP, preset);
         }
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
+        "Audio File…" => s.import_audio_cmd = true,
         "Selection as MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Export),
         "Score as MusicXML…" => s.export_xml_cmd = true,
         "Project or Section…" => s.bounce_cmd = true,
