@@ -22,6 +22,8 @@ const MAX_FILE_BYTES: u64 = 128 << 20;
 /// Most tempo and signature changes taken from a file.
 const MAX_TEMPO_CHANGES: usize = 4096;
 const MAX_SIGNATURE_CHANGES: usize = 1024;
+/// Most markers taken from a file.
+const MAX_MARKERS: usize = 1024;
 /// The furthest bar a region of an imported file may reach (the project's own limit).
 const MAX_BAR: f64 = 9999.0;
 /// The most bytes of SysEx a file's tracks may carry in all (a huge message is dropped).
@@ -57,16 +59,23 @@ pub struct FileTrack {
     /// Controllers (the sustain pedal is 64), pitch bend, channel pressure and the bytes of
     /// SysEx messages, in tick order.
     pub controls: Vec<FileControl>,
+    /// The program change the track starts with, if the file has one.
+    pub program: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct MidiFile {
-    /// Ticks to a quarter note.
+    /// Ticks to a quarter note (0 for an SMPTE-timed file).
     pub ppq: u16,
+    /// Ticks a second for an SMPTE-timed file (0 for a metrical one). Its ticks are absolute
+    /// time; [`import`] turns them into beats at the project's tempo.
+    pub smpte_ticks_per_second: f64,
     /// (tick, beats per minute), sorted.
     pub tempos: Vec<(u64, f64)>,
     /// (tick, numerator, denominator), sorted.
     pub signatures: Vec<(u64, u8, u8)>,
+    /// (tick, name), sorted: the file's markers.
+    pub markers: Vec<(u64, String)>,
     pub tracks: Vec<FileTrack>,
 }
 
@@ -131,11 +140,24 @@ pub fn parse(data: &[u8]) -> Result<MidiFile, String> {
     if format > 2 {
         return Err(format!("MIDI file format {format} is not known"));
     }
-    if division & 0x8000 != 0 || division == 0 {
-        return Err("times in SMPTE frames are not supported".into());
-    }
+    // A negative division is SMPTE time: the high byte is -frames a second (29 means the
+    // 29.97 drop-frame rate) and the low byte the ticks in a frame.
+    let (ppq, smpte_ticks_per_second) = if division & 0x8000 != 0 {
+        let fps = 256 - u16::from((division >> 8) as u8);
+        let ticks_per_frame = u16::from((division & 0xff) as u8);
+        if !(24..=30).contains(&fps) || ticks_per_frame == 0 {
+            return Err("a bad SMPTE time division".into());
+        }
+        let fps = if fps == 29 { 29.97 } else { f64::from(fps) };
+        (0, f64::from(ticks_per_frame) * fps)
+    } else if division == 0 {
+        return Err("the time division is zero".into());
+    } else {
+        (division, 0.0)
+    };
     let mut file = MidiFile {
-        ppq: division,
+        ppq,
+        smpte_ticks_per_second,
         ..MidiFile::default()
     };
     let mut total = 0usize;
@@ -155,6 +177,7 @@ pub fn parse(data: &[u8]) -> Result<MidiFile, String> {
     }
     file.tempos.sort_by_key(|t| t.0);
     file.signatures.sort_by_key(|t| t.0);
+    file.markers.sort_by_key(|m| m.0);
     file.tracks.truncate(MAX_TRACKS);
     Ok(file)
 }
@@ -210,6 +233,17 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
                     }
                     (0x58, [num, den, ..]) if *num > 0 && *den < 7 => {
                         file.signatures.push((tick, *num, 1u8 << *den));
+                    }
+                    // A marker (in Logic it is a meta event too).
+                    (0x06, _) if file.markers.len() < MAX_MARKERS => {
+                        file.markers.push((
+                            tick,
+                            String::from_utf8_lossy(data)
+                                .trim()
+                                .chars()
+                                .take(64)
+                                .collect(),
+                        ));
                     }
                     (0x2f, _) => break,
                     _ => {}
@@ -290,6 +324,10 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
                             num: CHANNEL_PRESSURE,
                             val: u16::from(a),
                         });
+                    }
+                    0xc0 => {
+                        let i = slot(ch, &mut channels);
+                        channels[i].program = Some(a);
                     }
                     _ => {}
                 }
@@ -405,12 +443,23 @@ pub fn write(file: &MidiFile) -> Vec<u8> {
         let us = (60_000_000.0 / bpm.clamp(1.0, 1000.0)).round() as u32;
         tempo.push(tick, 0, meta(0x51, &us.to_be_bytes()[1..]));
     }
+    for marker in &file.markers {
+        let name = marker.1.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let name: String = name.chars().take(64).collect();
+        tempo.push(marker.0, 0, meta(0x06, name.as_bytes()));
+    }
     chunk(&mut out, b"MTrk", &tempo.finish());
 
     for t in &file.tracks {
         let mut ev = Events(Vec::new());
         ev.push(0, 0, meta(0x03, t.name.as_bytes()));
         let ch = t.channel & 0x0f;
+        if let Some(program) = t.program {
+            ev.push(0, 0, vec![0xc0 | ch, program.min(127)]);
+        }
         for n in &t.notes {
             ev.push(
                 n.start,
@@ -500,6 +549,10 @@ pub fn export(p: &Project, only: Option<(usize, usize)>) -> MidiFile {
             c.den,
         ));
     }
+    for marker in &p.markers {
+        file.markers
+            .push((ticks(marker.beat, ppq), marker.name.clone()));
+    }
     let mut next_channel = 0u8;
     for (ti, t) in p.tracks.iter().enumerate() {
         if !t.kind.has_regions() || t.kind == TrackKind::Audio {
@@ -520,6 +573,7 @@ pub fn export(p: &Project, only: Option<(usize, usize)>) -> MidiFile {
         let mut track = FileTrack {
             name: t.name.clone(),
             channel,
+            program: t.midi_program,
             ..FileTrack::default()
         };
         let mut played = Vec::new();
@@ -562,9 +616,22 @@ pub fn export(p: &Project, only: Option<(usize, usize)>) -> MidiFile {
 /// tempo and signature changes of the file replace the project's when it has no regions yet.
 /// Returns how many tracks were made.
 pub fn import(p: &mut Project, file: &MidiFile) -> usize {
-    let ppq = f64::from(file.ppq.max(1));
     if p.tracks.iter().all(|t| t.regions.is_empty()) {
         apply_timing(p, file);
+    }
+    // SMPTE ticks are seconds (ticks a second); at the project's tempo a second is bpm/60
+    // quarters, which is what the rest of the importer counts in.
+    let ppq = if file.smpte_ticks_per_second > 0.0 {
+        file.smpte_ticks_per_second * 60.0 / f64::from(p.tempo.max(1.0))
+    } else {
+        f64::from(file.ppq.max(1))
+    };
+    // The file's markers go on the Marker track, at the bar of their time.
+    for (tick, name) in &file.markers {
+        let i = p.add_marker(*tick as f64 / ppq);
+        if !name.is_empty() {
+            p.markers[i].name = name.clone();
+        }
     }
     let mut made = 0;
     for ft in &file.tracks {
@@ -592,6 +659,7 @@ pub fn import(p: &mut Project, file: &MidiFile) -> usize {
             break;
         }
         let ti = p.add_track(kind);
+        p.tracks[ti].midi_program = ft.program;
         if !ft.name.is_empty() {
             p.tracks[ti].name = ft.name.clone();
         }
@@ -718,12 +786,15 @@ mod tests {
     fn song() -> MidiFile {
         MidiFile {
             ppq: 480,
+            smpte_ticks_per_second: 0.0,
             tempos: vec![(0, 120.0), (3840, 90.0)],
             signatures: vec![(0, 4, 4), (1920, 3, 4)],
+            markers: Vec::new(),
             tracks: vec![
                 FileTrack {
                     name: "Piano".into(),
                     channel: 0,
+                    program: None,
                     notes: vec![
                         FileNote {
                             start: 0,
@@ -760,6 +831,7 @@ mod tests {
                 FileTrack {
                     name: "Drums".into(),
                     channel: 9,
+                    program: None,
                     notes: vec![FileNote {
                         start: 960,
                         len: 120,
@@ -848,11 +920,12 @@ mod tests {
     fn damaged_and_unusual_files_are_refused_or_survived() {
         assert!(parse(b"").is_err());
         assert!(parse(b"RIFF....WAVE").is_err());
-        // SMPTE time division.
+        // SMPTE time division: 25 frames a second, 40 ticks a frame.
         let mut f: Vec<u8> = b"MThd".to_vec();
         f.extend(6u32.to_be_bytes());
         f.extend([0, 1, 0, 0, 0xe7, 0x28]);
-        assert!(parse(&f).is_err());
+        let m = parse(&f).unwrap();
+        assert_eq!((m.ppq, m.smpte_ticks_per_second), (0, 1_000.0));
         // A track that ends in the middle of an event, and one with notes never released.
         let good = write(&song());
         for cut in [20, 40, good.len() - 3, good.len() / 2] {
@@ -1272,9 +1345,12 @@ mod tests {
         }));
         let file = MidiFile {
             ppq: 480,
+            smpte_ticks_per_second: 0.0,
+            markers: Vec::new(),
             tracks: vec![FileTrack {
                 name: "Keys".into(),
                 channel: 2,
+                program: None,
                 notes: vec![FileNote {
                     start: 0,
                     len: 480,
@@ -1329,5 +1405,20 @@ mod tests {
         chunk(&mut f2, b"MTrk", &top);
         let got = parse(&f2).expect("reads");
         assert_eq!(got.tracks[0].controls[0].val, 16383);
+    }
+
+    #[test]
+ main
+        body.extend([0, 0xff, 0x2f, 0]);
+        let mut file = Vec::new();
+        chunk(&mut file, b"MThd", &[0, 0, 0, 1, 0x01, 0xe0]);
+        chunk(&mut file, b"MTrk", &body);
+        let parsed = parse(&file).expect("the file reads");
+ main
+
+        let mut p = Project::empty();
+        p.tracks.clear();
+        import(&mut p, &parsed);
+ main
     }
 }
