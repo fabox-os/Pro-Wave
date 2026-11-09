@@ -162,7 +162,8 @@ How the Linux build was made from Windows (cross-compiling, no WSL/Docker needed
 - **CPU meter** in the LCD shows the audio callback's DSP load (peak-held, red at ≥90 %).
 - **Logging:** `tracing-subscriber`, set with `RUST_LOG` (default `warn,prowave=info`).
 - **Crash reports:** `human-panic` writes a report to the temp folder in release builds.
-- HD meter is still empty (disk load not measured).
+- HD meter is now measured: the LCD's HD meter shows how busy the disk streaming thread is
+  (how much of the last fifth of a second it spent decoding and copying audio regions).
 
 ### Tooling (roadmap Phase 0)
 - `cargo xtask check`: fmt, clippy `-D warnings`, tests, no-alloc check, miri on the engine's

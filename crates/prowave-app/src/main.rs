@@ -177,6 +177,8 @@ main
     pub recent: recent_files::Recent,
     /// DSP load shown by the LCD's CPU meter (1.0 = full budget); peak-held, falls slowly.
     pub cpu_load: f32,
+    /// Disk streaming load shown by the LCD's HD meter (1.0 = the thread busy all the time).
+    pub hd_load: f32,
     /// Light (white) menu bar and menus, toggled by the Smart Controls button.
     pub light_menus: bool,
     /// The Project Chooser, while it covers the window (File > New from Template…).
@@ -251,6 +253,7 @@ impl UiState {
             recent_pick: None,
             recent: recent_files::Recent::default(),
             cpu_load: 0.0,
+            hd_load: 0.0,
             light_menus: false,
             chooser: None,
             ui_scale: 1.0,
@@ -1042,6 +1045,8 @@ impl eframe::App for App {
             }
             let load = sync.take_dsp_load();
             self.ui.cpu_load = load.max(self.ui.cpu_load - dt as f32 * 0.8);
+            // The HD meter holds its peak for about a second, like the CPU meter.
+            self.ui.hd_load = sync.disk_load().max(self.ui.hd_load - dt as f32 * 0.8);
             if sync.underruns() > 0 {
                 self.ui.status = Some(i18n::trf(
                     "disk too slow: {} underruns",

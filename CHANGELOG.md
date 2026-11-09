@@ -33,6 +33,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **MIDI markers:** a MIDI file's markers now import onto the Marker track at their bars, and exporting a project writes its markers back into the file. Names are kept up to 64 characters, and a file with more than 1024 markers keeps the first 1024.
 
 
+✅ **The HD meter measures disk load:** the LCD's HD meter, empty until now, shows how much of the time the disk streaming thread spends decoding and copying audio regions (it turns red from 90 %, like the CPU meter). It reads zero when the project has no audio regions.
+
 ### Still to do or test
 
 ❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate

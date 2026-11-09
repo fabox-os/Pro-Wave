@@ -9,7 +9,7 @@ use crate::core::{AudioClip, ClipEdit};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -696,17 +696,53 @@ impl Stream {
 pub struct DiskThread {
     tx: mpsc::Sender<Msg>,
     handle: Option<JoinHandle<()>>,
+    /// How busy the thread is (the app's HD meter).
+    load: Arc<DiskLoad>,
 }
+
+/// How busy the streaming thread is, for the app's HD meter (Logic Pro shows the same as HD):
+/// the share of real time it spent decoding, resampling and copying samples over the last
+/// [`LOAD_WINDOW`]. Reading it is lock-free.
+#[derive(Default)]
+pub struct DiskLoad {
+    /// The last share, as `f32` bits (atomics have no float).
+    share: AtomicU32,
+}
+
+impl DiskLoad {
+    /// The share of real time the thread was busy over the last window, 0 to 1.
+    pub fn load(&self) -> f32 {
+        f32::from_bits(self.share.load(Ordering::Relaxed))
+    }
+
+    fn record(&self, share: f32) {
+        if share.is_finite() {
+            self.share
+                .store(share.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        }
+    }
+}
+
+/// How often the streaming thread's busy share is worked out.
+const LOAD_WINDOW: Duration = Duration::from_millis(200);
 
 impl DiskThread {
     pub fn spawn() -> Self {
         let (tx, rx) = mpsc::channel::<Msg>();
+        let load = Arc::new(DiskLoad::default());
+        let thread_load = Arc::clone(&load);
         let handle = std::thread::Builder::new()
             .name("prowave-disk".into())
-            .spawn(move || run(rx))
+            .spawn(move || run(rx, thread_load))
             .map_err(|e| tracing::error!("cannot spawn disk thread: {e}"))
             .ok();
-        Self { tx, handle }
+        Self { tx, handle, load }
+    }
+
+    /// How busy the streaming thread has been lately, 0 to 1 (the app's HD meter). Zero when
+    /// the project has no audio regions.
+    pub fn load(&self) -> f32 {
+        self.load.load()
     }
 
     /// Creates a streamed clip placed at `start_beat` on `track`. The file is opened on the
@@ -828,17 +864,23 @@ fn service_messages(rx: &mpsc::Receiver<Msg>, streams: &mut Vec<Stream>) -> bool
     true
 }
 
-fn run(rx: mpsc::Receiver<Msg>) {
+fn run(rx: mpsc::Receiver<Msg>, load: Arc<DiskLoad>) {
     let mut streams: Vec<Stream> = Vec::new();
+    let mut window = Instant::now();
+    let mut busy = Duration::ZERO;
     loop {
         // Nothing to stream (no audio regions): block until a clip arrives instead of
-        // waking up every 2 ms.
+        // waking up every 2 ms. The wait is not busy time: the HD meter stays at zero.
         if streams.is_empty() {
             let Ok(msg) = rx.recv() else { return };
-            if !handle(msg, &mut streams) {
+            let began = Instant::now();
+            let keep = handle(msg, &mut streams);
+            busy += began.elapsed();
+            if !keep {
                 return;
             }
         }
+        let began = Instant::now();
         if !service_messages(&rx, &mut streams) {
             return;
         }
@@ -851,6 +893,13 @@ fn run(rx: mpsc::Receiver<Msg>) {
             }
             Progress::Idle => true,
         });
+        busy += began.elapsed();
+        let elapsed = window.elapsed();
+        if elapsed >= LOAD_WINDOW {
+            load.record(busy.as_secs_f32() / elapsed.as_secs_f32());
+            window = Instant::now();
+            busy = Duration::ZERO;
+        }
         if !any {
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -962,6 +1011,19 @@ mod tests {
             &mut streams,
         ));
         assert!(streams.is_empty());
+    }
+
+    #[test]
+    fn the_hd_meter_reports_a_share_between_nothing_and_everything() {
+        let disk = DiskThread::spawn();
+        assert_eq!(disk.load(), 0.0, "nothing is streaming yet");
+        let dir = tempfile::tempdir().unwrap();
+        let file = AudioFile::open(write_sine_wav(dir.path())).unwrap();
+        let _clip = disk.stream(&file, OUT_RATE, 0, 0.0);
+        std::thread::sleep(Duration::from_millis(350));
+        let load = disk.load();
+        assert!(load.is_finite(), "{load}");
+        assert!((0.0..=1.0).contains(&load), "{load}");
     }
 
     #[test]

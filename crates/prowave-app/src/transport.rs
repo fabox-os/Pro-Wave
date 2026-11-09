@@ -517,7 +517,7 @@ fn take_steps(leftover: &mut f32, delta_px: f32, px_per_step: f32) -> i32 {
     steps as i32
 }
 
-fn lcd(ui: &Ui, g: &Painter, p: &mut Project, rect: Rect, cpu_load: f32) {
+fn lcd(ui: &Ui, g: &Painter, p: &mut Project, rect: Rect, cpu_load: f32, hd_load: f32) {
     let pal = LcdColors::new(p.recording);
     g.rect_filled(rect, 6.0, pal.bg);
     g.rect_stroke(
@@ -657,38 +657,39 @@ fn lcd(ui: &Ui, g: &Painter, p: &mut Project, rect: Rect, cpu_load: f32) {
         pal.text,
     );
 
-    // Column 6: CPU (audio-callback DSP load) / HD (disk; not measured yet) meters.
-    for (i, label) in ["CPU", "HD"].iter().enumerate() {
+    // Column 6: CPU (audio-callback DSP load) and HD (disk streaming load) meters.
+    for (i, (label, load, hint)) in [
+        ("CPU", cpu_load, tr("Audio DSP load: {}%")),
+        ("HD", hd_load, tr("Disk streaming load: {}%")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let y = rect.top() + 12.0 + i as f32 * 18.0;
         g.text(
             pos2(x0 + 474.0, y),
             Align2::LEFT_CENTER,
-            *label,
+            label,
             FontId::proportional(7.0),
             pal.dim,
         );
         let m = Rect::from_min_size(pos2(x0 + 490.0, y - 2.0), vec2(40.0, 4.0));
         g.rect_filled(m, 1.0, Color32::from_gray(0x2c));
-        if i == 0 {
-            let load = cpu_load.clamp(0.0, 1.0);
-            let fill = Rect::from_min_size(m.min, vec2(m.width() * load, m.height()));
-            let color = if cpu_load >= 0.9 {
-                Color32::from_rgb(0xe0, 0x40, 0x30)
-            } else {
-                pal.text
-            };
-            g.rect_filled(fill, 1.0, color);
-            let hover = m.expand2(vec2(14.0, 4.0)).with_min_x(x0 + 470.0);
-            ui.interact(
-                hover,
-                egui::Id::unique(("lcd", "cpu_meter")),
-                egui::Sense::hover(),
-            )
-            .on_hover_text(trf(
-                "Audio DSP load: {}%",
-                &[&format!("{:.0}", cpu_load * 100.0)],
-            ));
-        }
+        let load = load.clamp(0.0, 1.0);
+        let fill = Rect::from_min_size(m.min, vec2(m.width() * load, m.height()));
+        let color = if load >= 0.9 {
+            Color32::from_rgb(0xe0, 0x40, 0x30)
+        } else {
+            pal.text
+        };
+        g.rect_filled(fill, 1.0, color);
+        let hover = m.expand2(vec2(14.0, 4.0)).with_min_x(x0 + 470.0);
+        ui.interact(
+            hover,
+            egui::Id::unique(("lcd", "meter", label)),
+            egui::Sense::hover(),
+        )
+        .on_hover_text(trf(hint, &[&format!("{:.0}", load * 100.0)]));
     }
 
     // Chevron (display mode menu).
@@ -872,7 +873,7 @@ pub fn control_bar(
     // Centre: LCD, transport to its left, count-in & co. to its right.
     let lcd_w = 555.0;
     let lcd_rect = Rect::from_center_size(pos2(bar.center().x + 20.0, cy), vec2(lcd_w, 44.0));
-    lcd(ui, &g, p, lcd_rect, s.cpu_load);
+    lcd(ui, &g, p, lcd_rect, s.cpu_load, s.hd_load);
 
     let tx = |dx: f32| pos2(lcd_rect.left() + dx, cy);
     if tbutton(ui, &g, tx(-198.0), "rew", icon_rewind, None, ICON) {
