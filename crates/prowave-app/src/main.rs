@@ -72,6 +72,7 @@ mod ui_scale;
 #[cfg(test)]
 mod ui_test;
 mod undo;
+mod undo_history;
 mod updater;
 mod widgets;
 mod window_chrome;
@@ -146,8 +147,7 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
-    /// File > Export > Score as MusicXML… picked this frame.
-    pub export_xml_cmd: bool,
+ main
     /// File > Export > Track as Audio File… picked this frame.
     pub export_track_cmd: bool,
     /// File > Bounce > Regions in Place… (and Record > Bounce In Place) picked this frame.
@@ -158,8 +158,7 @@ pub struct UiState {
     pub bounce_cmd: bool,
     /// A bounce is running (greys the Bounce entry).
     pub bouncing: bool,
-    /// File > Import > Other Projects… picked this frame (a GarageBand bundle).
-    pub open_band_cmd: bool,
+main
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
     pub steps: step_editor::StepView,
     /// True while the pointer is over the Piano Roll (it owns Delete/Cmd+R then).
@@ -178,6 +177,8 @@ pub struct UiState {
     pub recent: recent_files::Recent,
     /// DSP load shown by the LCD's CPU meter (1.0 = full budget); peak-held, falls slowly.
     pub cpu_load: f32,
+    /// Disk streaming load shown by the LCD's HD meter (1.0 = the thread busy all the time).
+    pub hd_load: f32,
     /// Light (white) menu bar and menus, toggled by the Smart Controls button.
     pub light_menus: bool,
     /// The Project Chooser, while it covers the window (File > New from Template…).
@@ -237,13 +238,13 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
-            export_xml_cmd: false,
+ main
             export_track_cmd: false,
             bounce_region_cmd: false,
             bounce_join_cmd: false,
             bounce_cmd: false,
             bouncing: false,
-            open_band_cmd: false,
+ main
             piano_focus: false,
             audition: Vec::new(),
             file_cmd: None,
@@ -252,6 +253,7 @@ impl UiState {
             recent_pick: None,
             recent: recent_files::Recent::default(),
             cpu_load: 0.0,
+            hd_load: 0.0,
             light_menus: false,
             chooser: None,
             ui_scale: 1.0,
@@ -314,6 +316,17 @@ struct App {
 }
 
 impl App {
+    /// File > Show in File Manager: opens the folder that holds the project file, with the
+    /// project selected where the system supports it.
+    fn reveal_project(&mut self) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        if let Err(e) = file_commands::reveal(&path) {
+            self.ui.status = Some(format!("{}: {e}", path.display()));
+        }
+    }
+
     /// File > Import > MIDI File… and File > Export > Selection as MIDI File…
     fn run_midi_cmd(&mut self, cmd: midi_file::MidiCmd) {
         let (p, s) = (&mut self.project, &mut self.ui);
@@ -367,19 +380,7 @@ impl App {
         }
     }
 
-    /// File > Export > Score as MusicXML…: asks where to write and exports every track's notes.
-    fn export_score(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("MusicXML", &["musicxml", "xml"])
-            .set_file_name(format!("{}.musicxml", self.project.name))
-            .save_file()
-        else {
-            return;
-        };
-        self.ui.status = Some(match score_export::export(&self.project, &path) {
-            Ok(notes) => i18n::trf("exported {} notes to {}", &[&notes, &path.display()]),
-            Err(e) => e,
-        });
+main
     }
 
     /// File > Bounce > Project or Section…: asks where to write and starts the bounce.
@@ -981,6 +982,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let _frame_time = bench::frame_timer();
+        self.ui.has_path = self.path.is_some();
         let dt = ctx.input(|i| i.stable_dt) as f64;
         ui_scale::apply(&ctx, self.ui.ui_scale);
         tracks_area::poll_normalize(&ctx, &mut self.project, &mut self.ui);
@@ -1043,6 +1045,8 @@ impl eframe::App for App {
             }
             let load = sync.take_dsp_load();
             self.ui.cpu_load = load.max(self.ui.cpu_load - dt as f32 * 0.8);
+            // The HD meter holds its peak for about a second, like the CPU meter.
+            self.ui.hd_load = sync.disk_load().max(self.ui.hd_load - dt as f32 * 0.8);
             if sync.underruns() > 0 {
                 self.ui.status = Some(i18n::trf(
                     "disk too slow: {} underruns",
@@ -1115,15 +1119,17 @@ impl eframe::App for App {
         }
         if s.show_mixer || s.bottom == Bottom::PianoRoll {
             // About half of the space under the control bar (500 points at most), so the Tracks
-            // area keeps room on short screens. The Piano Roll can be pulled taller; the mixer
-            // has a fixed height, as in Logic: its strips have a natural size and a taller panel
-            // would only stretch the faders and meters. (It follows the window, so it is never
-            // outside its range when the window shrinks.)
+            // area keeps room on short screens, but never less than a whole channel strip tall:
+            // a shorter panel cut every strip's fader off at the bottom (issue #36). The Piano
+            // Roll can be pulled taller; the mixer has a fixed height, as in Logic. (It follows
+            // the window, so it is never outside its range when the window shrinks.)
             let room = ui.available_height();
             let usual = (room * 0.48).clamp(160.0, 500.0);
             let panel = egui::Panel::bottom("bottom").frame(egui::Frame::new());
             let panel = if s.bottom == Bottom::Mixer {
-                panel.resizable(false).exact_size(usual)
+                panel
+                    .resizable(false)
+                    .exact_size(mixer::panel_height(room, p, &s.mixer))
             } else {
                 panel.resizable(true).default_size(usual)
             };
@@ -1137,6 +1143,7 @@ impl eframe::App for App {
             .show(ui, |ui| tracks_area::show(ui, p, s, &meters));
         fx_ui::show(&ctx, p, s, &meters);
         automation::show(&ctx, p, s);
+        undo_history::show(&ctx, p, s, &mut self.history);
 
         side_panes::quick_help(&ctx, &mut self.ui);
         for path in std::mem::take(&mut self.ui.open_paths) {
@@ -1191,8 +1198,7 @@ impl eframe::App for App {
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
         }
-        if std::mem::take(&mut self.ui.export_xml_cmd) {
-            self.export_score();
+main
         }
         if std::mem::take(&mut self.ui.bounce_cmd) {
             self.start_bounce();
@@ -1206,8 +1212,7 @@ impl eframe::App for App {
         if std::mem::take(&mut self.ui.bounce_join_cmd) {
             self.bounce_and_join();
         }
-        if std::mem::take(&mut self.ui.open_band_cmd) {
-            self.import_band(&ctx);
+ main
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());

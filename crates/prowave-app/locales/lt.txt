@@ -792,4 +792,4 @@ Bounce cancelled = Bounce atšauktas
 Bounced {} in place = {} bouncinta vietoje
 Bounced {} but the region changed during the bounce, so it was not replaced = Bounce įrašytas į {}, bet regionas keitėsi bounce metu, todėl jis nepakeistas
 Choose Hydrogen Drum Kit… = Pasirinkti Hydrogen būgnų rinkinį…
-exported {} notes to {} = {} natų eksportuota į {}
+

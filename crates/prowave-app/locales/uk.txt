@@ -792,4 +792,4 @@ Bounce cancelled = Боунс скасовано
 Bounced {} in place = {} боунс на місці
 Bounced {} but the region changed during the bounce, so it was not replaced = Боунс збережено в {}, але регіон змінився під час боунсу, тому його не замінено
 Choose Hydrogen Drum Kit… = Вибрати барабанний комплект Hydrogen…
-exported {} notes to {} = Експортовано {} нот у {}
+
