@@ -137,6 +137,28 @@ impl History {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn undo_history_jumps_several_steps_back_and_forward() {
+        let mut p = Project::demo();
+        let mut h = History::new(&p);
+        for bpm in [100.0, 110.0, 130.0] {
+            p.tempo = bpm;
+            assert!(h.record(&p));
+        }
+        assert_eq!(h.depths(), (3, 0));
+        h.undo_steps(&mut p, 2);
+        assert_eq!(p.tempo, 100.0, "two steps back from 130 is 100");
+        assert_eq!(h.depths(), (1, 2));
+        h.redo_steps(&mut p, 1);
+        assert_eq!(p.tempo, 110.0);
+        // Asking for more than there is goes as far as the history does.
+        h.undo_steps(&mut p, 50);
+        assert_eq!(p.tempo, 120.0, "the demo's own tempo");
+        assert_eq!(h.depths().0, 0);
+        h.redo_steps(&mut p, 50);
+        assert_eq!((p.tempo, h.depths()), (130.0, (3, 0)));
+    }
+
     use super::*;
     use crate::model::TrackKind;
 

@@ -28,6 +28,17 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Mix and Record menu entries:** **Mix > Show Automation** opens the Automation editor on the selected track, **Mix > Delete Automation** clears the lane it shows, and **Record > Record / Record Repeat** records from the cycle start when the cycle is on (otherwise from the playhead). All three were greyed out.
 
 ✅ **Hydrogen drum kits:** an instrument track can now play a free Hydrogen drum kit. In the Inspector, **Choose Hydrogen Drum Kit…** takes the kit's `drumkit.xml`; each instrument of the kit plays on its own MIDI note with its velocity layers and gain, and the samples (WAV, AIFF, FLAC or OGG) are read from the kit's folder. The kit is saved in the project by its path, like a SoundFont. Kits that name no note number their instruments from C1, as Hydrogen does.
+✅ **Edit > Undo History…:** the Edit menu's entry opens a window listing the edits this session can go back to (Undo 1, Undo 2…) and the ones it can redo; click one to jump there. The entry was greyed out.
+
+✅ **Send automation:** every send level now has an automation lane, like the fader, the pan knob and the effect parameters. Choose **Send 1**, **Send 2**… in the Automation editor's Parameter menu, draw its points there or record them in Write mode, and the lane plays back in Read and is saved in the project. Automation of the Output slot and two-handle Bezier curves are still to come.
+✅ **Show in File Manager:** **File > Show in File Manager** (enabled once the project has been saved) opens Explorer with the project file selected, Finder with it revealed, or the folder that holds it with `xdg-open` on Linux.
+✅ **File > Import > Audio File…:** the Import menu's audio entry now works — the same import that dropping a file on the window does. It adds a track with the file as a region at the playhead (WAV, AIFF, FLAC, MP3, CAF, OGG or M4A), computes the waveform in the background, and is one undo step.
+✅ **SMPTE-timed MIDI files:** a MIDI file that counts time in SMPTE frames (24, 25, 29.97 or 30 frames a second, with its ticks a frame) now imports instead of being refused. Its absolute times become bars and beats at the project's tempo, so the recording lands where it sounds. Files with a broken frame rate or no ticks a frame are still refused.
+
+✅ **MIDI markers:** a MIDI file's markers now import onto the Marker track at their bars, and exporting a project writes its markers back into the file. Names are kept up to 64 characters, and a file with more than 1024 markers keeps the first 1024.
+
+✅ **The HD meter measures disk load:** the LCD's HD meter, empty until now, shows how much of the time the disk streaming thread spends decoding and copying audio regions (it turns red from 90 %, like the CPU meter). It reads zero when the project has no audio regions.
+✅ **Command line help:** `prowave --help` now lists the options (`--play`, `--piano`, `--bench`, `--layout-shots`, `--version`) and `prowave --version` prints the version — both without opening a window. Previously the options were only in the source.
 
 ### Still to do or test
 

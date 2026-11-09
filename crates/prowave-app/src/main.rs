@@ -147,7 +147,12 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
- main
+    /// File > Export > Score as MusicXML… picked this frame.
+    pub export_xml_cmd: bool,
+    /// Edit > Undo History… picked this frame: the history window is showing.
+    pub show_undo_history: bool,
+    /// File > Import > Audio File… picked this frame.
+    pub import_audio_cmd: bool,
     /// File > Export > Track as Audio File… picked this frame.
     pub export_track_cmd: bool,
     /// File > Bounce > Regions in Place… (and Record > Bounce In Place) picked this frame.
@@ -158,7 +163,12 @@ pub struct UiState {
     pub bounce_cmd: bool,
     /// A bounce is running (greys the Bounce entry).
     pub bouncing: bool,
-main
+    /// File > Import > Other Projects… picked this frame (a GarageBand bundle).
+    pub open_band_cmd: bool,
+    /// File > Show in File Manager picked this frame.
+    pub reveal_cmd: bool,
+    /// The project has a file on disk (greys the File Manager entry until it is saved).
+    pub has_path: bool,
     /// The Pattern and Drummer editors, which take the Piano Roll's place for those regions.
     pub steps: step_editor::StepView,
     /// True while the pointer is over the Piano Roll (it owns Delete/Cmd+R then).
@@ -238,13 +248,17 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
- main
+            export_xml_cmd: false,
+            show_undo_history: false,
+            import_audio_cmd: false,
             export_track_cmd: false,
             bounce_region_cmd: false,
             bounce_join_cmd: false,
             bounce_cmd: false,
             bouncing: false,
- main
+            open_band_cmd: false,
+            reveal_cmd: false,
+            has_path: false,
             piano_focus: false,
             audition: Vec::new(),
             file_cmd: None,
@@ -380,7 +394,48 @@ impl App {
         }
     }
 
-main
+    /// File > Export > Score as MusicXML…: asks where to write and exports every track's notes.
+    fn export_score(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MusicXML", &["musicxml", "xml"])
+            .set_file_name(format!("{}.musicxml", self.project.name))
+            .save_file()
+        else {
+            return;
+        };
+        self.ui.status = Some(match score_export::export(&self.project, &path) {
+            Ok(notes) => i18n::trf("exported {} notes to {}", &[&notes, &path.display()]),
+            Err(e) => e,
+        });
+    }
+
+    /// File > Import > Audio File…: the same import as dropping a file on the window.
+    fn import_audio_file(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                i18n::tr("Audio File…"),
+                &[
+                    "wav", "wave", "aif", "aiff", "aifc", "flac", "mp3", "caf", "ogg", "oga",
+                    "m4a", "mp4",
+                ],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        match import::import_audio(&mut self.project, &path, ctx) {
+            Ok(()) => {
+                // The whole import is one undo step.
+                self.history.record(&self.project);
+                self.ui.status = Some(i18n::trf(
+                    "imported {} tracks from {}",
+                    &[&1, &path.display()],
+                ));
+            }
+            Err(e) => {
+                self.ui.status = Some(i18n::trf("cannot import {}: {}", &[&path.display(), &e]))
+            }
+        }
     }
 
     /// File > Bounce > Project or Section…: asks where to write and starts the bounce.
@@ -1198,7 +1253,11 @@ impl eframe::App for App {
         if let Some(cmd) = self.ui.midi_cmd.take() {
             self.run_midi_cmd(cmd);
         }
-main
+        if std::mem::take(&mut self.ui.export_xml_cmd) {
+            self.export_score();
+        }
+        if std::mem::take(&mut self.ui.import_audio_cmd) {
+            self.import_audio_file(&ctx);
         }
         if std::mem::take(&mut self.ui.bounce_cmd) {
             self.start_bounce();
@@ -1212,7 +1271,11 @@ main
         if std::mem::take(&mut self.ui.bounce_join_cmd) {
             self.bounce_and_join();
         }
- main
+        if std::mem::take(&mut self.ui.open_band_cmd) {
+            self.import_band(&ctx);
+        }
+        if std::mem::take(&mut self.ui.reveal_cmd) {
+            self.reveal_project();
         }
         if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
             self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());

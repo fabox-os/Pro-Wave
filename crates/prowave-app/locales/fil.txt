@@ -792,4 +792,10 @@ Bounce cancelled = Kinansela ang bounce
 Bounced {} in place = Na-bounce ang {} sa lugar
 Bounced {} but the region changed during the bounce, so it was not replaced = Na-bounce sa {}, pero nagbago ang region habang nag-bounce, kaya hindi ito pinalitan
 Choose Hydrogen Drum Kit… = Pumili ng Hydrogen Drum Kit…
-
+exported {} notes to {} = Na-export ang {} nota sa {}
+Current = Kasalukuyan
+Undo {} = I-undo {}
+Redo {} = I-redo {}
+Nothing to undo yet = Wala pang maa-undo
+Send {} = Padala {}
+Disk streaming load: {}% = Load ng disk streaming: {}%

@@ -792,4 +792,10 @@ Bounce cancelled = Bounce peruttu
 Bounced {} in place = {} bouncattu paikalleen
 Bounced {} but the region changed during the bounce, so it was not replaced = Bounce tallennettu: {}, mutta alue muuttui bouncen aikana, joten sitä ei korvattu
 Choose Hydrogen Drum Kit… = Valitse Hydrogen-rummusetti…
-
+exported {} notes to {} = {} nuottia viety tiedostoon {}
+Current = Nykyinen
+Undo {} = Kumoa {}
+Redo {} = Tee uudelleen {}
+Nothing to undo yet = Ei vielä kumottavaa
+Send {} = Lähetys {}
+Disk streaming load: {}% = Levyn suoratoiston kuormitus: {}%
