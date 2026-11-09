@@ -168,16 +168,19 @@ Not read: `CREI` (creator strings), the `CAT DEVL` chunks (`TRSH`, `EQ `, `COMP`
 length field, and the transient **Stretch** tails a REX player synthesises at render time —
 those change how a slice sounds when it is cut short, not the audio in the file.
 
-24-bit (format code 5) and 32-bit float (7) files are decoded through the same DWOP codec,
-which produces 16-bit samples; the crate keeps the declared bit depth and adds a warning rather
-than pretending the extra precision survived. Format codes are otherwise refused, as are more
-than 2 channels. The decoded waveform is capped at 50 million samples.
+A 24-bit file's DWOP stream holds 24-bit samples (a real 24-bit fixture decodes to the full
+−8388608…8388607 range). Because `RexFile` stores `i16`, the crate shifts those samples down by
+8 bits: the waveform is right, the low 8 bits are gone, and `warnings` says so. 8-bit (1) and
+32-bit float (7) files are decoded through the same 16-bit path and reported as such. Format
+codes are otherwise refused, as are more than 2 channels. The decoded waveform is capped at 50
+million samples.
 
 ## Open questions
 
 - The two sources disagree on the `SINF` layout before offset 6 (see above) and on the exact
   reading of `HEAD`. Pro Wave does not depend on any `HEAD` field after the magic.
-- 24-bit storage: the codec's output is 16-bit in every account available, so how a 24-bit file
-  is scaled is not known. The crate decodes it and says so in `warnings`.
+- 24-bit storage: the public notes call the codec 16-bit, but a real 24-bit file decodes to
+  full 24-bit samples (confirmed against VelociLoops). Pro Wave shifts them to 16 bits and says
+  in `warnings` that the low 8 bits were dropped.
 - Tempo-to-PPQ mapping is derived (REX uses 15360 ticks per 4/4 bar, 3840 per quarter note).
   `RexFile::slice_beat` exposes it for a project's grid; the file itself stores frames only.

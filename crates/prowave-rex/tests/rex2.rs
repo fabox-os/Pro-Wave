@@ -139,6 +139,26 @@ fn damaged_files_are_refused_or_reported_without_panicking() {
 }
 
 #[test]
+fn a_24_bit_file_is_reduced_to_16_bit_samples() {
+    let samples = tone(3_000, 220.0, 44_100);
+    let data = RexData::new(44_100, 1, 100.0, samples.clone());
+    let mut bytes = write::write(&data).unwrap();
+    // Pretend SINF declares 24-bit: the reader must then drop the low 8 bits of every sample.
+    let at = find(&bytes, b"SINF").expect("SINF is written");
+    bytes[at + 8 + 1] = 5;
+    let rex = RexFile::parse(&bytes).unwrap();
+    assert_eq!(rex.bit_depth, 24);
+    assert!(rex.warnings.iter().any(|w| w.contains("reduced to 16-bit")));
+    for (frame, expected) in samples.iter().enumerate() {
+        assert_eq!(
+            rex.sample(frame, 0),
+            f32::from(expected >> 8) / 32768.0,
+            "frame {frame}"
+        );
+    }
+}
+
+#[test]
 fn the_audio_chunk_is_padded_to_whole_words() {
     for frames in [1usize, 7, 1_000, 4_095, 8_000, 12_345] {
         let data = RexData::new(44_100, 1, 100.0, tone(frames, 220.0, 44_100));
