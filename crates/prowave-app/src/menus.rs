@@ -558,7 +558,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Record Toggle" => true,
         "Record Enable" => p.tracks.get(p.selected_track).is_some(),
         "Record Project Settings" => true,
-
+main
         "Delete Track" => p.tracks.len() > 1,
         "Release Track Stack" => p
             .tracks
@@ -770,7 +770,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             }
         }
         "Record Project Settings" => s.settings_tab = Some(SettingsTab::Recording),
-
+ main
         "New Pattern Region" | "New Drummer Region" => {
             // On the selected track, at the bar the playhead is in.
             let bar = p.beats_to_bar(p.position_beats).floor() as f32 + 1.0;
@@ -1225,7 +1225,7 @@ mod tests {
                     s.bounce_region_cmd,
                     s.bounce_join_cmd,
                     s.mixer.auto_editor.track,
-main
+ main
                 ),
                 (
                     s.ui_scale,
