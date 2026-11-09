@@ -372,12 +372,38 @@ limitations at the end of the section). Still open, in the order the work would 
 
 - Plug-in hosting (CLAP first, then VST3 and AU), with a sandboxed process per plug-in. Not started.
 - Audio output device and I/O buffer size in Project Settings > Audio (needs an engine stream restart).
-- Bounce in Place and Bounce and Join (offline rendering in the engine).
+- An offline (faster than real time) bounce: Bounce, Export Track, Bounce in Place and Bounce and Join all work now, but at playing speed.
 - Convert to New Sampler Track (needs a sampler instrument).
 - Show Chord Track and Show Arrangement Track (new data models).
 - Split and Join on audio, Pattern and Drummer regions (audio needs a start offset into the file).
 - Hardware tests of MIDI output, MIDI clock and SysEx; native-speaker review of the translations.
 - Release 0.2.2 was tested on Ubuntu 26.04.1 LTS only; Windows and macOS builds are not tested for it.
+
+## Since 0.2.2 (2026-11-09, heading for 0.3.0)
+
+Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
+
+- **Space Designer** (convolution reverb, own window, six built-in impulse responses, Volume and
+  Filter envelopes, X-Over with Spread, Output EQ, synthesized IR tab) and three mastering presets.
+  Not done: loading the user's own impulse-response files, tempo-synced Predelay.
+- **Effects on the Stereo Out (master) strip**, saved with the project. No automation lanes for them yet.
+- **Bounce:** Project or Section, Export Track as Audio File, Bounce in Place, Bounce and Join (real time, WAV).
+- **Menus that were greyed out and now work:** Record Toggle, Record Enable, Record Project Settings,
+  Record / Record Repeat, Mix > Edit Groups, Show Automation, Delete Automation, Rename Project,
+  Edit > Undo History, Paste Replace, File > Import > Audio File, Show in File Manager,
+  Export > Score as MusicXML.
+- **Send automation** (one lane for each send level), **HD meter** (disk load), **`--help` and `--version`**.
+- **MIDI files:** SMPTE-timed files, markers (both ways), program changes (both ways).
+- **Instruments and effects:** Hydrogen drum kits, Multi-Band Compressor.
+- **GarageBand:** `GARAGEBAND-FORMAT-SPEC.md`, the `prowave-garageband-import` crate and
+  File > Import > Other Projects… (audio files only; tempo, signature and arrangement are phase 2).
+- **Mixer** keeps whole channel strips visible on short windows.
+- **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
+  macOS tests compile again.
+
+Still open before 0.3.0: redo the Loop Browser audition, region trimming, the instrument load
+progress bar and the smoother-UI work (their PRs #29-#32 conflicted and were closed), and a local
+test of all the features above on Windows and macOS.
 
 ### Phase 0: Foundation (Weeks 1-4)
 - [x] `cargo xtask` setup, CI for mac/win/linux + wasm
@@ -451,10 +477,10 @@ limitations at the end of the section). Still open, in the order the work would 
 
 ### Phase 2: MIDI & Sequencer (Weeks 11-18)
 - [~] MIDI 1.0/2.0 parser, MPE, Articulation ID, SysEx
-  - Standard MIDI Files (2026-10-21): File > Import > MIDI File… (or drop a `.mid` on the window) makes a track for each track and channel (channel 10 becomes a Drummer track) with one region of its notes and the sustain pedal, and takes the file's tempo and signature changes when the project has no regions yet. File > Export > Selection as MIDI File… writes the selected region, or all MIDI, as format 1: a tempo track (tempo curves as a step for each quarter note, signatures) and a track for each MIDI track, with what plays (region transpose, quantize, mute, MIDI FX). Reading and writing round-trip in tests, damaged files are refused without panicking. Not done: SMPTE-timed files, program changes, other controllers, pitch bend, lyrics and markers, MPE, SysEx, MIDI 2.0.
+  - Standard MIDI Files (2026-10-21): File > Import > MIDI File… (or drop a `.mid` on the window) makes a track for each track and channel (channel 10 becomes a Drummer track) with one region of its notes and the sustain pedal, and takes the file's tempo and signature changes when the project has no regions yet. File > Export > Selection as MIDI File… writes the selected region, or all MIDI, as format 1: a tempo track (tempo curves as a step for each quarter note, signatures) and a track for each MIDI track, with what plays (region transpose, quantize, mute, MIDI FX). Reading and writing round-trip in tests, damaged files are refused without panicking. Since then: SMPTE-timed files, markers and program changes (2026-11-09). Not done: other controllers, lyrics, MPE, MIDI 2.0.
 - [ ] Piano Roll: full Logic parity (Quantize, Velocity, Brush, Time Handles, MIDI Draw for CC, Scale Quantize, Humanize, Flam, Note Color)
 - [ ] Score Editor v0: render notes with `staff` crate, basic printing, MusicXML export
-  - Score v0 (2026-10-21): the editor's Score tab shows an ordinary MIDI region as notation on a grand staff (treble from middle C up, bass below), in C major with sharps, each note as the nearest plain or dotted note value with stem, flag, ledger lines and dots; click to add a quarter note at the nearest eighth, right-click a note to delete it. The clefs are the letters G and F, not the clef shapes (the bundled fonts have no music symbols). Upgraded the same day: drawn clefs, the key signature (a key picker, 30 keys), the time signature, accidentals that carry through a bar, rests, and ties for notes that cross a bar line or are not one note value long. Not done: beams, chords' stem sharing, voices, printing, MusicXML, and editing notes' lengths.
+  - Score v0 (2026-10-21): the editor's Score tab shows an ordinary MIDI region as notation on a grand staff (treble from middle C up, bass below), in C major with sharps, each note as the nearest plain or dotted note value with stem, flag, ledger lines and dots; click to add a quarter note at the nearest eighth, right-click a note to delete it. The clefs are the letters G and F, not the clef shapes (the bundled fonts have no music symbols). Upgraded the same day: drawn clefs, the key signature (a key picker, 30 keys), the time signature, accidentals that carry through a bar, rests, and ties for notes that cross a bar line or are not one note value long. MusicXML export (File > Export > Score as MusicXML…) was added 2026-11-09. Not done: beams, chords' stem sharing, voices, printing, MusicXML import, and editing notes' lengths.
 - [x] Hardening pass (2026-10-21) of the newest features: MIDI file import is bounded (128 MB, 4096 tempo and 1024 signature changes, tracks up to the engine's 1024, regions inside bar 9999, note pairing in linear time), pattern regions stop at 250 000 notes and a MIDI FX chain at 1 000 000, MTC positions cannot overflow, the MIDI and MTC input queues are bounded, and generated regions are only compared with their bars when the region or the song changed. Tests: headless pointer tests for the Pattern grid, Drummer pad, Score and MIDI FX window (`ui_test.rs`), a hostile-file test, and Linux and macOS compile checks (the tests themselves run on Windows here and on all three in CI).
 - [x] Step Sequencer: Pattern region with rows, per-step Chance, Repeat, Tie, Gate, Loop Direction
   - Done (2026-10-21): Pattern regions with rows, steps, rate, swing, gate and per-step velocity, Chance (percent, the same every time for a seed; New Variation changes it), Repeat (1-4 notes in a step, click to count up) and Tie (carries on the note before it, also over the loop), and a play direction (Forward, Backward, Ping-Pong, Random). The Edit box above the grid picks what a click sets. Pending: automation per row, per-row gate.
@@ -495,7 +521,7 @@ limitations at the end of the section). Still open, in the order the work would 
 - [ ] Ultrabeat: 25 voices drum synth, built-in step sequencer
 - [ ] Studio Strings/Horns: Articulation ID system (key switch, channel, velocity)
 - [x] Guitar and bass amp emulation (tester request, 2026-10-30; done 2026-11-03): *Amp Designer* in the Audio FX slots. Five amplifier models (Clean Combo, Tweed, British Crunch, Plexi Lead, Bass Amp), four valve stages with asymmetric soft clipping at twice the sample rate, a tone stack (Gain, Bass, Mid, Treble, Presence, Master), three speaker cabinets (1x12 Combo, 4x12 British, 4x10 Bass) or none, and a microphone position from the edge of the cone to its centre. Every setting is automatable; a *Guitar Amp* set of Library patches loads it. Pending: a pedal board, impulse-response cabinets, and listening on real guitar recordings.
-- [~] FX full suite: Space Designer (convolution reverb with IR loading, envelope, filter, length), ChromaVerb (14 models), Delay Designer (visual tap editor, 26 taps, pitch/filter per tap), Tape Delay, Echo, Chorus, Ensemble, Flanger, Phaser, Tremolo, AutoFilter, Ringshifter, Distortion II, Bitcrusher, Overdrive, Pedalboard (35 pedals), Amp Designer (amps + cabs + mics), Match EQ, Multipressor, Exciter, SubBass, Voice Transformer, etc.
+- [~] FX full suite: Space Designer (convolution reverb: window, six built-in IRs, envelopes, filter, length and master-bus use done 2026-11-09; loading the user's own IR files not done), Multi-Band Compressor (done 2026-11-09), ChromaVerb (14 models), Delay Designer (visual tap editor, 26 taps, pitch/filter per tap), Tape Delay, Echo, Chorus, Ensemble, Flanger, Phaser, Tremolo, AutoFilter, Ringshifter, Distortion II, Bitcrusher, Overdrive, Pedalboard (35 pedals), Amp Designer (amps + cabs + mics), Match EQ, Multipressor, Exciter, SubBass, Voice Transformer, etc.
 - [ ] Mastering Assistant: rule-based chain (EQ -> Comp -> Limiter) + LUFS targeting -14 LUFS, analyze using `ebur128` crate
 - **DoD:** A/B test Channel EQ curve vs Logic (within 0.5dB), Space Designer IR load
 
@@ -565,25 +591,24 @@ click never silently does nothing. The controls that looked active and did nothi
 on 2026-10-30: Count-in, Capture Recording, Quick Help, Toolbar, Note Pad, Loop Browser, All
 Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Output slots.
 
-- File: Close, Save as Template, Alternatives, Project Management, Page Setup,
-  Print, Movie, Import Audio File and Other Projects (dragging audio in works), Export of audio
-  and MusicXML (Selection as MIDI File works), Bounce, Share, Show in File Manager, Open in
-  Sound Library Manager, Project Alternatives
-- Edit: Undo History, Paste Replace, Bounce and Join
+- File: Close, Save as Template, Alternatives, Page Setup,
+  Print, Movie, Export of audio (Selection as MIDI File, Score as MusicXML and Track as Audio File
+  work), Share, Open in Sound Library Manager, Project Alternatives (done since 0.2.2: Import
+  Audio File, Other Projects for GarageBand audio, Bounce, Show in File Manager, Rename Project)
 - Track: Show Chord / Arrangement Track (both need new data: chord events and sections)
 - Navigate: Go to Position
-- Record: Record / Record Repeat, Record Toggle, Record Enable, New Take,
-  Delete Take, Bounce In Place, Record Project Settings, Project Settings
-- Mix: Show / Create / Convert / Delete Automation, Group, Edit Groups, Pre-Fader Metering,
-  Mastering, Create Mastering Track, Stem Splitter
+- Record: New Take, Delete Take (done since 0.2.2: Record / Record Repeat, Record Toggle,
+  Record Enable, Bounce In Place, Record Project Settings)
+- Mix: Create / Convert Automation, Group, Pre-Fader Metering, Create Mastering Track,
+  Stem Splitter (done since 0.2.2: Show and Delete Automation, Edit Groups, Space Designer and the
+  master-bus effects for mastering)
 - View: all automation entries, Advanced Tools, Smart Controls, Score Editor, Step Sequencer,
   Session Player, Flex Editor, Performers, Movie, Customize Toolbar, Track Header, Ruler, Global
   Tracks, Colors, Markers, Grid, Smart Tempo, Enter Full Screen
 - Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
   Bring All to Front
 - Help: Key Commands, About Pro Wave
-- Tracks area: Edit (Bounce and Join is not done), Functions (Bounce in Place, Convert to New
-  Sampler Track), View (Show Global Tracks,
+- Tracks area: Functions (Convert to New Sampler Track), View (Show Global Tracks,
   every tool except Pointer and Fade, waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo
 - Mixer: Select Audio Channel Strips, Create New Output Channel Strip, Show Signal Flow
