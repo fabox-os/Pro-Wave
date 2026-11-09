@@ -792,4 +792,10 @@ Bounce cancelled = バウンスをキャンセルしました
 Bounced {} in place = {} をその場でバウンスしました
 Bounced {} but the region changed during the bounce, so it was not replaced = {} にバウンスしましたが、バウンス中にリージョンが変わったため置き換えませんでした
 Choose Hydrogen Drum Kit… = Hydrogen ドラムキットを選択…
-
+exported {} notes to {} = {} 個のノートを {} に書き出しました
+Current = 現在
+Undo {} = 元に戻す {}
+Redo {} = やり直す {}
+Nothing to undo yet = まだ元に戻す操作はありません
+Send {} = センド {}
+Disk streaming load: {}% = ディスクストリーミング負荷: {}%

@@ -286,7 +286,7 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
    new group, pick one, settings for Volume, Pan, Mute and Solo, delete; moving one fader or
    pan moves the group by the same amount, Mute and Solo follow from anywhere). Saved in
    `.prowave`. Tests: engine 123, app 321 (new ones for every item above).
-
+   Not done: Bezier curves with two handles, automation of the Output slot, linear-phase EQ, CLAP / VST3 / AU plug-ins (a hosting
    task of its own: loading the library, its parameters and its window).
    ⚠️ Started 2026-10-24: onset detection and tempo estimation of audio files in the engine
    (`analysis.rs`: log energy of the first difference in 2.5 ms blocks, peaks over a moving

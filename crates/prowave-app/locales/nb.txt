@@ -792,4 +792,10 @@ Bounce cancelled = Bounce avbrutt
 Bounced {} in place = {} bouncet på stedet
 Bounced {} but the region changed during the bounce, so it was not replaced = Bouncet til {}, men regionen endret seg under bouncen, så den ble ikke erstattet
 Choose Hydrogen Drum Kit… = Velg Hydrogen-trommesett…
-
+exported {} notes to {} = {} noter eksportert til {}
+Current = Gjeldende
+Undo {} = Angre {}
+Redo {} = Gjør om {}
+Nothing to undo yet = Ingenting å angre ennå
+Send {} = Send {}
+Disk streaming load: {}% = Belastning på diskstrømming: {}%

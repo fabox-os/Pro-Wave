@@ -1408,17 +1408,109 @@ mod tests {
     }
 
     #[test]
- main
+    fn a_program_change_is_kept_when_a_file_comes_in_and_goes_out() {
+        // Read: program 42 on channel 2.
+        let mut body = Vec::new();
+        body.extend([0, 0xc2, 42]);
+        body.extend([0, 0x92, 60, 100]);
+        body.extend([0x83, 0x60, 0x82, 60, 64]); // delta 480, note off
         body.extend([0, 0xff, 0x2f, 0]);
         let mut file = Vec::new();
         chunk(&mut file, b"MThd", &[0, 0, 0, 1, 0x01, 0xe0]);
         chunk(&mut file, b"MTrk", &body);
         let parsed = parse(&file).expect("the file reads");
- main
+        assert_eq!(parsed.tracks[0].program, Some(42));
 
         let mut p = Project::empty();
         p.tracks.clear();
         import(&mut p, &parsed);
- main
+        assert_eq!(p.tracks[0].midi_program, Some(42));
+
+        // Write: an external MIDI track's program goes into the file.
+        let mut q = Project::empty();
+        let ti = q.add_track(TrackKind::ExternalMidi);
+        q.tracks[ti].midi_program = Some(7);
+        q.tracks[ti].regions.push(Region {
+            name: "Lead".to_string(),
+            start_bar: 1.0,
+            len_bars: 1.0,
+            notes: vec![Note {
+                start: 0.0,
+                len: 1.0,
+                pitch: 60,
+                vel: 100,
+            }],
+            controls: Vec::new(),
+            folder: None,
+            audio: None,
+            params: RegionParams::default(),
+            generated: None,
+        });
+        let out = write(&export(&q, None));
+        let again = parse(&out).expect("the exported file reads");
+        assert_eq!(again.tracks[0].program, Some(7));
+    }
+
+    #[test]
+    fn smpte_times_become_beats_at_the_project_tempo() {
+        // 25 frames a second and 40 ticks a frame: 1000 ticks a second. A note held for 1000
+        // ticks is a second, which is two beats at 120 BPM.
+        let mut body = Vec::new();
+        body.extend([0, 0x90, 60, 100]);
+        body.extend([0x87, 0x68, 0x80, 60, 64]); // delta 1000, note off
+        body.extend([0, 0xff, 0x2f, 0]);
+        let mut file = Vec::new();
+        chunk(&mut file, b"MThd", &[0, 0, 0, 1, 0xe7, 0x28]);
+        chunk(&mut file, b"MTrk", &body);
+        let parsed = parse(&file).expect("the file reads");
+        assert_eq!(parsed.smpte_ticks_per_second, 1_000.0);
+
+        let mut p = Project::empty();
+        p.tracks.clear();
+        p.tempo = 120.0;
+        import(&mut p, &parsed);
+        let notes = &p.tracks[0].regions[0].notes;
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].start.abs() < 1e-6, "from the start");
+        assert!((notes[0].len - 2.0).abs() < 1e-4, "{}", notes[0].len);
+
+        // The same file at 60 BPM covers one beat.
+        p.tracks.clear();
+        p.tempo = 60.0;
+        import(&mut p, &parsed);
+        let len = p.tracks[0].regions[0].notes[0].len;
+        assert!((len - 1.0).abs() < 1e-4, "{len}");
+    }
+
+    #[test]
+    fn markers_are_read_imported_and_written() {
+        // A marker at the start, then "Verse" 960 ticks (two beats at 480 ppq) in.
+        let mut body = Vec::new();
+        body.extend([0, 0xff, 0x06, 5]);
+        body.extend(b"Intro");
+        body.extend([0x87, 0x40, 0xff, 0x06, 5]);
+        body.extend(b"Verse");
+        body.extend([0, 0xff, 0x2f, 0]);
+        let mut file = Vec::new();
+        chunk(&mut file, b"MThd", &[0, 0, 0, 1, 0x01, 0xe0]);
+        chunk(&mut file, b"MTrk", &body);
+        let parsed = parse(&file).expect("the file reads");
+        assert_eq!(
+            parsed.markers,
+            [(0, "Intro".to_string()), (960, "Verse".to_string())]
+        );
+
+        let mut p = Project::empty();
+        p.tracks.clear();
+        import(&mut p, &parsed);
+        let names: Vec<&str> = p.markers.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["Intro", "Verse"]);
+        assert_eq!(p.markers[1].beat, 2.0, "two beats in");
+
+        // Exporting writes them back, and reading that file gives the same markers.
+        let back = export(&p, None);
+        assert_eq!(back.markers, parsed.markers);
+        let again = parse(&write(&back)).expect("the exported file reads");
+        assert_eq!(again.markers, parsed.markers);
     }
 }

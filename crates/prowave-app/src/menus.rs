@@ -532,7 +532,15 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             .is_some_and(|t| t.auto.has_lane()),
         // Record > Record / Record Repeat.
         "Record / Record Repeat" => true,
- main
+        // File > Export > Score as MusicXML…: something must have notes.
+        "Score as MusicXML…" => p
+            .tracks
+            .iter()
+            .any(|t| t.regions.iter().any(|r| !r.notes.is_empty())),
+        // Edit > Undo History…: the history window (empty until the first edit).
+        "Undo History…" => true,
+        // File > Import > Audio File…: any audio file the engine can read.
+        "Audio File…" => true,
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -558,7 +566,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Record Toggle" => true,
         "Record Enable" => p.tracks.get(p.selected_track).is_some(),
         "Record Project Settings" => true,
-main
+        // File > Show in File Manager: a project that has been saved is on disk.
+        "Show in File Manager" => s.has_path,
         "Delete Track" => p.tracks.len() > 1,
         "Release Track Stack" => p
             .tracks
@@ -771,7 +780,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             }
         }
         "Record Project Settings" => s.settings_tab = Some(SettingsTab::Recording),
- main
+        "Show in File Manager" => s.reveal_cmd = true,
         "New Pattern Region" | "New Drummer Region" => {
             // On the selected track, at the bar the playhead is in.
             let bar = p.beats_to_bar(p.position_beats).floor() as f32 + 1.0;
@@ -1226,7 +1235,13 @@ mod tests {
                     s.bounce_region_cmd,
                     s.bounce_join_cmd,
                     s.mixer.auto_editor.track,
- main
+                    // (a tuple holds twelve at most to print)
+                    (
+                        s.show_undo_history,
+                        s.reveal_cmd,
+                        s.import_audio_cmd,
+                        s.export_xml_cmd,
+                    ),
                 ),
                 (
                     s.ui_scale,
