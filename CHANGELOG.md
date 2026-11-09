@@ -42,7 +42,18 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **The HD meter measures disk load:** the LCD's HD meter, empty until now, shows how much of the time the disk streaming thread spends decoding and copying audio regions (it turns red from 90 %, like the CPU meter). It reads zero when the project has no audio regions.
 ✅ **Command line help:** `prowave --help` now lists the options (`--play`, `--piano`, `--bench`, `--layout-shots`, `--version`) and `prowave --version` prints the version — both without opening a window. Previously the options were only in the source.
 
+✅ **Multi-Band Compressor:** a new effect for any Audio FX slot. It splits the sound into Low, Mid and High with two Linkwitz-Riley crossovers (Low/Mid 250 Hz and Mid/High 3 kHz at first, both adjustable), and compresses each band with its own Threshold, Ratio and make-up Gain; Attack and Release are shared. With no band compressing the three bands add back to the original sound. The strip's gain-reduction meter shows the busiest band, and every parameter can be automated.
+✅ **File > Export > Score as MusicXML…:** writes the project's notes as MusicXML 4.0, one part for each track that has notes, with measures following the time-signature map, the key, the starting tempo, chords, rests that fill each bar and ties for notes that cross a bar line. The entry is enabled when the project has notes. MusicXML import, beams and voices are not done.
+✅ **MIDI program changes:** a MIDI file's program changes are kept. On import the last program of each channel goes to the track's MIDI Program; on export an External MIDI track writes its program at the start, so a round trip no longer loses it.
+✅ **Edit > Paste Replace:** pastes the copied regions at the playhead like Paste, after removing the regions on the selected track that the pasted span covers. A region that only overlaps the span partly is removed whole. The entry was greyed out.
+
+### Fixed
+
+✅ **Mixer on short windows:** on a 768-point-tall screen the Mixer panel was too short for a channel strip and cut off everything under the Pan knob. The panel is now never shorter than one whole strip (it follows the project's Audio FX slots and sends), and still no taller than the room there is.
+
 ### Still to do or test
+
+❌ MusicXML import; GarageBand tempo, signature and arrangement (see `GARAGEBAND-FORMAT-SPEC.md`); Hydrogen kits and the new menu entries (Import Audio File, Show in File Manager, Undo History) were tested by automated tests on Linux only, not on Windows or macOS
 
 ❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
 
