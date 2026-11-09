@@ -508,6 +508,30 @@ impl EngineSync {
         )
     }
 
+    /// The engine's output sample rate, for preparing a hosted plug-in.
+    pub fn sample_rate(&self) -> f64 {
+        f64::from(self.engine.sample_rate())
+    }
+
+    /// Replaces the hosted plug-in on the master bus (`None` removes it) and sets its bypass.
+    /// Returns false when the command queue is full (the caller may retry).
+    pub fn set_master_hosted(
+        &mut self,
+        effect: Option<Box<dyn prowave_engine::HostedEffect>>,
+        bypass: bool,
+    ) -> bool {
+        let sent = self.send(Command::SetMasterHosted(effect));
+        if sent {
+            self.send(Command::SetMasterHostedBypass(bypass));
+        }
+        sent
+    }
+
+    /// Sets the hosted master plug-in's bypass without reloading it.
+    pub fn set_master_hosted_bypass(&mut self, bypass: bool) -> bool {
+        self.send(Command::SetMasterHostedBypass(bypass))
+    }
+
     pub fn new(engine: Engine, p: &Project) -> Self {
         let mut sync = Self {
             engine,

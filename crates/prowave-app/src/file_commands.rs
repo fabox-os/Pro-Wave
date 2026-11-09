@@ -334,6 +334,7 @@ impl App {
     /// Writes the project to `path` without making it the current file: the title, the unsaved
     /// state and Open Recent stay as they were.
     pub fn save_copy_to(&mut self, path: &Path) -> bool {
+        self.plugins.snapshot(&mut self.project);
         match project_io::save_project(&self.project, path) {
             Ok(path) => {
                 self.ui.status = Some(trf("saved a copy: {}", &[&path.display()]));
@@ -347,6 +348,7 @@ impl App {
     }
 
     pub fn save_to(&mut self, path: &Path) -> bool {
+        self.plugins.snapshot(&mut self.project);
         match project_io::save_project(&self.project, path) {
             Ok(path) => {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -377,6 +379,9 @@ impl App {
         self.history.reset(&self.project);
         // A project is open now, so the Project Chooser has done its job.
         self.ui.chooser = None;
+        // Load the project's hosted plug-in (or wait for the first scan).
+        let sync = self.sync.as_mut();
+        self.plugins.restore(&mut self.project, sync, &mut self.ui);
     }
 }
 
@@ -447,6 +452,7 @@ mod tests {
             clock_follow: crate::clock_follow::ClockFollower::default(),
             chase: crate::mtc_in::Chase::default(),
             updater: crate::updater::Updater::new(),
+            plugins: Default::default(),
         }
     }
 

@@ -1,0 +1,15 @@
+[package]
+name = "prowave-plugin-helper"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: out-of-process VST3, Audio Unit and CLAP plug-in host"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "prowave-plugin-helper"
+path = "src/main.rs"
+
+# The helper is only meaningful where plughost supports the platform. Elsewhere the stub binary
+# explains why it cannot run, so all-target CI still builds.
+[target.'cfg(any(all(target_os = "macos", target_arch = "aarch64"), all(target_os = "windows", target_arch = "x86_64")))'.dependencies]
+plughost-helper = "=0.2.3"

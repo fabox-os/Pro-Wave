@@ -799,3 +799,4 @@ Redo {} = Ponów {}
 Nothing to undo yet = Nie ma jeszcze czego cofać
 Send {} = Wysyłka {}
 Disk streaming load: {}% = Obciążenie strumieniowania dysku: {}%
+Plug-in Manager… = Menedżer wtyczek…

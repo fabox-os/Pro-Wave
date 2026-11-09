@@ -301,6 +301,21 @@ pub struct InsertDoc {
     pub params: Vec<f32>,
 }
 
+/// A hosted plug-in: where it comes from and the state it saved.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct HostedDoc {
+    /// `format:class-id` (`vst3:…`, `au:…`, `clap:…`).
+    pub plugin_key: String,
+    pub name: String,
+    pub vendor: String,
+    /// `vst3`, `au` or `clap`.
+    pub format: String,
+    pub bypass: bool,
+    /// The plug-in's own state blob.
+    pub state: Vec<u8>,
+}
+
 /// The automation lane of one effect parameter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
@@ -444,6 +459,8 @@ pub struct ProjectDoc {
     pub master_vol: f32,
     /// The effects on the Stereo Out strip (the master bus), in order.
     pub master_fx: Vec<InsertDoc>,
+    /// A hosted VST3/Audio Unit/CLAP plug-in after the built-in master effects.
+    pub master_hosted: Option<HostedDoc>,
     pub selected_track: usize,
     pub tracks: Vec<TrackDoc>,
     /// Mix groups.
@@ -529,6 +546,7 @@ impl Default for ProjectDoc {
             notes: String::new(),
             master_vol: 0.8,
             master_fx: Vec::new(),
+            master_hosted: None,
             selected_track: 0,
             tracks: Vec::new(),
             groups: Vec::new(),

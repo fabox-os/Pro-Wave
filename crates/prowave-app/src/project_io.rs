@@ -575,6 +575,17 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
                 params: s.params[..s.kind.params().len()].to_vec(),
             })
             .collect(),
+        master_hosted: p
+            .master_hosted
+            .as_ref()
+            .map(|h| prowave_project::HostedDoc {
+                plugin_key: h.key.clone(),
+                name: h.name.clone(),
+                vendor: h.vendor.clone(),
+                format: h.format.key().to_string(),
+                bypass: h.bypass,
+                state: h.state.clone(),
+            }),
         selected_track: p.selected_track,
         tracks,
         groups: p
@@ -905,6 +916,23 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
         .collect();
     p.master_vol = doc.master_vol.clamp(0.0, 2.0);
     p.master_inserts = inserts_from_fx_docs(&doc.master_fx);
+    p.master_hosted = doc
+        .master_hosted
+        .as_ref()
+        .filter(|h| !h.plugin_key.is_empty())
+        .map(|h| crate::model::HostedInsert {
+            key: h.plugin_key.chars().take(256).collect(),
+            name: h.name.chars().take(128).collect(),
+            vendor: h.vendor.chars().take(128).collect(),
+            format: match h.format.as_str() {
+                "au" => prowave_plugin_host::Format::AudioUnit,
+                "clap" => prowave_plugin_host::Format::Clap,
+                _ => prowave_plugin_host::Format::Vst3,
+            },
+            bypass: h.bypass,
+            // A project is untrusted input; plughost accepts at most 128 MiB of state.
+            state: h.state.iter().copied().take(128 << 20).collect(),
+        });
     p.groups = doc
         .groups
         .iter()
@@ -1285,6 +1313,42 @@ pub(crate) mod tests {
             &egui::Context::default(),
         );
         assert!(!old.show_master_track && old.header_hidden.is_empty());
+    }
+
+    #[test]
+    fn a_hosted_plug_in_is_saved_with_its_state() {
+        let mut p = Project::empty();
+        p.master_hosted = Some(crate::model::HostedInsert {
+            key: "au:AUPK".into(),
+            name: "Peak Limiter".into(),
+            vendor: "Apple".into(),
+            format: prowave_plugin_host::Format::AudioUnit,
+            bypass: true,
+            state: vec![9, 8, 7, 6],
+        });
+        let (doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.master_hosted.as_ref().map(|h| h.plugin_key.as_str()),
+            Some("au:AUPK")
+        );
+        assert_eq!(
+            doc.master_hosted.as_ref().map(|h| h.format.as_str()),
+            Some("au")
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.master_hosted, p.master_hosted);
+        assert_eq!(
+            q.master_hosted.as_ref().map(|h| h.state.as_slice()),
+            Some([9, 8, 7, 6].as_slice())
+        );
+
+        // Files from before hosted plug-ins open with none.
+        let (old, _) = from_doc(
+            &ProjectDoc::default(),
+            Path::new("."),
+            &egui::Context::default(),
+        );
+        assert!(old.master_hosted.is_none());
     }
 
     #[test]

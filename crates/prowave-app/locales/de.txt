@@ -799,3 +799,4 @@ Redo {} = Wiederholen {}
 Nothing to undo yet = Noch nichts rückgängig zu machen
 Send {} = Send {}
 Disk streaming load: {}% = Last beim Festplatten-Streaming: {}%
+Plug-in Manager… = Plug-in-Manager…

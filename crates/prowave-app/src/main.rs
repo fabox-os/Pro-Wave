@@ -42,6 +42,7 @@ mod note_edit;
 mod patches;
 mod pattern;
 mod piano_roll;
+mod plugins;
 mod project_io;
 mod project_settings;
 mod recent_files;
@@ -202,6 +203,8 @@ pub struct UiState {
     pub can_redo: bool,
     /// Mix > Edit Groups… window is open.
     pub show_groups: bool,
+    /// Mix > Plug-in Manager… was chosen.
+    pub plugin_manager: bool,
 }
 
 impl UiState {
@@ -275,6 +278,7 @@ impl UiState {
             can_undo: false,
             can_redo: false,
             show_groups: false,
+            plugin_manager: false,
         }
     }
 
@@ -327,6 +331,8 @@ struct App {
     chase: mtc_in::Chase,
     /// Looks for a newer release and installs it (Windows).
     updater: updater::Updater,
+    /// VST3/Audio Unit/CLAP plug-ins: catalog, controls and the manager windows.
+    plugins: plugins::Plugins,
 }
 
 impl App {
@@ -1113,6 +1119,9 @@ impl eframe::App for App {
             let map = self.project.tempo_map();
             self.project.position_beats = map.advance(self.project.position_beats, dt);
         }
+        // Hosted plug-ins: poll the scanner, load a restored plug-in, draw their windows.
+        self.plugins
+            .show(&ctx, &mut self.project, &mut self.ui, self.sync.as_mut());
         if self.project.playing {
             ctx.request_repaint();
         }
@@ -1688,6 +1697,7 @@ fn main() -> eframe::Result {
                 clock_follow: clock_follow::ClockFollower::default(),
                 chase: mtc_in::Chase::default(),
                 updater: updater::Updater::new(),
+                plugins: plugins::Plugins::default(),
             };
             if !measuring {
                 app.ui.update_auto = updater::auto_enabled();

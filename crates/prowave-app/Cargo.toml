@@ -17,6 +17,7 @@ human-panic = "2.0.8"
 prowave-engine = { version = "0.1.0", path = "../prowave-engine" }
 prowave-garageband-import = { version = "0.1.0", path = "../prowave-garageband-import" }
 prowave-project = { version = "0.1.0", path = "../prowave-project" }
+prowave-plugin-host = { version = "0.1.0", path = "../prowave-plugin-host" }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 rfd = "0.17.2"
 rtrb = "0.4.0"

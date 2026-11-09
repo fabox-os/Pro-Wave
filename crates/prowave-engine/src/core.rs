@@ -450,6 +450,11 @@ pub enum Command {
     /// The effects of the master bus (Stereo Out): they process the whole mix before the master
     /// fader. The old chain goes back through the garbage queue.
     SetMasterInserts(Box<Chain>),
+    /// A hosted plug-in (VST3, Audio Unit or CLAP) on the master bus, made off the audio thread.
+    /// `None` removes it; the old adapter goes back through the garbage queue.
+    SetMasterHosted(Option<Box<dyn crate::hosted::HostedEffect>>),
+    /// Bypass the hosted master plug-in without unloading it.
+    SetMasterHostedBypass(bool),
     /// Space Designer: a new impulse response for the effect in `slot` of `track` (made with
     /// [`Convolver::for_params`]); the old one goes back through the garbage queue.
     SetConvolver {
@@ -533,6 +538,8 @@ pub enum Garbage {
     Controls(Vec<ControlEvent>),
     TempoMap(Box<TempoMap>),
     Chain(Box<Chain>),
+    /// A replaced hosted master plug-in, dropped on the UI thread.
+    Hosted(Option<Box<dyn crate::hosted::HostedEffect>>),
     Convolver(Box<crate::convolver::Convolver>),
     Pdc(Box<Pdc>),
     Automation(Vec<AutoLane>),
@@ -790,6 +797,8 @@ pub struct EngineCore {
     chains: Vec<Option<Box<Chain>>>,
     /// The effects of the master bus.
     master_chain: Option<Box<Chain>>,
+    /// A hosted plug-in after the master effects, before the master fader.
+    master_hosted: Option<Box<dyn crate::hosted::HostedEffect>>,
     /// Delay compensation per strip.
     pdc: Vec<Option<Box<Pdc>>>,
     routes: Vec<Route>,
@@ -938,6 +947,7 @@ impl EngineCore {
             sf_notes: [SfNote::default(); MAX_SF_NOTES],
             chains: (0..MAX_TRACKS).map(|_| None).collect(),
             master_chain: None,
+            master_hosted: None,
             pdc: (0..MAX_TRACKS).map(|_| None).collect(),
             routes: vec![Route::default(); MAX_TRACKS],
             complex: Vec::with_capacity(MAX_TRACKS),
@@ -1678,6 +1688,17 @@ impl EngineCore {
                         let _ = self.trash.push(Garbage::Chain(old));
                     }
                 }
+                Command::SetMasterHosted(hosted) => {
+                    let old = std::mem::replace(&mut self.master_hosted, hosted);
+                    if let Some(old) = old {
+                        let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                    }
+                }
+                Command::SetMasterHostedBypass(bypass) => {
+                    if let Some(hosted) = self.master_hosted.as_mut() {
+                        hosted.set_bypass(bypass);
+                    }
+                }
                 Command::SetConvolver { track, slot, conv } => {
                     let chain = if track == MASTER_TRACK {
                         self.master_chain.as_mut()
@@ -2179,6 +2200,11 @@ impl EngineCore {
                         chain.process(finite_or_zero(l as f32), finite_or_zero(r as f32));
                     (f64::from(cl), f64::from(cr))
                 };
+            }
+            // The hosted master plug-in runs after the built-in effects, still before the fader.
+            if let Some(hosted) = self.master_hosted.as_mut() {
+                let (hl, hr) = hosted.process(finite_or_zero(l as f32), finite_or_zero(r as f32));
+                (l, r) = (f64::from(hl), f64::from(hr));
             }
             let master = self.master.next() as f64;
             // `clamp` lets NaN through, so a non-finite sum becomes silence first.

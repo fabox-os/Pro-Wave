@@ -239,6 +239,36 @@ impl Insert {
     }
 }
 
+/// A second-party plug-in (VST3, Audio Unit or CLAP) on the Stereo Out strip.
+///
+/// The plug-in itself lives in [`crate::plugins::Plugins`] (its control chain) and in the
+/// engine (its realtime adapter); this is the part a project file keeps: what to load, whether
+/// it is bypassed, and the plug-in's own state blob.
+#[derive(Clone, PartialEq, Debug)]
+pub struct HostedInsert {
+    /// `format:class-id`, the key `prowave_plugin_host::Catalog::instantiate` takes.
+    pub key: String,
+    pub name: String,
+    pub vendor: String,
+    pub format: prowave_plugin_host::Format,
+    pub bypass: bool,
+    /// The plug-in's state (`PluginState::to_bytes`), or empty when it would not save.
+    pub state: Vec<u8>,
+}
+
+impl HostedInsert {
+    pub fn new(plugin: &prowave_plugin_host::PluginDescriptor, state: Vec<u8>) -> Self {
+        Self {
+            key: plugin.key.clone(),
+            name: plugin.name.clone(),
+            vendor: plugin.vendor.clone(),
+            format: plugin.format,
+            bypass: false,
+            state,
+        }
+    }
+}
+
 /// The effects a Library patch names (names that are no effect here are left out).
 pub fn inserts_from_names(names: &[&str]) -> Vec<Insert> {
     names
@@ -865,6 +895,8 @@ pub struct Project {
     pub master_vol: f32,
     /// The effects on the Stereo Out strip, in order (they process the whole mix).
     pub master_inserts: Vec<Insert>,
+    /// A hosted VST3/AU/CLAP plug-in after the built-in master effects.
+    pub master_hosted: Option<HostedInsert>,
     /// Mix groups; a track's `group` is an index into this list.
     pub groups: Vec<MixGroup>,
     /// Bumped whenever tracks/regions change so the engine song is rebuilt.
@@ -1085,6 +1117,7 @@ impl Project {
             selected_track: 0,
             master_vol: 0.8,
             master_inserts: Vec::new(),
+            master_hosted: None,
             groups: Vec::new(),
             song_rev: 0,
             show_master_track: false,
