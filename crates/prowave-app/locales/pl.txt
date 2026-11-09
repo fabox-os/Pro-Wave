@@ -792,4 +792,4 @@ Bounce cancelled = Bounce anulowany
 Bounced {} in place = Bounce {} w miejscu
 Bounced {} but the region changed during the bounce, so it was not replaced = Zapisano bounce do {}, ale region zmienił się podczas bounce, więc nie został zastąpiony
 Choose Hydrogen Drum Kit… = Wybierz zestaw perkusyjny Hydrogen…
-Send {} = Wysyłka {}
+

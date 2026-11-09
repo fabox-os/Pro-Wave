@@ -12,9 +12,9 @@ names); no Apple artwork or code is copied.
 |---|---|
 | **0 — Foundation** | **Done.** CI is green on Linux, Windows and macOS; lock-free engine, logging, crash reports, CPU meter, 24- and 1000-track tests. ASIO is built but no ASIO driver has been tried; latency is measured on Windows only |
 | **1 — Engine core + tracks** | **Done.** Tempo/signature maps, audio/MIDI/Pattern/Drummer regions, disk streaming, recording, `.prowave` files, aux/bus/sends, VCA, folder and External MIDI tracks. Missing: `bounces/` in the project file |
-| **2 — MIDI & sequencer** | **Mostly done.** Piano Roll with quantize, velocity and MIDI Transform; the MIDI FX chain; MIDI file import/export; Event List; Step Sequencer; Score v0; Drummer and Pattern regions. Missing: MPE, SysEx, MIDI 2.0, articulation IDs, score beams/voices/printing/MusicXML, Drummer Track v0 |
+| **2 — MIDI & sequencer** | **Mostly done.** Piano Roll with quantize, velocity and MIDI Transform; the MIDI FX chain; MIDI file import/export; Event List; Step Sequencer; Score v0; Drummer and Pattern regions. Missing: MPE, SysEx, MIDI 2.0, articulation IDs, score beams/voices/printing/MusicXML import, Drummer Track v0 |
 | **3 — Flex & Smart Tempo** | **Mostly done.** Smart Tempo detection and editor, Adapt Project Tempo, Flex Time modes, Flex Pitch (correct to key, make a MIDI track), Groove Track. Missing: dragging Flex markers, per-note Flex Pitch (drift, vibrato, formant), a non-steady tempo grid in the editor |
-| **4 — Mixer & channel strip DSP** | **Mostly done.** Twelve effects, buses and sends, automation, mix groups, 64-bit summing, delay compensation. Missing: automation of the Output slot, two-handle Bezier curves, plug-in and instrument latency in the PDC, a multi-band compressor |
+
 | **5–6 — Instruments & effects** | **Started.** The built-in synth with acoustic and electronic drum kits, and the **Amp Designer** (2026-11-03). Missing: Sampler/Quick Sampler, Drum Machine Designer, ES2, the vintage keyboards, the reverb/delay suites, Pedalboard, Mastering Assistant |
 | **7–9** | **Not started:** plug-in hosting, Live Loops and the rest of the UI polish, the WASM build and the rest of Bounce/Export (a real-time Bounce Project or Section and MIDI export exist) |
 
@@ -100,7 +100,8 @@ How the Linux build was made from Windows (cross-compiling, no WSL/Docker needed
   and mix groups, and delay compensation for effects that look ahead.
 - **Automation in the engine:** volume, pan and every effect parameter, in Read/Touch/Latch/Write,
   sample-accurate within the block and with curved stretches.
-- **Effects (`fx.rs`):** Channel EQ, Compressor, Space D reverb, Tape Delay, Chorus, Phaser,
+- **Effects (`fx.rs`):** Channel EQ, Compressor, Multi-Band Compressor, Space D reverb, Tape
+  Delay, Chorus, Phaser,
   Overdrive, Filter, Noise Gate, Limiter, Multi-Band EQ and the **Amp Designer**. All are
   allocation-free in `process`, keep their memory when a knob moves (no clicks), clamp every
   parameter so a damaged project cannot blow up, and turn a non-finite sample into silence.
@@ -247,7 +248,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 - The synth approximates instrument families; there are no sampled instruments, and the
   Amp Designer is a model, not a captured amplifier (no impulse-response cabinets yet).
 - Cut/Copy/Paste of regions and many menu items are still shown **disabled** (not implemented).
-- Score: no beams, voices, chord symbols, printing or MusicXML. MIDI files: no SMPTE-timed
+- Score: no beams, voices, chord symbols, printing or MusicXML import (MusicXML export is in File > Export). MIDI files: no SMPTE-timed
   files, program changes, other controllers, pitch bend, lyrics, markers, MPE or SysEx.
 - Cargo-deny ignores 4 "unmaintained" advisories (transitive via winit/egui on Linux, no fix
   available); documented in `deny.toml`.
@@ -284,9 +285,9 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 
 | Roadmap item | | What's there / what's missing |
 |---|---|---|
-| MIDI 1.0 parser, MPE, Articulation ID, SysEx | 🟡 | Standard MIDI files import and export (round-trip tests; damaged files refused) ✅. **Missing:** SMPTE-timed files, program changes, pitch bend, lyrics, markers, MPE, SysEx, MIDI 2.0 |
+| MIDI 1.0 parser, MPE, Articulation ID, SysEx | 🟡 | Standard MIDI files import and export (round-trip tests; damaged files refused); program changes are kept both ways ✅. **Missing:** SMPTE-timed files, pitch bend, lyrics, markers, MPE, SysEx, MIDI 2.0 |
 | Piano Roll: full Logic parity | 🟡 | Editing, quantize (time and scale) with strength/swing, velocity lane, MIDI Transform, key commands ✅. **Missing:** brush, time handles, CC MIDI Draw, flam, note colour parity |
-| Score Editor v0 | 🟡 | Clefs, key and time signatures, accidentals, rests, ties, click to add, right-click to delete ✅. **Missing:** beams, chords' stems, voices, printing, MusicXML |
+| Score Editor v0 | 🟡 | Clefs, key and time signatures, accidentals, rests, ties, click to add, right-click to delete ✅; MusicXML export (File > Export) ✅. **Missing:** beams, chords' stems, voices, printing, MusicXML import |
 | Event List, Step Editor, MIDI Transform, MIDI FX chain | 🟡 | Event list (MIDI events), Step Sequencer (Pattern regions), MIDI Transform, and the MIDI FX chain (Transposer, Velocity, Scale, Chord Trigger, Repeater, Arpeggiator, Randomizer, Modulator, Scripter) ✅. **Missing:** the Marker/Tempo/Signature tabs of the Event list, per-event editing, the channel-strip MIDI FX slot |
 | Drummer Track v0 | 🟡 | Drummer regions with Rock/Pop/Funk/Jazz/Hip Hop/Electronic, complexity/loudness pad, fills, Convert to MIDI ✅. **Missing:** named drummers, Follow Track, a dedicated Drummer Track UI |
 | **DoD:** Drummer + Bass + Keys, quantize, bounce | 🟡 | The song can be made and quantized, and **File > Bounce > Project or Section…** writes the mix to a 32-bit float WAV, at playing speed; **Export > Track as Audio File…** does one track; **Bounce > Regions in Place…** turns a MIDI region into audio. Missing: an offline (faster than real-time) bounce |
@@ -305,7 +306,7 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 
 | Roadmap item | | What's there / what's missing |
 |---|---|---|
-| Real effects | 🟡 | Channel EQ (3-band), Multi-Band EQ (6 bands), Compressor, Noise Gate, Limiter, Space D reverb, Tape Delay, Chorus, Phaser, Overdrive, Filter, Amp Designer ✅. **Missing:** 8-band Channel EQ with FFT analyzer, six compressor models, convolution reverb, Delay Designer, modulation suite, distortion suite, pedal board, Mastering Assistant |
+| Real effects | 🟡 | Channel EQ (3-band), Multi-Band EQ (6 bands), Compressor, Multi-Band Compressor, Noise Gate, Limiter, Space D reverb, Tape Delay, Chorus, Phaser, Overdrive, Filter, Amp Designer ✅. **Missing:** 8-band Channel EQ with FFT analyzer, six compressor models, convolution reverb, Delay Designer, modulation suite, distortion suite, pedal board, Mastering Assistant |
 | Sends / buses / aux, groups, VCA | ✅ | Up to four sends per strip (pre/post), Bus 1-8 with Aux strips, Mix Groups, VCA tracks |
 | Automation, plug-in delay compensation | 🟡 | Read/Touch/Latch/Write for the fader, pan, every effect parameter and every send level, curved stretches, sample-accurate ✅; PDC for look-ahead effects ✅. **Missing:** automation of the Output slot, trim, two-handle Bezier, latency of plug-ins and instruments (not hosted yet) |
 | **DoD:** 24 tracks with EQ/Comp on each, automation, PDC null test | 🟡 | 24 tracks and automation are tested; a null test is covered by the PDC tests for the effects |
@@ -315,16 +316,16 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
 - **Phase 5–6:** built-in synth and drum kits ✅; **Amp Designer** ✅ (2026-11-03). Missing: Sampler, Quick Sampler, Drum Machine Designer, Drum Kit Designer, ES2, Vintage B3/Clav/E-Piano, Retro Synth, Sculpture, Alchemy-Lite, Ultrabeat, Studio Strings/Horns, the full FX suite, Pedalboard, Mastering Assistant.
 - **Phase 7:** CLAP/VST3/AU hosting and the out-of-process sandbox — not started.
 - **Phase 8:** Smart Controls, the full Key Commands window, Live Loops, Video track — not started (Quick Help, Toolbar, Note Pad, Loop Browser and All Files exist).
-- **Phase 9:** WASM/AudioWorklet build; Bounce Project or Section ✅, Export Track as Audio File ✅, Bounce in Place ✅ and Edit > Bounce and Join ✅ (real time, to a WAV); Export All Tracks, MusicXML/AAF/ADM BWF — not started (MIDI export exists).
+- **Phase 9:** WASM/AudioWorklet build; Bounce Project or Section ✅, Export Track as Audio File ✅, Bounce in Place ✅ and Edit > Bounce and Join ✅ (real time, to a WAV); MusicXML export ✅; Export All Tracks, AAF/ADM BWF — not started (MIDI export exists).
 - **`.logicx` import** (`prowave-logicx-import` per `LOGICX-FORMAT-SPEC.md`) — not started.
+- **GarageBand import:** **File > Import > Other Projects…** reads a `.band` bundle through the new `prowave-garageband-import` crate (bundle detection, `MetaData.plist`, media list) and imports its audio files as tracks; MIDI regions, region positions and the iOS zip are still to come (`GARAGEBAND-FORMAT-SPEC.md`).
 
 ## 📋 Still to do next (from the 0.2.x releases)
 
 - **Recording:** cycle takes for audio, punch in and out, guitar and bass pedals before the amp.
 - **Amp Designer:** a pedal board, impulse-response cabinets, and a listen with real guitar and
   bass recordings.
-- **Mixer:** automation of the Output slot, two-handle Bezier curves, plug-in
-  (CLAP / VST3 / AU) hosting, a multi-band compressor.
+
 - **Flex Time:** dragging Flex markers with the mouse; per-note Flex Pitch (drift, vibrato,
   formant); audio tracks following a Groove Track.
 - **Smart Tempo:** Adapt Region Tempo while recording, a non-steady tempo grid in the editor.
