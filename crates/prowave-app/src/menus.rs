@@ -532,11 +532,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             .is_some_and(|t| t.auto.has_lane()),
         // Record > Record / Record Repeat.
         "Record / Record Repeat" => true,
-        // File > Export > Score as MusicXML…: something must have notes.
-        "Score as MusicXML…" => p
-            .tracks
-            .iter()
-            .any(|t| t.regions.iter().any(|r| !r.notes.is_empty())),
+ main
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -802,6 +798,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             }
             p.recording = true;
         }
+        "Undo History…" => s.show_undo_history = true,
         "Redo" => s.undo_cmd = Some(UndoCmd::Redo),
         "Delete Undo History" => s.undo_cmd = Some(UndoCmd::Clear),
         "Delete" => crate::tracks_area::delete_selected(p, &mut s.tracks),
@@ -1228,7 +1225,7 @@ mod tests {
                     s.bounce_region_cmd,
                     s.bounce_join_cmd,
                     s.mixer.auto_editor.track,
-
+main
                 ),
                 (
                     s.ui_scale,

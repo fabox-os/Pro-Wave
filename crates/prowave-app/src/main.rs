@@ -72,6 +72,7 @@ mod ui_scale;
 #[cfg(test)]
 mod ui_test;
 mod undo;
+mod undo_history;
 mod updater;
 mod widgets;
 mod window_chrome;
@@ -146,8 +147,7 @@ pub struct UiState {
     pub groove: groove::GrooveState,
     /// File > Import > MIDI File… or Export > Selection as MIDI File…, run after the menus.
     pub midi_cmd: Option<midi_file::MidiCmd>,
-    /// File > Export > Score as MusicXML… picked this frame.
-    pub export_xml_cmd: bool,
+ main
     /// File > Export > Track as Audio File… picked this frame.
     pub export_track_cmd: bool,
     /// File > Bounce > Regions in Place… (and Record > Bounce In Place) picked this frame.
@@ -237,7 +237,7 @@ impl UiState {
             flex: flex_edit::FlexState::default(),
             groove: groove::GrooveState::default(),
             midi_cmd: None,
-            export_xml_cmd: false,
+ main
             export_track_cmd: false,
             bounce_region_cmd: false,
             bounce_join_cmd: false,
@@ -1139,6 +1139,7 @@ impl eframe::App for App {
             .show(ui, |ui| tracks_area::show(ui, p, s, &meters));
         fx_ui::show(&ctx, p, s, &meters);
         automation::show(&ctx, p, s);
+        undo_history::show(&ctx, p, s, &mut self.history);
 
         side_panes::quick_help(&ctx, &mut self.ui);
         for path in std::mem::take(&mut self.ui.open_paths) {
