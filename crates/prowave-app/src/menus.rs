@@ -541,6 +541,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Undo History…" => true,
         // File > Import > Audio File…: any audio file the engine can read.
         "Audio File…" => true,
+        // File > Import > Other Projects…: imports a GarageBand bundle's audio.
+        "Other Projects…" => true,
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -767,6 +769,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         }
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
         "Audio File…" => s.import_audio_cmd = true,
+        "Other Projects…" => s.open_band_cmd = true,
         "Selection as MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Export),
         "Score as MusicXML…" => s.export_xml_cmd = true,
         "Project or Section…" => s.bounce_cmd = true,
@@ -1241,6 +1244,7 @@ mod tests {
                         s.reveal_cmd,
                         s.import_audio_cmd,
                         s.export_xml_cmd,
+                        s.open_band_cmd,
                     ),
                 ),
                 (
