@@ -137,6 +137,8 @@ cargo xtask check                      # fmt, clippy -D warnings, tests, no-allo
 | [`crates/prowave-app`](crates/prowave-app) | The desktop app (egui): every view and editor |
 | [`crates/prowave-project`](crates/prowave-project) | The `.prowave` project file format |
 | [`crates/prowave-logicx-import`](crates/prowave-logicx-import) | Logic Pro `.logicx` bundles: save shapes, active alternative, metadata plists and the ProjectData envelope |
+| [`crates/prowave-plugin-host`](crates/prowave-plugin-host) | Sandboxed VST3, Audio Unit and CLAP hosting (macOS Apple Silicon, Windows x64) |
+| [`crates/prowave-plugin-helper`](crates/prowave-plugin-helper) | The helper process third-party plug-in code runs in |
 | [`xtask`](xtask) | `cargo xtask check`, `wasm-check` and `rt-check` |
 | [`dist/linux`](dist/linux) | Linux desktop entry, icon, MIME type, `install.sh` and the .deb, .rpm and Flatpak recipes |
 
