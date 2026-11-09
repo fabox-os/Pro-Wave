@@ -187,6 +187,23 @@ fn piano_step(snap: Snap, beat_px: f32, beats_per_bar: f64, beat_unit: f64) -> f
     }
 }
 
+/// Shortest a scrollbar thumb is drawn, so it stays easy to grab.
+const MIN_THUMB: f32 = 24.0;
+
+/// Length of a scrollbar thumb on a bar `track` long, for a `view` of `content`. Never shorter
+/// than [`MIN_THUMB`] unless the bar itself is, and never longer than the bar: a panel dragged
+/// very small must not crash the editor.
+fn thumb_len(track: f32, view: f32, content: f32) -> f32 {
+    let track = track.max(0.0);
+    let share = if content > 0.0 { view / content } else { 1.0 };
+    let len = track * share;
+    if len.is_finite() {
+        len.clamp(MIN_THUMB.min(track), track)
+    } else {
+        track
+    }
+}
+
 fn id(key: impl std::hash::Hash + std::fmt::Debug) -> egui::Id {
     egui::Id::unique(("piano_roll", key))
 }
@@ -706,7 +723,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
         gs.rect_filled(hbar, 0.0, Color32::from_gray(0x2a));
         gs.rect_filled(vbar, 0.0, Color32::from_gray(0x2a));
         let tw = hbar.width();
-        let thumb_w = (tw * grid.width() / content_w).clamp(24.0, tw);
+        let thumb_w = thumb_len(tw, grid.width(), content_w);
         let max_x = (content_w - grid.width()).max(1.0);
         let thumb_x = hbar.left() + (tw - thumb_w) * (v.scroll_x / max_x).clamp(0.0, 1.0);
         let thumb = Rect::from_min_size(
@@ -728,7 +745,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
         );
 
         let th = vbar.height();
-        let thumb_h = (th * grid.height() / content_h).clamp(24.0, th);
+        let thumb_h = thumb_len(th, grid.height(), content_h);
         let max_y = (content_h - grid.height()).max(1.0);
         let thumb_y = vbar.top() + (th - thumb_h) * (v.scroll_y / max_y).clamp(0.0, 1.0);
         let thumb = Rect::from_min_size(
@@ -1648,5 +1665,20 @@ mod tests {
         assert_eq!(piano_step(Snap::Smart, 10.0, 3.0, 0.5), 0.5);
         assert_eq!(piano_step(Snap::Smart, 100.0, 3.0, 0.5), 0.125);
         assert_eq!(piano_step(Snap::Beat, 100.0, 3.0, 0.5), 0.5);
+    }
+
+    #[test]
+    fn a_scrollbar_shorter_than_its_thumb_does_not_crash() {
+        // The crash report: a 23 px scrollbar, thumb at least 24 px.
+        assert_eq!(thumb_len(23.0, 100.0, 2000.0), 23.0);
+        assert_eq!(thumb_len(0.0, 100.0, 2000.0), 0.0);
+        assert_eq!(thumb_len(-5.0, 100.0, 2000.0), 0.0);
+        // Normal sizes: proportional, with the minimum, never past the bar.
+        assert_eq!(thumb_len(400.0, 100.0, 200.0), 200.0);
+        assert_eq!(thumb_len(400.0, 1.0, 10_000.0), MIN_THUMB);
+        assert_eq!(thumb_len(400.0, 500.0, 200.0), 400.0);
+        // Nothing to scroll, or no size yet.
+        assert_eq!(thumb_len(400.0, 0.0, 0.0), 400.0);
+        assert_eq!(thumb_len(400.0, f32::NAN, 200.0), 400.0);
     }
 }
