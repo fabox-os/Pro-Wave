@@ -792,3 +792,4 @@ Bounce cancelled = बाउंस रद्द किया
 Bounced {} in place = {} को यथास्थान बाउंस किया
 Bounced {} but the region changed during the bounce, so it was not replaced = {} में बाउंस किया, लेकिन बाउंस के दौरान रीजन बदल गया, इसलिए उसे बदला नहीं गया
 Choose Hydrogen Drum Kit… = Hydrogen ड्रम किट चुनें…
+

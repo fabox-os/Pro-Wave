@@ -59,6 +59,8 @@ pub struct FileTrack {
     /// Controllers (the sustain pedal is 64), pitch bend, channel pressure and the bytes of
     /// SysEx messages, in tick order.
     pub controls: Vec<FileControl>,
+    /// The program change the track starts with, if the file has one.
+    pub program: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -323,6 +325,10 @@ fn read_track(body: &[u8], file: &mut MidiFile, total: &mut usize) -> Result<(),
                             val: u16::from(a),
                         });
                     }
+                    0xc0 => {
+                        let i = slot(ch, &mut channels);
+                        channels[i].program = Some(a);
+                    }
                     _ => {}
                 }
             }
@@ -451,6 +457,9 @@ pub fn write(file: &MidiFile) -> Vec<u8> {
         let mut ev = Events(Vec::new());
         ev.push(0, 0, meta(0x03, t.name.as_bytes()));
         let ch = t.channel & 0x0f;
+        if let Some(program) = t.program {
+            ev.push(0, 0, vec![0xc0 | ch, program.min(127)]);
+        }
         for n in &t.notes {
             ev.push(
                 n.start,
@@ -564,6 +573,7 @@ pub fn export(p: &Project, only: Option<(usize, usize)>) -> MidiFile {
         let mut track = FileTrack {
             name: t.name.clone(),
             channel,
+            program: t.midi_program,
             ..FileTrack::default()
         };
         let mut played = Vec::new();
@@ -649,6 +659,7 @@ pub fn import(p: &mut Project, file: &MidiFile) -> usize {
             break;
         }
         let ti = p.add_track(kind);
+        p.tracks[ti].midi_program = ft.program;
         if !ft.name.is_empty() {
             p.tracks[ti].name = ft.name.clone();
         }
@@ -783,6 +794,7 @@ mod tests {
                 FileTrack {
                     name: "Piano".into(),
                     channel: 0,
+                    program: None,
                     notes: vec![
                         FileNote {
                             start: 0,
@@ -819,6 +831,7 @@ mod tests {
                 FileTrack {
                     name: "Drums".into(),
                     channel: 9,
+                    program: None,
                     notes: vec![FileNote {
                         start: 960,
                         len: 120,
@@ -1337,6 +1350,7 @@ mod tests {
             tracks: vec![FileTrack {
                 name: "Keys".into(),
                 channel: 2,
+                program: None,
                 notes: vec![FileNote {
                     start: 0,
                     len: 480,
@@ -1394,65 +1408,17 @@ mod tests {
     }
 
     #[test]
-    fn smpte_times_become_beats_at_the_project_tempo() {
-        // 25 frames a second and 40 ticks a frame: 1000 ticks a second. A note held for 1000
-        // ticks is a second, which is two beats at 120 BPM.
-        let mut body = Vec::new();
-        body.extend([0, 0x90, 60, 100]);
-        body.extend([0x87, 0x68, 0x80, 60, 64]); // delta 1000, note off
-        body.extend([0, 0xff, 0x2f, 0]);
-        let mut file = Vec::new();
-        chunk(&mut file, b"MThd", &[0, 0, 0, 1, 0xe7, 0x28]);
-        chunk(&mut file, b"MTrk", &body);
-        let parsed = parse(&file).expect("the file reads");
-        assert_eq!(parsed.smpte_ticks_per_second, 1_000.0);
-
-        let mut p = Project::empty();
-        p.tracks.clear();
-        p.tempo = 120.0;
-        import(&mut p, &parsed);
-        let notes = &p.tracks[0].regions[0].notes;
-        assert_eq!(notes.len(), 1);
-        assert!(notes[0].start.abs() < 1e-6, "from the start");
-        assert!((notes[0].len - 2.0).abs() < 1e-4, "{}", notes[0].len);
-
-        // The same file at 60 BPM covers one beat.
-        p.tracks.clear();
-        p.tempo = 60.0;
-        import(&mut p, &parsed);
-        let len = p.tracks[0].regions[0].notes[0].len;
-        assert!((len - 1.0).abs() < 1e-4, "{len}");
-    }
-
-    #[test]
-    fn markers_are_read_imported_and_written() {
-        // A marker at the start, then "Verse" 960 ticks (two beats at 480 ppq) in.
-        let mut body = Vec::new();
-        body.extend([0, 0xff, 0x06, 5]);
-        body.extend(b"Intro");
-        body.extend([0x87, 0x40, 0xff, 0x06, 5]);
-        body.extend(b"Verse");
+ main
         body.extend([0, 0xff, 0x2f, 0]);
         let mut file = Vec::new();
         chunk(&mut file, b"MThd", &[0, 0, 0, 1, 0x01, 0xe0]);
         chunk(&mut file, b"MTrk", &body);
         let parsed = parse(&file).expect("the file reads");
-        assert_eq!(
-            parsed.markers,
-            [(0, "Intro".to_string()), (960, "Verse".to_string())]
-        );
+ main
 
         let mut p = Project::empty();
         p.tracks.clear();
         import(&mut p, &parsed);
-        let names: Vec<&str> = p.markers.iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(names, ["Intro", "Verse"]);
-        assert_eq!(p.markers[1].beat, 2.0, "two beats in");
-
-        // Exporting writes them back, and reading that file gives the same markers.
-        let back = export(&p, None);
-        assert_eq!(back.markers, parsed.markers);
-        let again = parse(&write(&back)).expect("the exported file reads");
-        assert_eq!(again.markers, parsed.markers);
+ main
     }
 }

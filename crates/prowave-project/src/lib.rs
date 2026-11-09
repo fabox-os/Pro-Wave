@@ -252,6 +252,8 @@ pub struct TrackDoc {
     /// The lanes of the effect parameters; a point's value is a position 0..=1 along the
     /// parameter's range.
     pub auto_fx: Vec<AutoFxDoc>,
+    /// The lanes of the send levels; a point's value is a knob position 0..=1.
+    pub auto_send: Vec<AutoSendDoc>,
     /// The mix group of the track (index into `ProjectDoc::groups`).
     pub group: Option<usize>,
     /// Individual track height (factor of the global track zoom).
@@ -305,6 +307,15 @@ pub struct InsertDoc {
 pub struct AutoFxDoc {
     pub slot: u8,
     pub param: u8,
+    pub points: Vec<[f64; 3]>,
+}
+
+/// The automation lane of one send level.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct AutoSendDoc {
+    /// The send slot, 0 to `MAX_SENDS - 1`.
+    pub slot: u8,
     pub points: Vec<[f64; 3]>,
 }
 
@@ -389,6 +400,7 @@ impl Default for TrackDoc {
             auto_volume: Vec::new(),
             auto_pan: Vec::new(),
             auto_fx: Vec::new(),
+            auto_send: Vec::new(),
             group: None,
             height: 1.0,
             indent: 0,

@@ -96,6 +96,29 @@ impl History {
         self.reset(p);
     }
 
+    /// How many edits can be undone and redone (Edit > Undo History…).
+    pub fn depths(&self) -> (usize, usize) {
+        (self.undo.len(), self.redo.len())
+    }
+
+    /// Goes back `steps` edits, as far as the history goes.
+    pub fn undo_steps(&mut self, p: &mut Project, steps: usize) {
+        for _ in 0..steps {
+            if !self.undo(p) {
+                break;
+            }
+        }
+    }
+
+    /// Goes forward `steps` undone edits, as far as the history goes.
+    pub fn redo_steps(&mut self, p: &mut Project, steps: usize) {
+        for _ in 0..steps {
+            if !self.redo(p) {
+                break;
+            }
+        }
+    }
+
     /// Puts `state` in place of `p`, keeping what is not part of an edit (playhead, transport)
     /// and making the engine rebuild its song.
     fn restore(&mut self, p: &mut Project, mut state: Project) {
