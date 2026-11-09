@@ -10,7 +10,7 @@ use crate::mtc::{MtcGenerator, MtcMessage};
 use crate::routing::AutoPoint;
 #[cfg(test)]
 use crate::routing::SendSpec;
-use crate::routing::{send_gain, AutoLane, AutoTarget, Route, MAX_BUSES};
+use crate::routing::{send_gain, AutoLane, AutoTarget, Route, MAX_BUSES, MAX_SENDS};
 use crate::soundfont::SfPlayer;
 use crate::synth::{kit_voice, osc, Kit, Svf, SynthPatch};
 use crate::tempo_map::{SmpteRate, TempoMap};
@@ -812,6 +812,9 @@ pub struct EngineCore {
     /// The value the automation gives each strip right now (None: its fader or knob rules).
     auto_vol: Vec<Option<f32>>,
     auto_pan: Vec<Option<f32>>,
+    /// The send levels automation gives each strip right now, per send slot (None: the
+    /// strip's own knob rules).
+    auto_send: Vec<[Option<f32>; MAX_SENDS]>,
     auto_on: Vec<bool>,
     auto_tracks: Vec<u16>,
     /// Some lane is played.
@@ -950,6 +953,7 @@ impl EngineCore {
             automation: Vec::new(),
             auto_vol: vec![None; MAX_TRACKS],
             auto_pan: vec![None; MAX_TRACKS],
+            auto_send: vec![[None; MAX_SENDS]; MAX_TRACKS],
             auto_on: vec![false; MAX_TRACKS],
             auto_tracks: Vec::with_capacity(MAX_TRACKS),
             auto_left: 0,
@@ -1293,6 +1297,11 @@ impl EngineCore {
                     self.auto_vol[t] = Some((v + lane.offset_db).clamp(-96.0, 6.0))
                 }
                 AutoTarget::Pan => self.auto_pan[t] = Some(v.clamp(-1.0, 1.0)),
+                AutoTarget::Send { slot } => {
+                    if let Some(level) = self.auto_send[t].get_mut(slot as usize) {
+                        *level = Some(v.clamp(0.0, 1.0));
+                    }
+                }
                 AutoTarget::Fx { slot, param } => {
                     if let Some(chain) = self.chains[t].as_mut() {
                         chain.set_param_norm(slot as usize, param as usize, v);
@@ -1340,10 +1349,13 @@ impl EngineCore {
         }
         let (xl, xr) = (xl as f64, xr as f64);
         if audible && route.bus_in == 0 {
-            for s in route.sends.iter().filter(|s| s.bus > 0 && s.pre) {
-                let g = send_gain(s.level) as f64;
-                self.bus_l[s.bus as usize - 1] += xl * g;
-                self.bus_r[s.bus as usize - 1] += xr * g;
+            for (slot, s) in route.sends.iter().enumerate() {
+                if s.bus > 0 && s.pre {
+                    let level = self.auto_send[t][slot].unwrap_or(s.level);
+                    let g = send_gain(level) as f64;
+                    self.bus_l[s.bus as usize - 1] += xl * g;
+                    self.bus_r[s.bus as usize - 1] += xr * g;
+                }
             }
         }
         let (yl, yr) = (
@@ -1352,10 +1364,13 @@ impl EngineCore {
         );
         if audible {
             if route.bus_in == 0 {
-                for s in route.sends.iter().filter(|s| s.bus > 0 && !s.pre) {
-                    let g = send_gain(s.level) as f64;
-                    self.bus_l[s.bus as usize - 1] += yl * g;
-                    self.bus_r[s.bus as usize - 1] += yr * g;
+                for (slot, s) in route.sends.iter().enumerate() {
+                    if s.bus > 0 && !s.pre {
+                        let level = self.auto_send[t][slot].unwrap_or(s.level);
+                        let g = send_gain(level) as f64;
+                        self.bus_l[s.bus as usize - 1] += yl * g;
+                        self.bus_r[s.bus as usize - 1] += yr * g;
+                    }
                 }
             }
             self.track_pk_l[t] = self.track_pk_l[t].max(yl.abs() as f32);
@@ -1704,6 +1719,7 @@ impl EngineCore {
                     let _ = self.trash.push(Garbage::Automation(old));
                     self.auto_vol.fill(None);
                     self.auto_pan.fill(None);
+                    self.auto_send.fill([None; MAX_SENDS]);
                     self.auto_on.fill(false);
                     self.auto_tracks.clear();
                     // Effect parameters go back to what the user set; the lanes that are
@@ -1712,11 +1728,10 @@ impl EngineCore {
                         chain.restore();
                     }
                     self.auto_any = self.automation.iter().any(|l| l.follow);
-                    for lane in self
-                        .automation
-                        .iter()
-                        .filter(|l| l.follow && !matches!(l.target, AutoTarget::Fx { .. }))
-                    {
+                    for lane in self.automation.iter().filter(|l| {
+                        l.follow
+                            && !matches!(l.target, AutoTarget::Fx { .. } | AutoTarget::Send { .. })
+                    }) {
                         let t = lane.track as usize;
                         if t < MAX_TRACKS && !self.auto_on[t] {
                             self.auto_on[t] = true;
@@ -4010,6 +4025,66 @@ mod tests {
             512 - 4,
             "a ring of 4 keeps 4"
         );
+    }
+
+    #[test]
+    fn a_send_level_follows_its_lane_and_goes_back_when_the_lane_stops() {
+        // Track 0 sends to bus 2 at half its fader; track 1 is the Aux that plays bus 2.
+        let level = |follow: bool| {
+            let (mut e, mut tx, _s) = rig();
+            assert!(tx
+                .push(Command::SetSong(two_tracks_song(vec![strip_note(0, 4.0)])))
+                .is_ok());
+            let mut route = Route::default();
+            route.sends[0] = SendSpec {
+                bus: 2,
+                level: 0.5,
+                pre: false,
+            };
+            assert!(tx.push(Command::SetRoute { track: 0, route }).is_ok());
+            assert!(tx
+                .push(Command::SetRoute {
+                    track: 1,
+                    route: Route {
+                        bus_in: 2,
+                        ..Route::default()
+                    },
+                })
+                .is_ok());
+            assert!(tx
+                .push(Command::SetAutomation(vec![AutoLane {
+                    track: 0,
+                    target: AutoTarget::Send { slot: 0 },
+                    follow,
+                    offset_db: 0.0,
+                    points: vec![AutoPoint::new(0.0, 1.0)],
+                }]))
+                .is_ok());
+            assert!(tx.push(Command::Play).is_ok());
+            energy(&render(&mut e, 0.4), 0.2, 0.4)
+        };
+        let played = level(true);
+        let ignored = level(false);
+        // The lane opens the send to 1.0 (twice the fader) instead of the knob's 0.5.
+        assert!(played > ignored * 2.0, "{played} {ignored}");
+
+        // A lane that stops following no longer moves the send.
+        let (mut e, mut tx, _s) = rig();
+        let mut lane = AutoLane {
+            track: 0,
+            target: AutoTarget::Send { slot: 0 },
+            follow: true,
+            offset_db: 0.0,
+            points: vec![AutoPoint::new(0.0, 0.9)],
+        };
+        assert!(tx.push(Command::SetAutomation(vec![lane.clone()])).is_ok());
+        e.drain_commands();
+        e.update_automation();
+        assert_eq!(e.auto_send[0][0], Some(0.9));
+        lane.follow = false;
+        assert!(tx.push(Command::SetAutomation(vec![lane])).is_ok());
+        e.drain_commands();
+        assert_eq!(e.auto_send[0][0], None);
     }
 
     #[test]

@@ -46,6 +46,7 @@ fn current(t: &Track, target: AutoTarget) -> f32 {
                 Some(info.to_norm(i.params[param as usize]))
             })
             .unwrap_or(0.0),
+        AutoTarget::Send { slot } => t.sends.get(slot as usize).map_or(0.0, |s| s.level),
     }
 }
 
@@ -124,6 +125,11 @@ fn set_control(t: &mut Track, target: AutoTarget, value: f32) {
                 }
             }
         }
+        AutoTarget::Send { slot } => {
+            if let Some(s) = t.sends.get_mut(slot as usize) {
+                s.level = value.clamp(0.0, 1.0);
+            }
+        }
     }
 }
 
@@ -174,6 +180,11 @@ pub fn lane_label(t: &Track, target: AutoTarget) -> String {
                 None => "?".to_string(),
             }
         }
+        // A send slot that was taken away has no lane name any more.
+        AutoTarget::Send { slot } => match t.sends.get(slot as usize).filter(|s| s.bus.is_some()) {
+            Some(_) => trf("Send {}", &[&(slot as usize + 1)]),
+            None => "?".to_string(),
+        },
     }
 }
 
@@ -211,6 +222,7 @@ pub fn value_text(t: &Track, target: AutoTarget, v: f32) -> String {
                 format!("{x:.1} {}", info.unit)
             }
         }
+        AutoTarget::Send { .. } => format!("{:.0} %", v.clamp(0.0, 1.0) * 100.0),
     }
 }
 
@@ -219,7 +231,7 @@ fn frac_of(target: AutoTarget, v: f32) -> f32 {
     match target {
         AutoTarget::Volume => db_to_frac(v),
         AutoTarget::Pan => (v.clamp(-1.0, 1.0) + 1.0) / 2.0,
-        AutoTarget::Fx { .. } => v.clamp(0.0, 1.0),
+        AutoTarget::Fx { .. } | AutoTarget::Send { .. } => v.clamp(0.0, 1.0),
     }
 }
 
@@ -228,7 +240,7 @@ fn value_of(target: AutoTarget, f: f32) -> f32 {
     match target {
         AutoTarget::Volume => frac_to_db(f).clamp(lo, hi),
         AutoTarget::Pan => (f.clamp(0.0, 1.0) * 2.0 - 1.0).clamp(lo, hi),
-        AutoTarget::Fx { .. } => f.clamp(lo, hi),
+        AutoTarget::Fx { .. } | AutoTarget::Send { .. } => f.clamp(lo, hi),
     }
 }
 
@@ -337,6 +349,11 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
                                 });
                             }
                         }
+                        for (slot, send) in t.sends.iter().enumerate() {
+                            if send.bus.is_some() {
+                                choices.push(AutoTarget::Send { slot: slot as u8 });
+                            }
+                        }
                         for c in choices {
                             let dot = if t.auto.lane(c).is_empty() {
                                 "  "
@@ -415,7 +432,7 @@ fn canvas(ui: &mut Ui, p: &mut Project, ed: &mut AutoEditor, ti: usize, target: 
     let marks: &[f32] = match target {
         AutoTarget::Volume => &[6.0, 0.0, -6.0, -20.0, -40.0],
         AutoTarget::Pan => &[-1.0, 0.0, 1.0],
-        AutoTarget::Fx { .. } => &[0.0, 0.25, 0.5, 0.75, 1.0],
+        AutoTarget::Fx { .. } | AutoTarget::Send { .. } => &[0.0, 0.25, 0.5, 0.75, 1.0],
     };
     for m in marks {
         let y = rect.bottom() - frac_of(target, *m) * rect.height();
@@ -434,7 +451,7 @@ fn canvas(ui: &mut Ui, p: &mut Project, ed: &mut AutoEditor, ti: usize, target: 
     let colour = match target {
         AutoTarget::Volume => Color32::from_rgb(0x6c, 0xd0, 0x5a),
         AutoTarget::Pan => Color32::from_rgb(0x5a, 0xa8, 0xf0),
-        AutoTarget::Fx { .. } => Color32::from_rgb(0xe6, 0x9a, 0x2e),
+        AutoTarget::Fx { .. } | AutoTarget::Send { .. } => Color32::from_rgb(0xe6, 0x9a, 0x2e),
     };
     let points: Vec<AutoPoint> = p.tracks[ti].auto.lane(target).to_vec();
     let to_pos = |beat: f64, value: f32| point_pos(rect, from, span, target, beat, value);
@@ -626,6 +643,29 @@ mod tests {
         let mut p = Project::empty();
         p.tracks[0].auto.mode = AutoMode::Touch;
         p
+    }
+
+    #[test]
+    fn a_send_lane_moves_the_send_knob_like_the_other_controls() {
+        let mut p = project();
+        let target = AutoTarget::Send { slot: 0 };
+        p.tracks[0].sends = vec![crate::model::SendSlot {
+            bus: Some(3),
+            level: 0.2,
+            pre: false,
+        }];
+        assert_eq!(current(&p.tracks[0], target), 0.2);
+        moved(&mut p.tracks[0], target, 0.7);
+        assert_eq!(p.tracks[0].sends[0].level, 0.7);
+        assert_eq!(value_text(&p.tracks[0], target, 0.7), "70 %");
+        assert_eq!(lane_label(&p.tracks[0], target), "Send 1");
+        p.tracks[0].auto.mode = AutoMode::Read;
+        p.tracks[0].auto.set_point(target, 0.0, 0.9);
+        assert_eq!(shown_value(&p.tracks[0], target, 1.0), 0.9);
+        assert!(!editable(&p.tracks[0], target), "the lane plays it");
+        // A send slot that was taken away has no lane name.
+        p.tracks[0].sends.clear();
+        assert_eq!(lane_label(&p.tracks[0], target), "?");
     }
 
     #[test]
