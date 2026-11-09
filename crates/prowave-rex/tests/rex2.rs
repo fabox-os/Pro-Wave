@@ -139,6 +139,25 @@ fn damaged_files_are_refused_or_reported_without_panicking() {
 }
 
 #[test]
+fn the_audio_chunk_is_padded_to_whole_words() {
+    for frames in [1usize, 7, 1_000, 4_095, 8_000, 12_345] {
+        let data = RexData::new(44_100, 1, 100.0, tone(frames, 220.0, 44_100));
+        let bytes = write::write(&data).unwrap();
+        let at = find(&bytes, b"SDAT").expect("SDAT is written");
+        let size = u32::from_be_bytes([bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]])
+            as usize;
+        assert_eq!(
+            size % 4,
+            0,
+            "{frames} frames produced a {size}-byte audio chunk"
+        );
+        // Padding must not change what the reader decodes.
+        let rex = RexFile::parse(&bytes).unwrap();
+        assert_eq!(rex.frame_count(), frames);
+    }
+}
+
+#[test]
 fn writing_refuses_bad_input() {
     assert!(write::write(&RexData::new(44_100, 3, 120.0, vec![0; 10])).is_err());
     assert!(write::write(&RexData::new(0, 1, 120.0, vec![0; 10])).is_err());

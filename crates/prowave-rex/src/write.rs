@@ -93,7 +93,12 @@ pub fn write(data: &RexData) -> Result<Vec<u8>, String> {
         children.extend_from_slice(&cat(b"SLCL", &slice_chunks));
     }
     children.extend_from_slice(&sinf(data, frames));
-    let audio = dwop::encode(&data.samples, usize::from(data.channels))?;
+    let mut audio = dwop::encode(&data.samples, usize::from(data.channels))?;
+    // DWOP readers consume the stream in 32-bit words and drop a trailing partial word, so pad
+    // the last word with zero bits. Every real REX2 file's SDAT payload is a multiple of four.
+    while audio.len() % 4 != 0 {
+        audio.push(0);
+    }
     children.extend_from_slice(&chunk(b"SDAT", &audio));
 
     let mut file = cat(b"REX2", &children);
