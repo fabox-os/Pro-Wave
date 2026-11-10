@@ -1244,6 +1244,22 @@ mod tests {
     }
 
     #[test]
+    fn a_hosted_parameter_lane_reaches_the_engine() {
+        use crate::model::{AutoTarget, HOSTED_SLOT};
+        let mut p = Project::empty();
+        let target = AutoTarget::Fx {
+            slot: HOSTED_SLOT,
+            param: 0,
+        };
+        p.tracks[0].auto.set_point(target, 0.0, 0.5);
+        let lanes = automation_lanes(&p);
+        assert!(
+            lanes.iter().any(|lane| lane.target == target),
+            "the hosted lane must be part of the engine automation"
+        );
+    }
+
+    #[test]
     fn hosted_latency_counts_for_compensation() {
         use crate::model::HostedInsert;
         use prowave_plugin_host::Format;

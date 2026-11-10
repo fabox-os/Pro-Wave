@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 use egui::{Color32, RichText};
 use prowave_plugin_host as host;
 
+use crate::automation;
 use crate::engine_sync::EngineSync;
-use crate::model::{HostedInsert, Project};
+use crate::model::{AutoTarget, HostedInsert, Project, HOSTED_SLOT};
 use crate::UiState;
 
 /// Accent color per format: VST3 green, Audio Units amber, CLAP blue.
@@ -60,13 +61,25 @@ struct Active {
 /// What the windows asked for, applied after drawing so borrows stay simple.
 enum Action {
     Scan,
-    Insert { target: Target, key: String },
+    Insert {
+        target: Target,
+        key: String,
+    },
     Remove(Target),
-    Bypass { target: Target, on: bool },
+    Bypass {
+        target: Target,
+        on: bool,
+    },
     OpenControls(Target),
     CloseControls,
     OpenEditor(Target),
-    SetParameter { target: Target, id: u64, value: f64 },
+    SetParameter {
+        target: Target,
+        id: u64,
+        param: u8,
+        value: f64,
+        ended: bool,
+    },
     ResetParameters(Target),
 }
 
@@ -417,10 +430,29 @@ impl Plugins {
                         }
                     }
                 }
-                Action::SetParameter { target, id, value } => {
+                Action::SetParameter {
+                    target,
+                    id,
+                    param,
+                    value,
+                    ended,
+                } => {
                     if let Some(active) = self.active.get_mut(&target) {
                         if let Err(error) = active.control.set_parameter(id, value) {
                             self.error = Some(error.to_string());
+                        }
+                    }
+                    if let Target::Track(i) = target {
+                        let (beat, playing) = (p.position_beats, p.playing);
+                        if let Some(track) = p.tracks.get_mut(i) {
+                            let auto = AutoTarget::Fx {
+                                slot: HOSTED_SLOT,
+                                param,
+                            };
+                            automation::moved(track, auto, value as f32);
+                            if ended {
+                                automation::released(track, auto, beat, playing);
+                            }
                         }
                     }
                 }
@@ -859,6 +891,7 @@ impl Plugins {
     ) {
         let title =
             insert_of(p, target).map_or_else(|| "Plug-in".to_string(), |saved| saved.name.clone());
+        let beat = p.position_beats;
         let mut open = self.window == Some(target);
         egui::Window::new(format!("{title} · {}", target.label(p)))
             .id(egui::Id::unique("plugin_controls"))
@@ -903,30 +936,66 @@ impl Plugins {
                     return;
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for parameter in &mut active.parameters {
-                        let Some(value) = parameter.value else {
+                    for (param, parameter) in active.parameters.iter_mut().enumerate() {
+                        let Some(stored) = parameter.value else {
                             continue;
                         };
+                        // Read-mode lanes move the control; the engine's automation reaches the
+                        // plug-in through the host adapter, so the value shown follows it.
+                        let auto = AutoTarget::Fx {
+                            slot: HOSTED_SLOT,
+                            param: param as u8,
+                        };
+                        let track_i = match target {
+                            Target::Track(i) => Some(i),
+                            Target::Master => None,
+                        };
+                        let played = track_i
+                            .and_then(|i| p.tracks.get(i))
+                            .and_then(|track| track.auto.played(auto, beat));
+                        let editable = track_i.is_none_or(|i| {
+                            p.tracks
+                                .get(i)
+                                .is_some_and(|track| automation::editable(track, auto))
+                        });
+                        let automated = track_i
+                            .and_then(|i| p.tracks.get(i))
+                            .is_some_and(|track| !track.auto.lane(auto).is_empty());
                         ui.horizontal(|ui| {
-                            ui.add_sized(
+                            let label = ui.add_sized(
                                 [148.0, 18.0],
                                 egui::Label::new(RichText::new(&parameter.title).size(12.0))
                                     .truncate(),
                             );
-                            let mut v = value;
+                            if automated {
+                                label.on_hover_text("Automated");
+                            }
+                            let mut v = played.map(f64::from).unwrap_or(stored);
                             let mut slider = egui::Slider::new(&mut v, 0.0..=1.0)
                                 .show_value(false)
                                 .clamping(egui::SliderClamping::Always);
                             if parameter.discrete && parameter.steps > 0 {
                                 slider = slider.step_by(1.0 / f64::from(parameter.steps));
                             }
-                            let response = ui.add_sized([220.0, 18.0], slider);
+                            let response =
+                                ui.add_enabled_ui(editable, |ui| ui.add_sized([220.0, 18.0], slider));
+                            let response = response.inner;
                             if response.changed() {
                                 parameter.value = Some(v);
                                 actions.push(Action::SetParameter {
                                     target,
                                     id: parameter.id,
+                                    param: param as u8,
                                     value: v,
+                                    ended: !response.dragged(),
+                                });
+                            } else if response.drag_stopped() {
+                                actions.push(Action::SetParameter {
+                                    target,
+                                    id: parameter.id,
+                                    param: param as u8,
+                                    value: v,
+                                    ended: true,
                                 });
                             }
                             let text = if parameter.units.is_empty() {

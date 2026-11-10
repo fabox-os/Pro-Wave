@@ -20,4 +20,8 @@ pub trait HostedEffect: Send {
 
     /// Passes audio through unchanged while leaving the plug-in loaded (Logic: Bypass).
     fn set_bypass(&mut self, bypass: bool);
+
+    /// Automation for parameter `param` (index in the host's parameter list), normalized to
+    /// 0..=1. Called on the audio thread at the automation rate.
+    fn set_param_norm(&mut self, param: usize, value: f32);
 }

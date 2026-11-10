@@ -1333,7 +1333,18 @@ impl EngineCore {
                     }
                 }
                 AutoTarget::Fx { slot, param } => {
-                    if let Some(chain) = self.chains[t].as_mut() {
+                    // The hosted plug-in uses a virtual slot past the built-in inserts (see
+                    // `prowave_app::model::HOSTED_SLOT`).
+                    if usize::from(slot) >= crate::fx::MAX_INSERTS {
+                        if let Some(effect) = self
+                            .track_hosted
+                            .get_mut(t)
+                            .and_then(|slots| slots.first_mut())
+                            .and_then(Option::as_mut)
+                        {
+                            effect.set_param_norm(param as usize, v);
+                        }
+                    } else if let Some(chain) = self.chains[t].as_mut() {
                         chain.set_param_norm(slot as usize, param as usize, v);
                     }
                 }

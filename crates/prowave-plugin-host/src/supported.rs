@@ -3,8 +3,9 @@
 use std::path::PathBuf;
 
 use plughost::{
-    BlockContext, Chain, ChainSlot, Events, Layout, PluginId, PluginInfo, PluginKind, PluginRef,
-    PluginState, ProcessMode, RealtimeConfig, RealtimeEndpoint, Scanner, SpawnOptions,
+    AutomationEvent, BlockContext, Chain, ChainSlot, Events, Layout, ParameterChange, PluginId,
+    PluginInfo, PluginKind, PluginRef, PluginState, ProcessMode, RealtimeConfig, RealtimeEndpoint,
+    Scanner, SpawnOptions,
 };
 use prowave_engine::HostedEffect;
 
@@ -133,11 +134,12 @@ impl Catalog {
         config.mode = ProcessMode::Realtime;
         chain.prepare_audio(&config).map_err(describe)?;
         let parameters = read_parameters(&mut chain)?;
+        let ids: Vec<u64> = parameters.iter().map(|parameter| parameter.id).collect();
         let endpoint = chain
             .realtime_endpoint(&RealtimeConfig::new(quantum))
             .map_err(describe)?;
         let latency = chain.start_realtime().map_err(describe)?;
-        let effect = Box::new(RealtimeEffect::new(endpoint, latency, quantum));
+        let effect = Box::new(RealtimeEffect::new(endpoint, latency, quantum, ids));
         Ok(Hosted {
             control: Control { chain },
             effect,
@@ -258,10 +260,16 @@ pub struct RealtimeEffect {
     /// The plug-in's latency plus one adapter quantum, in frames.
     latency: usize,
     bypass: bool,
+    /// The native parameter ID of each index in the host's parameter list.
+    ids: Vec<u64>,
+    /// Automation changes waiting for the next block, and the events built from them. Both
+    /// reserve their room when the effect is created, so the audio thread never allocates.
+    pending: Vec<(u64, f64)>,
+    automation: Vec<AutomationEvent>,
 }
 
 impl RealtimeEffect {
-    fn new(endpoint: RealtimeEndpoint, latency: u32, quantum: usize) -> Self {
+    fn new(endpoint: RealtimeEndpoint, latency: u32, quantum: usize, ids: Vec<u64>) -> Self {
         Self {
             endpoint,
             quantum,
@@ -275,6 +283,9 @@ impl RealtimeEffect {
             produced: Events::for_block(),
             latency: latency as usize + quantum,
             bypass: false,
+            ids,
+            pending: Vec::with_capacity(32),
+            automation: Vec::with_capacity(32),
         }
     }
 }
@@ -285,11 +296,16 @@ impl HostedEffect for RealtimeEffect {
         // helper's output block, then play it sample by sample.
         if self.played >= self.quantum {
             if self.filled == self.quantum {
+                self.automation.clear();
+                for (id, value) in self.pending.drain(..) {
+                    self.automation
+                        .push(AutomationEvent::new(0, ParameterChange::new(id, 0, value)));
+                }
                 let result = self.endpoint.process_audio_f32(
                     &BlockContext::new(self.quantum),
                     &[&self.input_l[..], &self.input_r[..]],
                     &mut [&mut self.output_l[..], &mut self.output_r[..]],
-                    &[],
+                    &self.automation,
                     &self.events,
                     &mut self.produced,
                 );
@@ -325,6 +341,21 @@ impl HostedEffect for RealtimeEffect {
 
     fn set_bypass(&mut self, bypass: bool) {
         self.bypass = bypass;
+    }
+
+    fn set_param_norm(&mut self, param: usize, value: f32) {
+        let Some(&id) = self.ids.get(param) else {
+            return;
+        };
+        if !value.is_finite() {
+            return;
+        }
+        let value = f64::from(value.clamp(0.0, 1.0));
+        if self.pending.len() < self.pending.capacity() {
+            self.pending.push((id, value));
+        } else if let Some(last) = self.pending.last_mut() {
+            *last = (id, value);
+        }
     }
 }
 

@@ -241,7 +241,11 @@ impl Insert {
 
 /// A second-party plug-in (VST3, Audio Unit or CLAP) on the Stereo Out strip.
 ///
-/// The plug-in itself lives in [`crate::plugins::Plugins`] (its control chain) and in the
+/// Virtual insert slot used by automation lanes for a track's hosted plug-in. The built-in
+/// inserts use slots 0..MAX_INSERTS; the engine sends this slot to the hosted stage.
+pub const HOSTED_SLOT: u8 = u8::MAX;
+
+/// The plug-in itself lives in [`crate::plugins::Plugins`] (its control chains) and in the
 /// engine (its realtime adapter); this is the part a project file keeps: what to load, whether
 /// it is bypassed, and the plug-in's own state blob.
 #[derive(Clone, PartialEq, Debug)]
