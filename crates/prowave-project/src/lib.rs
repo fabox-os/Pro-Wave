@@ -241,6 +241,8 @@ pub struct TrackDoc {
     /// The effects of the channel strip, first to last (`inserts` has their names for older
     /// versions of the program).
     pub fx: Vec<InsertDoc>,
+    /// A hosted VST3/Audio Unit/CLAP plug-in after the built-in effects.
+    pub hosted: Option<HostedDoc>,
     /// All sends of the strip (the first is also in `send_bus`, `send_level` and `send_pre`).
     pub sends: Vec<SendDoc>,
     /// Automation: "Off", "Read", "Touch", "Latch" or "Write", and the points (beat, value)
@@ -436,6 +438,7 @@ impl Default for TrackDoc {
             groove: false,
             follow_groove: false,
             regions: Vec::new(),
+            hosted: None,
         }
     }
 }

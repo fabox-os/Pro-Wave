@@ -1097,6 +1097,7 @@ mod tests {
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
+            hosted: None,
             instrument: None,
             regions: vec![Region {
                 name: "r".into(),

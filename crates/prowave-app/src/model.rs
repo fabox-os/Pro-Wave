@@ -655,6 +655,8 @@ pub struct Track {
     pub volume_db: f32,
     pub pan: f32,
     pub inserts: Vec<Insert>,
+    /// A hosted VST3/Audio Unit/CLAP plug-in after the built-in inserts.
+    pub hosted: Option<HostedInsert>,
     pub instrument: Option<&'static str>,
     pub regions: Vec<Region>,
     pub params: TrackParams,
@@ -731,6 +733,7 @@ impl Track {
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
+            hosted: None,
             instrument,
             regions: vec![],
             params: TrackParams::default(),
@@ -949,6 +952,7 @@ impl Project {
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
+            hosted: None,
             instrument: Some("Sampler"),
             regions: vec![],
             params: TrackParams::default(),
@@ -998,6 +1002,7 @@ impl Project {
             volume_db: vol,
             pan: 0.0,
             inserts: inserts_from_names(&ins),
+            hosted: None,
             instrument: inst,
             regions: vec![Region {
                 name: name.into(),
