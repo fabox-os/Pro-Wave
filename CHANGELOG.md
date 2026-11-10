@@ -9,6 +9,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
 
+✅ **Compressed MusicXML (.mxl):** the new `prowave-mxl` crate opens a compressed MusicXML bundle, follows `META-INF/container.xml` to its root score (or falls back to the first XML entry), and returns the score text for `prowave-musicxml`. Entry count and uncompressed sizes are capped; UTF-16 scores are refused for now. It is not wired into the app's import menu yet.
 
 ✅ **Rename Project…:** **File > Project Management > Rename Project…** now opens Project Settings on its General tab, where the project's name is edited — the name the window title and a Save As default to. The entry used to be greyed out.
 ✅ **GarageBand projects (audio):** **File > Import > Other Projects…** takes a GarageBand `.band` bundle (the macOS folder) and adds an audio track for each of its audio files, read from the project's `Media/` folder. The project's tempo, signature and arrangement (MIDI regions, where each audio region sits) are not read yet — `GARAGEBAND-FORMAT-SPEC.md` has the plan — and an iPad/iPhone `.band` zip is recognised but says to unzip it first.
