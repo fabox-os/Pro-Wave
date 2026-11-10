@@ -41,7 +41,15 @@ fn main() {
         command.arg("-O2").arg("-o").arg(&library).arg(source);
         command
     };
-    let status = command.status().expect("run the C compiler");
-    assert!(status.success(), "the C fixture did not build");
-    println!("cargo:rustc-env=LADSPA_FIXTURE={}", library.display());
+    let compiled = command.status();
+    let built = matches!(&compiled, Ok(status) if status.success());
+    if built {
+        println!("cargo:rustc-env=LADSPA_FIXTURE={}", library.display());
+    } else if os == "windows" {
+        // GitHub's Windows image has MSVC but not `cl` on PATH for a plain build script.
+        // The ABI test is skipped there; the crate itself still compiles.
+        println!("cargo:warning=no C compiler for the LADSPA test fixture; ABI tests are skipped");
+    } else {
+        panic!("the C fixture did not build: {:?}", compiled);
+    }
 }
