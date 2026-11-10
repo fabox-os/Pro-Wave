@@ -111,3 +111,22 @@ fn output_stays_bounded_and_never_panics() {
     }
     assert!(stretch(&[0.25; 1], 1, 2.0).iter().all(|s| s.is_finite()));
 }
+
+#[test]
+fn an_oversized_request_is_refused() {
+    let input = mono(440.0);
+    assert!(stretch(&input, 1, 1.0e9).is_empty());
+}
+
+#[test]
+fn a_quiet_input_is_stretched_like_a_loud_one() {
+    let loud = mono(440.0);
+    let quiet: Vec<f32> = loud.iter().map(|s| s * 0.01).collect();
+    let a = stretch(&loud, 1, 1.5);
+    let b = stretch(&quiet, 1, 1.5);
+    assert_eq!(a.len(), b.len());
+    // Same choices of offset, so the quiet result is the loud one scaled.
+    for (x, y) in a.iter().zip(&b).skip(64).take(4_000) {
+        assert!((x * 0.01 - y).abs() < 1e-3, "{x} {y}");
+    }
+}
