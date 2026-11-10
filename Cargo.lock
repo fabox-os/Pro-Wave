@@ -3477,10 +3477,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "prowave-musicxml"
-version = "0.1.0"
-dependencies = [
- "quick-xml 0.42.0",
+
 ]
 
 [[package]]
