@@ -36,13 +36,14 @@ const HINT_SAMPLE_RATE: c_int = 0x8;
 const HINT_LOGARITHMIC: c_int = 0x10;
 const HINT_INTEGER: c_int = 0x20;
 const HINT_DEFAULT_MASK: c_int = 0x3c0;
-const HINT_DEFAULT_1: c_int = 0x80;
-const HINT_DEFAULT_100: c_int = 0x100;
-const HINT_DEFAULT_440: c_int = 0x140;
-const HINT_DEFAULT_MINIMUM: c_int = 0x180;
-const HINT_DEFAULT_MAXIMUM: c_int = 0x1c0;
-const HINT_DEFAULT_LOW: c_int = 0x200;
-const HINT_DEFAULT_HIGH: c_int = 0x240;
+const HINT_DEFAULT_MINIMUM: c_int = 0x40;
+const HINT_DEFAULT_LOW: c_int = 0x80;
+const HINT_DEFAULT_MIDDLE: c_int = 0xc0;
+const HINT_DEFAULT_HIGH: c_int = 0x100;
+const HINT_DEFAULT_MAXIMUM: c_int = 0x140;
+const HINT_DEFAULT_1: c_int = 0x240;
+const HINT_DEFAULT_100: c_int = 0x280;
+const HINT_DEFAULT_440: c_int = 0x2c0;
 
 /// The sample rate used to scale `LADSPA_HINT_SAMPLE_RATE` defaults in [`PluginInfo`]. A plug-in
 /// instance still gets the session's real rate.
@@ -91,7 +92,14 @@ pub enum Error {
     Instantiate,
     BadPort(usize),
     BadValue,
-    Buffer(String),
+    /// The caller passed a different number of audio ports than the plug-in has. Numeric so
+    /// the audio-thread entry point does not allocate.
+    PortCount {
+        expected_inputs: usize,
+        expected_outputs: usize,
+        inputs: usize,
+        outputs: usize,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -105,7 +113,15 @@ impl std::fmt::Display for Error {
             Error::Instantiate => f.write_str("the plug-in could not be instantiated"),
             Error::BadPort(port) => write!(f, "port {port} is not a writable control"),
             Error::BadValue => f.write_str("a control value must be finite"),
-            Error::Buffer(message) => f.write_str(message),
+            Error::PortCount {
+                expected_inputs,
+                expected_outputs,
+                inputs,
+                outputs,
+            } => write!(
+                f,
+                "expected {expected_inputs} input and {expected_outputs} output ports, got {inputs} and {outputs}"
+            ),
         }
     }
 }
@@ -280,6 +296,14 @@ impl Instance {
         }
 
         let info = &inner.plugins[index];
+        let port_count = usize::try_from(descriptor.port_count).unwrap_or(0);
+        let raw_hints = if descriptor.port_range_hints.is_null() {
+            None
+        } else {
+            // SAFETY: the descriptor's port count bounds its hint table, which stays mapped
+            // through `inner`; the slice is only read here.
+            Some(unsafe { std::slice::from_raw_parts(descriptor.port_range_hints, port_count) })
+        };
         let mut audio_in = Vec::new();
         let mut audio_out = Vec::new();
         let mut controls = Vec::new();
@@ -289,9 +313,22 @@ impl Instance {
                 PortKind::AudioInput => audio_in.push(port.index),
                 PortKind::AudioOutput => audio_out.push(port.index),
                 PortKind::ControlInput | PortKind::ControlOutput => {
+                    // Sample-rate-scaled bounds and defaults must use this instance's rate,
+                    // not the rate the UI metadata was computed at.
+                    let range = raw_hints
+                        .and_then(|hints| hints.get(port.index))
+                        .map(|hint| hint_values(hint, sample_rate as f32))
+                        .unwrap_or(HintValues {
+                            min: 0.0,
+                            max: 1.0,
+                            default: 0.0,
+                            toggled: false,
+                            integer: false,
+                            logarithmic: false,
+                        });
                     let slot = values.len();
                     values.push(if port.kind == PortKind::ControlInput {
-                        port.default
+                        range.default
                     } else {
                         0.0
                     });
@@ -299,8 +336,8 @@ impl Instance {
                         port: port.index,
                         slot,
                         output: port.kind == PortKind::ControlOutput,
-                        min: port.min,
-                        max: port.max,
+                        min: range.min,
+                        max: range.max,
                     });
                 }
             }
@@ -342,28 +379,26 @@ impl Instance {
         (self.audio_in.len(), self.audio_out.len())
     }
 
-    /// Renders `frames` from `inputs` into `outputs`. Each slice is one audio port, in port
-    /// order; slices must cover at least the shortest input.
+    /// Renders one block. Each slice is one audio port, in port order. The block length is the
+    /// shortest of all input and output slices, so a generator with no audio inputs uses its
+    /// output length; empty buffers do nothing.
     pub fn process(&mut self, inputs: &[&[f32]], outputs: &mut [&mut [f32]]) -> Result<(), Error> {
-        let frames = inputs.first().map_or(0, |input| input.len());
+        if inputs.len() != self.audio_in.len() || outputs.len() != self.audio_out.len() {
+            return Err(Error::PortCount {
+                expected_inputs: self.audio_in.len(),
+                expected_outputs: self.audio_out.len(),
+                inputs: inputs.len(),
+                outputs: outputs.len(),
+            });
+        }
+        let frames = inputs
+            .iter()
+            .map(|input| input.len())
+            .chain(outputs.iter().map(|output| output.len()))
+            .min()
+            .unwrap_or(0);
         if frames == 0 {
             return Ok(());
-        }
-        if inputs.len() != self.audio_in.len() || outputs.len() != self.audio_out.len() {
-            return Err(Error::Buffer(format!(
-                "expected {} input and {} output ports, got {} and {}",
-                self.audio_in.len(),
-                self.audio_out.len(),
-                inputs.len(),
-                outputs.len()
-            )));
-        }
-        if inputs.iter().any(|input| input.len() < frames)
-            || outputs.iter().any(|output| output.len() < frames)
-        {
-            return Err(Error::Buffer(
-                "every port buffer must cover the block".to_string(),
-            ));
         }
         for (port, input) in self.audio_in.iter().zip(inputs) {
             // SAFETY: LADSPA `connect_port` takes a mutable pointer, but an audio input port is
@@ -502,43 +537,92 @@ unsafe fn read_info(raw: *const RawDescriptor) -> Result<PluginInfo, Error> {
     })
 }
 
-fn read_hint(port: &mut PortInfo, hint: &RawRangeHint) {
+struct HintValues {
+    min: f32,
+    max: f32,
+    default: f32,
+    toggled: bool,
+    integer: bool,
+    logarithmic: bool,
+}
+
+/// The range and default a LADSPA hint describes at `rate`.
+fn hint_values(hint: &RawRangeHint, rate: f32) -> HintValues {
     let flags = hint.hint_descriptor;
+    let logarithmic = flags & HINT_LOGARITHMIC != 0;
     let scale = |value: f32| {
         if flags & HINT_SAMPLE_RATE != 0 {
-            value * METADATA_RATE
+            value * rate
         } else {
             value
         }
     };
-    port.toggled = flags & HINT_TOGGLED != 0;
-    port.integer = flags & HINT_INTEGER != 0;
-    port.logarithmic = flags & HINT_LOGARITHMIC != 0;
-    port.min = if flags & HINT_BOUNDED_BELOW != 0 {
+    let bounded_below = flags & HINT_BOUNDED_BELOW != 0 && hint.lower_bound.is_finite();
+    let bounded_above = flags & HINT_BOUNDED_ABOVE != 0 && hint.upper_bound.is_finite();
+    let mut min = if bounded_below {
         scale(hint.lower_bound)
+    } else if logarithmic && hint.upper_bound.is_finite() {
+        // A logarithmic port needs a positive lower bound; pick three decades below the top.
+        scale(hint.upper_bound) / 1000.0
     } else {
         0.0
     };
-    port.max = if flags & HINT_BOUNDED_ABOVE != 0 {
+    let mut max = if bounded_above {
         scale(hint.upper_bound)
+    } else if min > 0.0 {
+        // The host chooses an upper bound for a one-sided range; keep it practical and finite.
+        min * 1000.0
     } else {
         1.0
     };
-    if port.max < port.min {
-        std::mem::swap(&mut port.min, &mut port.max);
+    if !min.is_finite() {
+        min = 0.0;
     }
-    let (min, max) = (port.min, port.max);
-    port.default = match flags & HINT_DEFAULT_MASK {
+    if !max.is_finite() {
+        max = 1.0;
+    }
+    if max < min {
+        std::mem::swap(&mut min, &mut max);
+    }
+    let fraction = |amount: f32| {
+        if logarithmic && min > 0.0 && max > 0.0 {
+            (min.ln() + (max.ln() - min.ln()) * amount).exp()
+        } else {
+            min + (max - min) * amount
+        }
+    };
+    let mut default = match flags & HINT_DEFAULT_MASK {
+        HINT_DEFAULT_MINIMUM => min,
+        HINT_DEFAULT_LOW => fraction(0.25),
+        HINT_DEFAULT_MIDDLE => fraction(0.5),
+        HINT_DEFAULT_HIGH => fraction(0.75),
+        HINT_DEFAULT_MAXIMUM => max,
         HINT_DEFAULT_1 => 1.0,
         HINT_DEFAULT_100 => 100.0,
         HINT_DEFAULT_440 => 440.0,
-        HINT_DEFAULT_MINIMUM => min,
-        HINT_DEFAULT_MAXIMUM => max,
-        HINT_DEFAULT_LOW => min + 0.25 * (max - min),
-        HINT_DEFAULT_HIGH => min + 0.75 * (max - min),
         _ => 0.0,
+    };
+    if flags & HINT_INTEGER != 0 {
+        default = default.round();
     }
-    .clamp(min, max);
+    HintValues {
+        min,
+        max,
+        default: default.clamp(min, max),
+        toggled: flags & HINT_TOGGLED != 0,
+        integer: flags & HINT_INTEGER != 0,
+        logarithmic,
+    }
+}
+
+fn read_hint(port: &mut PortInfo, hint: &RawRangeHint) {
+    let values = hint_values(hint, METADATA_RATE);
+    port.toggled = values.toggled;
+    port.integer = values.integer;
+    port.logarithmic = values.logarithmic;
+    port.min = values.min;
+    port.max = values.max;
+    port.default = values.default;
 }
 
 /// A NUL-terminated descriptor string, or empty when absent.
@@ -549,5 +633,104 @@ unsafe fn string(pointer: *const c_char) -> String {
         String::new()
     } else {
         CStr::from_ptr(pointer).to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod hint_tests {
+    use super::*;
+
+    fn hint(flags: c_int, lower: f32, upper: f32) -> RawRangeHint {
+        RawRangeHint {
+            hint_descriptor: flags,
+            lower_bound: lower,
+            upper_bound: upper,
+        }
+    }
+
+    const BOTH: c_int = HINT_BOUNDED_BELOW | HINT_BOUNDED_ABOVE;
+
+    #[test]
+    fn default_hints_match_ladspa_1_1() {
+        let one = hint_values(&hint(BOTH | HINT_DEFAULT_1, 0.0, 1.0), 48_000.0);
+        assert!((one.default - 1.0).abs() < 1e-6);
+        let zero = hint_values(&hint(BOTH, 0.0, 1.0), 48_000.0);
+        assert_eq!(zero.default, 0.0);
+        let hundred = hint_values(&hint(BOTH | HINT_DEFAULT_100, 0.0, 1000.0), 48_000.0);
+        assert!((hundred.default - 100.0).abs() < 1e-3);
+        let concert_a = hint_values(&hint(BOTH | HINT_DEFAULT_440, 20.0, 20_000.0), 48_000.0);
+        assert!((concert_a.default - 440.0).abs() < 1e-3);
+        let minimum = hint_values(&hint(BOTH | HINT_DEFAULT_MINIMUM, 20.0, 20_000.0), 48_000.0);
+        assert!((minimum.default - 20.0).abs() < 1e-3);
+        let maximum = hint_values(&hint(BOTH | HINT_DEFAULT_MAXIMUM, 20.0, 20_000.0), 48_000.0);
+        assert!((maximum.default - 20_000.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn logarithmic_interpolation_matches_the_spec() {
+        let low = hint_values(
+            &hint(BOTH | HINT_LOGARITHMIC | HINT_DEFAULT_LOW, 20.0, 20_000.0),
+            48_000.0,
+        );
+        let expected_low = (20f32.ln() * 0.75 + 20_000f32.ln() * 0.25).exp();
+        assert!(
+            (low.default - expected_low).abs() < 0.01,
+            "{} vs {expected_low}",
+            low.default
+        );
+
+        let middle = hint_values(
+            &hint(
+                BOTH | HINT_LOGARITHMIC | HINT_DEFAULT_MIDDLE,
+                20.0,
+                20_000.0,
+            ),
+            48_000.0,
+        );
+        let expected_middle = (20f32 * 20_000.0).sqrt();
+        assert!((middle.default - expected_middle).abs() < 0.01);
+
+        let high = hint_values(
+            &hint(BOTH | HINT_LOGARITHMIC | HINT_DEFAULT_HIGH, 20.0, 20_000.0),
+            48_000.0,
+        );
+        let expected_high = (20f32.ln() * 0.25 + 20_000f32.ln() * 0.75).exp();
+        assert!((high.default - expected_high).abs() < 0.01);
+    }
+
+    #[test]
+    fn sample_rate_bounds_use_the_instance_rate() {
+        let scaled = hint(
+            HINT_BOUNDED_BELOW | HINT_SAMPLE_RATE | HINT_DEFAULT_MINIMUM,
+            0.0001,
+            0.0,
+        );
+        let at_48k = hint_values(&scaled, 48_000.0);
+        assert!((at_48k.min - 4.8).abs() < 1e-3);
+        assert!((at_48k.default - 4.8).abs() < 1e-3);
+        assert!(at_48k.max >= at_48k.min, "a one-sided range was inverted");
+
+        let at_44k = hint_values(&scaled, 44_100.0);
+        assert!((at_44k.min - 4.41).abs() < 1e-3);
+        assert!(at_44k.max >= at_44k.min);
+    }
+
+    #[test]
+    fn non_finite_bounds_are_ignored() {
+        let bad = hint(BOTH | HINT_DEFAULT_MIDDLE, f32::NAN, f32::NAN);
+        let values = hint_values(&bad, 48_000.0);
+        assert!(values.min.is_finite());
+        assert!(values.max.is_finite());
+        assert!(values.default.is_finite());
+    }
+
+    #[test]
+    fn integer_defaults_are_rounded() {
+        let values = hint_values(
+            &hint(BOTH | HINT_INTEGER | HINT_DEFAULT_MIDDLE, 0.0, 3.0),
+            48_000.0,
+        );
+        assert_eq!(values.default, 2.0);
     }
 }

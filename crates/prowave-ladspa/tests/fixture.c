@@ -86,11 +86,60 @@ static const LADSPA_PortRangeHint hints[3] = {
     {0x1 | 0x2, 0.0f, 1.0f}, /* bounded below and above */
 };
 
-static const LADSPA_Descriptor descriptor = {
+/* A generator: no audio inputs, one audio output, and a Level control defaulting to 1. */
+typedef struct {
+    LADSPA_Data *output;
+    LADSPA_Data *level;
+} ConstantInstance;
+
+static LADSPA_Handle constant_instantiate(const LADSPA_Descriptor *descriptor, unsigned long rate) {
+    (void)descriptor;
+    (void)rate;
+    ConstantInstance *instance = (ConstantInstance *)calloc(1, sizeof(ConstantInstance));
+    if (instance) instance->level = 0;
+    return instance;
+}
+
+static void constant_connect(LADSPA_Handle handle, unsigned long port, LADSPA_Data *data) {
+    ConstantInstance *instance = (ConstantInstance *)handle;
+    if (port == 0) instance->output = data;
+    else if (port == 1) instance->level = data;
+}
+
+static void constant_run(LADSPA_Handle handle, unsigned long frames) {
+    ConstantInstance *instance = (ConstantInstance *)handle;
+    const LADSPA_Data level = instance->level ? *instance->level : 0;
+    for (unsigned long i = 0; i < frames; ++i) {
+        instance->output[i] = level;
+    }
+}
+
+static void constant_cleanup(LADSPA_Handle handle) {
+    free(handle);
+}
+
+static const LADSPA_PortDescriptor constant_ports[2] = {
+    0x2 | 0x8, /* output, audio */
+    0x1 | 0x4, /* input, control */
+};
+static const char *const constant_names[2] = {"Output", "Level"};
+static const LADSPA_PortRangeHint constant_hints[2] = {
+    {0, 0.0f, 0.0f},
+    {0x1 | 0x2 | 0x240, 0.0f, 1.0f}, /* bounded, default 1 */
+};
+
+static const LADSPA_Descriptor gain_descriptor = {
     1234567u, "gain", 0, "Test Gain", "Pro Wave", "", 3, ports, names, hints, 0,
     gain_instantiate, gain_connect, 0, gain_run, 0, 0, 0, gain_cleanup,
 };
+static const LADSPA_Descriptor constant_descriptor = {
+    1234568u, "constant", 0, "Test Constant", "Pro Wave", "", 2, constant_ports,
+    constant_names, constant_hints, 0, constant_instantiate, constant_connect, 0,
+    constant_run, 0, 0, 0, constant_cleanup,
+};
 
 LADSPA_EXPORT const LADSPA_Descriptor *ladspa_descriptor(unsigned long index) {
-    return index == 0 ? &descriptor : 0;
+    if (index == 0) return &gain_descriptor;
+    if (index == 1) return &constant_descriptor;
+    return 0;
 }
