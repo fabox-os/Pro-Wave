@@ -314,8 +314,36 @@ pub struct HostedDoc {
     /// `vst3`, `au` or `clap`.
     pub format: String,
     pub bypass: bool,
-    /// The plug-in's own state blob.
+    /// The plug-in's own state blob, stored base64 so a large state does not inflate the
+    /// project JSON into the load limit.
+    #[serde(with = "state_base64")]
     pub state: Vec<u8>,
+}
+
+/// Base64 for [`HostedDoc::state`], accepting the old JSON number array as well.
+mod state_base64 {
+    use base64::Engine as _;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Text(String),
+        Bytes(Vec<u8>),
+    }
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        match Repr::deserialize(deserializer)? {
+            Repr::Text(text) => base64::engine::general_purpose::STANDARD
+                .decode(text)
+                .map_err(serde::de::Error::custom),
+            Repr::Bytes(bytes) => Ok(bytes),
+        }
+    }
 }
 
 /// The automation lane of one effect parameter.
@@ -683,6 +711,10 @@ fn write_archive(tmp: &Path, doc: &ProjectDoc, media: &[MediaFile]) -> Result<()
         doc.format_version = FORMAT_VERSION;
         let json =
             serde_json::to_vec_pretty(&doc).map_err(|e| ProjectError::Json(e.to_string()))?;
+        // Never write a project the loader would refuse to open.
+        if json.len() as u64 > MAX_JSON_BYTES {
+            return Err(ProjectError::TooLarge(json.len() as u64));
+        }
         zip.start_file(PROJECT_JSON, deflated)?;
         zip.write_all(&json)?;
         for m in media {
@@ -760,6 +792,31 @@ fn load_with_limits(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hosted_state_is_base64_and_old_arrays_still_load() {
+        let doc = ProjectDoc {
+            master_hosted: Some(HostedDoc {
+                plugin_key: "au:x".into(),
+                name: "X".into(),
+                format: "au".into(),
+                state: vec![0, 1, 255],
+                ..HostedDoc::default()
+            }),
+            ..ProjectDoc::default()
+        };
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("\"state\":\"AAH/\""), "{json}");
+        let back: ProjectDoc = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.master_hosted.unwrap().state, vec![0, 1, 255]);
+
+        // The first format kept the blob as a JSON number array; keep reading it.
+        let old: ProjectDoc = serde_json::from_str(
+            r#"{"master_hosted":{"plugin_key":"au:x","name":"X","vendor":"","format":"au","bypass":false,"state":[1,2,3]}}"#,
+        )
+        .unwrap();
+        assert_eq!(old.master_hosted.unwrap().state, vec![1, 2, 3]);
+    }
 
     fn sample_doc() -> ProjectDoc {
         ProjectDoc {
