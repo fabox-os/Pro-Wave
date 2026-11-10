@@ -468,6 +468,9 @@ pub enum Command {
         slot: u8,
         bypass: bool,
     },
+    /// Remove every hosted plug-in (all tracks and the master), for a project replace. The
+    /// adapters go back through the garbage queue.
+    ClearHosted,
     /// Space Designer: a new impulse response for the effect in `slot` of `track` (made with
     /// [`Convolver::for_params`]); the old one goes back through the garbage queue.
     SetConvolver {
@@ -1752,6 +1755,16 @@ impl EngineCore {
                         .and_then(Option::as_mut)
                     {
                         effect.set_bypass(bypass);
+                    }
+                }
+                Command::ClearHosted => {
+                    if let Some(old) = self.master_hosted.take() {
+                        let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                    }
+                    for slots in &mut self.track_hosted {
+                        for old in slots.drain(..).flatten() {
+                            let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                        }
                     }
                 }
                 Command::SetConvolver { track, slot, conv } => {

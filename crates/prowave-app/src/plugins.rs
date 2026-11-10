@@ -116,7 +116,14 @@ impl Plugins {
     }
 
     /// After opening a project: load the saved plug-in, or remember it until the scan finishes.
-    pub fn restore(&mut self, p: &mut Project, sync: Option<&mut EngineSync>, s: &mut UiState) {
+    pub fn restore(&mut self, p: &mut Project, mut sync: Option<&mut EngineSync>, s: &mut UiState) {
+        // A project replace invalidates every hosted stage the engine still has.
+        if let Some(sync) = reborrow(&mut sync) {
+            sync.clear_hosted();
+        }
+        self.control = None;
+        self.parameters.clear();
+        self.window_open = false;
         let Some(saved) = p.master_hosted.clone() else {
             self.pending = None;
             return;

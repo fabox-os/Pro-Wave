@@ -532,6 +532,11 @@ impl EngineSync {
         self.send(Command::SetMasterHostedBypass(bypass))
     }
 
+    /// Removes every hosted plug-in when a project is replaced.
+    pub fn clear_hosted(&mut self) -> bool {
+        self.send(Command::ClearHosted)
+    }
+
     pub fn new(engine: Engine, p: &Project) -> Self {
         let mut sync = Self {
             engine,
