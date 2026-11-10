@@ -18,6 +18,9 @@ use std::f64::consts::TAU;
 const FRAME: usize = 1024;
 /// How far (in frames) the similarity search may move the analysis position.
 const SEARCH: isize = 256;
+/// The most samples (all channels) a stretched result may hold: about 1 GiB of `f32`. Larger
+/// requests return an empty result instead of exhausting memory.
+const MAX_OUTPUT_SAMPLES: usize = 1 << 28;
 /// Coarse step of the similarity search; refined to single frames around the best candidate.
 const SEARCH_STEP: isize = 4;
 
@@ -34,6 +37,9 @@ pub fn stretch(input: &[f32], channels: usize, factor: f64) -> Vec<f32> {
         return Vec::new();
     }
     let target = ((frames_in as f64) * factor).round().max(1.0) as usize;
+    if target.saturating_mul(channels) > MAX_OUTPUT_SAMPLES {
+        return Vec::new();
+    }
 
     // Short clips get a shorter window, still even.
     let frame = FRAME.min(frames_in.max(64)) & !1;
@@ -161,17 +167,20 @@ fn similarity(
     }
     let start = start as usize;
     let mut dot = 0f64;
-    let mut energy = 1e-12f64;
+    let mut input_energy = 1e-12f64;
+    let mut output_energy = 1e-12f64;
     for n in 0..overlap {
         let written = write + n;
         for ch in 0..channels {
             let out = output[written * channels + ch] as f64;
             let input = input[(start + n) * channels + ch] as f64;
             dot += out * input;
-            energy += input * input;
+            input_energy += input * input;
+            output_energy += out * out;
         }
     }
-    Some(dot / energy.sqrt())
+    // Normalized cross-correlation: loudness of either side does not change the choice.
+    Some(dot / (input_energy * output_energy).sqrt())
 }
 
 /// Shifts `input` by `semitones` (positive up, negative down) without changing its length.
