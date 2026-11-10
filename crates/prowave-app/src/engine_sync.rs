@@ -1272,6 +1272,7 @@ mod tests {
             bypass: false,
             state: Vec::new(),
             latency: 256,
+            parameters: Vec::new(),
         });
         assert_eq!(latency_of(&t, 48_000.0), 256);
         t.hosted.as_mut().unwrap().bypass = true;
