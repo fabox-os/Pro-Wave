@@ -205,6 +205,7 @@ fn hosted_from_doc(h: &prowave_project::HostedDoc) -> crate::model::HostedInsert
         bypass: h.bypass,
         // A project is untrusted input; plughost accepts at most 128 MiB of state.
         state: h.state.iter().copied().take(128 << 20).collect(),
+        latency: 0,
     }
 }
 
@@ -1336,6 +1337,7 @@ pub(crate) mod tests {
             format: prowave_plugin_host::Format::Vst3,
             bypass: false,
             state: vec![1, 2, 3],
+            latency: 0,
         });
         let (doc, _) = to_doc(&p);
         assert_eq!(
@@ -1363,6 +1365,7 @@ pub(crate) mod tests {
             format: prowave_plugin_host::Format::AudioUnit,
             bypass: true,
             state: vec![9, 8, 7, 6],
+            latency: 0,
         });
         let (doc, _) = to_doc(&p);
         assert_eq!(

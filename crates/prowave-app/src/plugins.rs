@@ -1,11 +1,13 @@
-//! Hosted VST3, Audio Unit and CLAP plug-ins: the Plug-in Manager window and the controls of
-//! the plug-in on the Stereo Out.
+//! Hosted VST3, Audio Unit and CLAP plug-ins: the Plug-in Manager window and the controls of a
+//! hosted plug-in on a channel strip.
 //!
 //! The plug-in itself runs in a helper process (see `prowave_plugin_host`); this module owns
 //! the control side that stays on the UI thread, while the realtime adapter is handed to the
-//! engine. Projects keep the class key and the plug-in's state blob, so a reopened project loads
-//! the same plug-in with the same settings when it is still installed.
+//! engine. A strip holds at most one hosted plug-in, after its built-in inserts. Projects keep
+//! the class key and the plug-in's state blob, so a reopened project loads the same plug-ins
+//! with the same settings when they are still installed.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -25,55 +27,66 @@ fn format_color(format: host::Format) -> Color32 {
     }
 }
 
+/// Which channel strip a hosted plug-in belongs to.
+///
+/// AGENT: controls are keyed by track index. Moving or deleting tracks after a plug-in is
+/// loaded can point a control at the wrong strip until the project is reopened; stable track
+/// ids are the follow-up (see `engine_sync`'s track-index commands).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Target {
+    Master,
+    Track(usize),
+}
+
+impl Target {
+    fn label(self, p: &Project) -> String {
+        match self {
+            Target::Master => "Stereo Out".to_string(),
+            Target::Track(i) => p
+                .tracks
+                .get(i)
+                .map_or_else(|| format!("Track {}", i + 1), |t| t.name.clone()),
+        }
+    }
+}
+
+/// The live control side of one hosted plug-in.
+struct Active {
+    control: host::Control,
+    parameters: Vec<host::Parameter>,
+    last_refresh: Instant,
+}
+
 /// What the windows asked for, applied after drawing so borrows stay simple.
 enum Action {
     Scan,
-    Insert(String),
-    Remove,
-    Bypass(bool),
-    OpenControls,
+    Insert { target: Target, key: String },
+    Remove(Target),
+    Bypass { target: Target, on: bool },
+    OpenControls(Target),
     CloseControls,
-    OpenEditor,
-    SetParameter { id: u64, value: f64 },
-    ResetParameters,
+    OpenEditor(Target),
+    SetParameter { target: Target, id: u64, value: f64 },
+    ResetParameters(Target),
 }
 
-/// The plug-in runtime: catalog, the live control chain, and window state.
+/// The plug-in runtime: catalog, live control chains, and window state.
+#[derive(Default)]
 pub struct Plugins {
     catalog: Option<host::Catalog>,
     scanning: bool,
     scan_rx: Option<Receiver<Result<host::Catalog, host::Error>>>,
-    control: Option<host::Control>,
-    parameters: Vec<host::Parameter>,
-    /// A project's plug-in saved while the catalog is not scanned yet.
-    pending: Option<HostedInsert>,
+    /// One control chain per strip with a hosted plug-in.
+    active: HashMap<Target, Active>,
+    /// A project's plug-ins saved while the catalog is not scanned yet.
+    pending: Vec<(Target, HostedInsert)>,
     pub manager_open: bool,
-    pub window_open: bool,
+    /// The target whose parameters window is open.
+    window: Option<Target>,
     filter: Option<host::Format>,
     search: String,
     selected: Option<String>,
     error: Option<String>,
-    last_parameter_refresh: Instant,
-}
-
-impl Default for Plugins {
-    fn default() -> Self {
-        Self {
-            catalog: None,
-            scanning: false,
-            scan_rx: None,
-            control: None,
-            parameters: Vec::new(),
-            pending: None,
-            manager_open: false,
-            window_open: false,
-            filter: None,
-            search: String::new(),
-            selected: None,
-            error: None,
-            last_parameter_refresh: Instant::now() - Duration::from_secs(60),
-        }
-    }
 }
 
 /// A reborrow of the engine link, so the same option can be used more than once.
@@ -81,8 +94,23 @@ fn reborrow<'a>(sync: &'a mut Option<&mut EngineSync>) -> Option<&'a mut EngineS
     sync.as_mut().map(|sync| &mut **sync)
 }
 
+/// The hosted plug-in of `target`, if the project has one.
+fn insert_of(p: &Project, target: Target) -> Option<&HostedInsert> {
+    match target {
+        Target::Master => p.master_hosted.as_ref(),
+        Target::Track(i) => p.tracks.get(i).and_then(|t| t.hosted.as_ref()),
+    }
+}
+
+fn insert_of_mut(p: &mut Project, target: Target) -> Option<&mut HostedInsert> {
+    match target {
+        Target::Master => p.master_hosted.as_mut(),
+        Target::Track(i) => p.tracks.get_mut(i).and_then(|t| t.hosted.as_mut()),
+    }
+}
+
 impl Plugins {
-    /// Called every frame: polls the scanner, restores a pending project plug-in, and draws the
+    /// Called every frame: polls the scanner, restores pending project plug-ins, and draws the
     /// windows.
     pub fn show(
         &mut self,
@@ -99,7 +127,7 @@ impl Plugins {
                 self.scan();
             }
         }
-        if self.pending.is_some() && self.catalog.is_some() {
+        if !self.pending.is_empty() && self.catalog.is_some() {
             self.restore_pending(p, reborrow(&mut sync), s);
         }
 
@@ -107,55 +135,61 @@ impl Plugins {
         if self.manager_open {
             self.draw_manager(ctx, p, &mut actions);
         }
-        if self.window_open {
-            self.draw_parameters(ctx, p, &mut actions);
-            self.refresh_parameters();
+        if let Some(target) = self.window {
+            self.draw_parameters(ctx, p, target, &mut actions);
+            self.refresh(target);
             ctx.request_repaint_after(Duration::from_millis(500));
         }
         self.apply(actions, p, s, reborrow(&mut sync));
     }
 
-    /// After opening a project: load the saved plug-in, or remember it until the scan finishes.
+    /// After opening a project: load every saved plug-in, or remember them until the scan
+    /// finishes.
     pub fn restore(&mut self, p: &mut Project, mut sync: Option<&mut EngineSync>, s: &mut UiState) {
         // A project replace invalidates every hosted stage the engine still has.
         if let Some(sync) = reborrow(&mut sync) {
             sync.clear_hosted();
         }
-        self.control = None;
-        self.parameters.clear();
-        self.window_open = false;
-        let Some(saved) = p.master_hosted.clone() else {
-            self.pending = None;
+        self.active.clear();
+        self.pending.clear();
+        self.window = None;
+        if let Some(saved) = p.master_hosted.clone() {
+            self.pending.push((Target::Master, saved));
+        }
+        for (i, track) in p.tracks.iter().enumerate() {
+            if let Some(saved) = track.hosted.clone() {
+                self.pending.push((Target::Track(i), saved));
+            }
+        }
+        if self.pending.is_empty() {
             return;
-        };
+        }
         if self.catalog.is_none() {
-            self.pending = Some(saved);
             if !self.scanning && host::available() {
                 self.scan();
             }
             return;
         }
-        let Some(sync) = sync else {
-            self.error = Some("the hosted plug-in needs an audio output to load".to_string());
+        if sync.is_none() {
+            self.error = Some("hosted plug-ins need an audio output to load".to_string());
             return;
-        };
-        match self.load(&saved.key, Some(&saved.state), p, sync) {
-            Ok(()) => self.pending = None,
-            Err(error) => {
-                self.error = Some(error.clone());
-                s.status = Some(error);
-                self.pending = None;
-            }
         }
+        self.restore_pending(p, sync, s);
     }
 
-    /// Saves the live plug-in's state into the project before it is written to disk.
+    /// Saves every live plug-in's state into the project before it is written to disk.
     pub fn snapshot(&mut self, p: &mut Project) {
-        let (Some(control), Some(saved)) = (self.control.as_mut(), p.master_hosted.as_mut()) else {
-            return;
-        };
-        if let Ok(state) = control.state() {
-            saved.state = state;
+        let states: Vec<(Target, Vec<u8>)> = self
+            .active
+            .iter_mut()
+            .filter_map(|(target, active)| {
+                active.control.state().ok().map(|state| (*target, state))
+            })
+            .collect();
+        for (target, state) in states {
+            if let Some(saved) = insert_of_mut(p, target) {
+                saved.state = state;
+            }
         }
     }
 
@@ -193,20 +227,20 @@ impl Plugins {
         self.scan_rx = Some(rx);
     }
 
-    fn restore_pending(&mut self, p: &mut Project, sync: Option<&mut EngineSync>, s: &mut UiState) {
-        let Some(saved) = self.pending.clone() else {
-            return;
-        };
-        let Some(sync) = sync else {
-            self.pending = None;
-            return;
-        };
-        match self.load(&saved.key, Some(&saved.state), p, sync) {
-            Ok(()) => self.pending = None,
-            Err(error) => {
+    fn restore_pending(
+        &mut self,
+        p: &mut Project,
+        mut sync: Option<&mut EngineSync>,
+        s: &mut UiState,
+    ) {
+        while let Some((target, saved)) = self.pending.pop() {
+            let Some(sync) = reborrow(&mut sync) else {
+                self.pending.clear();
+                return;
+            };
+            if let Err(error) = self.load(target, &saved.key, Some(&saved.state), p, sync) {
                 self.error = Some(error.clone());
                 s.status = Some(error);
-                self.pending = None;
             }
         }
     }
@@ -214,6 +248,7 @@ impl Plugins {
     /// Instantiates `key`, sends its realtime adapter to the engine and keeps its controls.
     fn load(
         &mut self,
+        target: Target,
         key: &str,
         state: Option<&[u8]>,
         p: &mut Project,
@@ -228,7 +263,7 @@ impl Plugins {
             .into_iter()
             .find(|plugin| plugin.key == key)
             .ok_or_else(|| format!("plug-in not installed: {key}"))?;
-        let previous = p.master_hosted.clone();
+        let previous = insert_of(p, target).cloned();
         // Replacing the same plug-in keeps its settings; a different one starts fresh.
         let state = state.map(<[u8]>::to_vec).or_else(|| {
             previous
@@ -254,23 +289,41 @@ impl Plugins {
         if let Err(error) = control.set_bypass(bypass) {
             self.error = Some(error.to_string());
         }
-        if !sync.set_master_hosted(Some(effect), bypass) {
+        let sent = match target {
+            Target::Master => sync.set_master_hosted(Some(effect), bypass),
+            Target::Track(i) => sync.set_track_hosted(i, Some(effect), bypass),
+        };
+        if !sent {
             return Err("the audio engine is busy; try again".to_string());
         }
         let fresh = control.state().unwrap_or_default();
-        self.control = Some(control);
-        self.parameters = parameters;
-        self.last_parameter_refresh = Instant::now();
+        self.active.insert(
+            target,
+            Active {
+                control,
+                parameters,
+                last_refresh: Instant::now(),
+            },
+        );
         let mut insert = HostedInsert::new(&descriptor, fresh);
         insert.bypass = bypass;
+        insert.latency = latency;
         if let Some(state) = state {
             insert.state = state;
         }
-        p.master_hosted = Some(insert);
+        match target {
+            Target::Master => p.master_hosted = Some(insert),
+            Target::Track(i) => {
+                if let Some(track) = p.tracks.get_mut(i) {
+                    track.hosted = Some(insert);
+                }
+            }
+        }
         tracing::info!(
-            "loaded {} ({}) with {} frames of latency",
+            "loaded {} ({}) on {} with {} frames of latency",
             descriptor.name,
             descriptor.format.label(),
+            target.label(p),
             latency
         );
         Ok(())
@@ -286,18 +339,17 @@ impl Plugins {
         for action in actions {
             match action {
                 Action::Scan => self.scan(),
-                Action::Insert(key) => {
+                Action::Insert { target, key } => {
                     let Some(sync) = reborrow(&mut sync) else {
                         self.error = Some("there is no audio output".to_string());
                         continue;
                     };
-                    match self.load(&key, None, p, sync) {
+                    match self.load(target, &key, None, p, sync) {
                         Ok(()) => {
                             s.status = Some(format!(
-                                "inserted {} on Stereo Out",
-                                p.master_hosted
-                                    .as_ref()
-                                    .map_or("the plug-in", |insert| insert.name.as_str())
+                                "inserted {} on {}",
+                                insert_of(p, target).map_or("the plug-in", |i| i.name.as_str()),
+                                target.label(p)
                             ));
                         }
                         Err(error) => {
@@ -306,68 +358,94 @@ impl Plugins {
                         }
                     }
                 }
-                Action::Remove => {
+                Action::Remove(target) => {
                     if let Some(sync) = reborrow(&mut sync) {
-                        sync.set_master_hosted(None, false);
+                        match target {
+                            Target::Master => {
+                                sync.set_master_hosted(None, false);
+                            }
+                            Target::Track(i) => {
+                                sync.set_track_hosted(i, None, false);
+                            }
+                        }
                     }
-                    self.control = None;
-                    self.parameters.clear();
-                    self.window_open = false;
-                    p.master_hosted = None;
+                    self.active.remove(&target);
+                    if self.window == Some(target) {
+                        self.window = None;
+                    }
+                    match target {
+                        Target::Master => p.master_hosted = None,
+                        Target::Track(i) => {
+                            if let Some(track) = p.tracks.get_mut(i) {
+                                track.hosted = None;
+                            }
+                        }
+                    }
                 }
-                Action::Bypass(bypass) => {
-                    if let Some(saved) = p.master_hosted.as_mut() {
-                        saved.bypass = bypass;
+                Action::Bypass { target, on } => {
+                    if let Some(saved) = insert_of_mut(p, target) {
+                        saved.bypass = on;
                     }
-                    if let Some(control) = self.control.as_mut() {
-                        if let Err(error) = control.set_bypass(bypass) {
+                    if let Some(active) = self.active.get_mut(&target) {
+                        if let Err(error) = active.control.set_bypass(on) {
                             self.error = Some(error.to_string());
                         }
                     }
                     if let Some(sync) = reborrow(&mut sync) {
-                        sync.set_master_hosted_bypass(bypass);
+                        match target {
+                            Target::Master => {
+                                sync.set_master_hosted_bypass(on);
+                            }
+                            Target::Track(i) => {
+                                sync.set_track_hosted_bypass(i, on);
+                            }
+                        }
                     }
                 }
-                Action::OpenControls => {
-                    self.window_open = true;
-                    self.refresh_parameters_now();
+                Action::OpenControls(target) => {
+                    self.window = Some(target);
+                    self.refresh_now(target);
                 }
                 Action::CloseControls => {
-                    self.window_open = false;
+                    self.window = None;
                     self.snapshot(p);
                 }
-                Action::OpenEditor => {
-                    if let Some(control) = self.control.as_mut() {
-                        if let Err(error) = control.open_editor() {
+                Action::OpenEditor(target) => {
+                    if let Some(active) = self.active.get_mut(&target) {
+                        if let Err(error) = active.control.open_editor() {
                             self.error = Some(error.to_string());
                         }
                     }
                 }
-                Action::SetParameter { id, value } => {
-                    if let Some(control) = self.control.as_mut() {
-                        if let Err(error) = control.set_parameter(id, value) {
+                Action::SetParameter { target, id, value } => {
+                    if let Some(active) = self.active.get_mut(&target) {
+                        if let Err(error) = active.control.set_parameter(id, value) {
                             self.error = Some(error.to_string());
                         }
                     }
                 }
-                Action::ResetParameters => {
+                Action::ResetParameters(target) => {
                     let defaults: Vec<(u64, f64)> = self
-                        .parameters
-                        .iter()
-                        .filter_map(|parameter| {
-                            parameter.default.map(|value| (parameter.id, value))
+                        .active
+                        .get(&target)
+                        .map(|active| {
+                            active
+                                .parameters
+                                .iter()
+                                .filter_map(|parameter| {
+                                    parameter.default.map(|value| (parameter.id, value))
+                                })
+                                .collect()
                         })
-                        .collect();
+                        .unwrap_or_default();
                     for (id, value) in defaults {
-                        if let Some(control) = self.control.as_mut() {
-                            let _ = control.set_parameter(id, value);
-                        }
-                        if let Some(parameter) = self
-                            .parameters
-                            .iter_mut()
-                            .find(|parameter| parameter.id == id)
-                        {
-                            parameter.value = Some(value);
+                        if let Some(active) = self.active.get_mut(&target) {
+                            let _ = active.control.set_parameter(id, value);
+                            if let Some(parameter) =
+                                active.parameters.iter_mut().find(|p| p.id == id)
+                            {
+                                parameter.value = Some(value);
+                            }
                         }
                     }
                 }
@@ -375,20 +453,24 @@ impl Plugins {
         }
     }
 
-    fn refresh_parameters_now(&mut self) {
-        let Some(control) = self.control.as_mut() else {
+    fn refresh_now(&mut self, target: Target) {
+        let Some(active) = self.active.get_mut(&target) else {
             return;
         };
-        match control.parameters() {
-            Ok(parameters) => self.parameters = parameters,
+        match active.control.parameters() {
+            Ok(parameters) => active.parameters = parameters,
             Err(error) => self.error = Some(error.to_string()),
         }
-        self.last_parameter_refresh = Instant::now();
+        active.last_refresh = Instant::now();
     }
 
-    fn refresh_parameters(&mut self) {
-        if self.last_parameter_refresh.elapsed() >= Duration::from_millis(700) {
-            self.refresh_parameters_now();
+    fn refresh(&mut self, target: Target) {
+        let due = self
+            .active
+            .get(&target)
+            .is_some_and(|active| active.last_refresh.elapsed() >= Duration::from_millis(700));
+        if due {
+            self.refresh_now(target);
         }
     }
 
@@ -439,7 +521,7 @@ impl Plugins {
                     ui.vertical(|ui| {
                         self.draw_search(ui);
                         ui.add_space(6.0);
-                        self.draw_list(ui, actions);
+                        self.draw_list(ui, p, actions);
                     });
                     ui.separator();
                     self.draw_details(ui, p, actions);
@@ -530,7 +612,7 @@ impl Plugins {
             .unwrap_or_default()
     }
 
-    fn draw_list(&mut self, ui: &mut egui::Ui, _actions: &mut Vec<Action>) {
+    fn draw_list(&mut self, ui: &mut egui::Ui, p: &Project, actions: &mut Vec<Action>) {
         let plugins = self.filtered();
         if plugins.is_empty() {
             ui.add_space(30.0);
@@ -621,7 +703,15 @@ impl Plugins {
                         self.selected = Some(plugin.key.clone());
                     }
                     if response.double_clicked() {
-                        _actions.push(Action::Insert(plugin.key.clone()));
+                        let target = if p.tracks.get(p.selected_track).is_some() {
+                            Target::Track(p.selected_track)
+                        } else {
+                            Target::Master
+                        };
+                        actions.push(Action::Insert {
+                            target,
+                            key: plugin.key.clone(),
+                        });
                     }
                 }
             });
@@ -681,7 +771,26 @@ impl Plugins {
                 )
                 .clicked()
             {
-                actions.push(Action::Insert(plugin.key.clone()));
+                actions.push(Action::Insert {
+                    target: Target::Master,
+                    key: plugin.key.clone(),
+                });
+            }
+            if p.tracks.get(p.selected_track).is_some()
+                && ui
+                    .add_sized(
+                        [ui.available_width(), 30.0],
+                        egui::Button::new(format!(
+                            "Insert on {}",
+                            Target::Track(p.selected_track).label(p)
+                        )),
+                    )
+                    .clicked()
+            {
+                actions.push(Action::Insert {
+                    target: Target::Track(p.selected_track),
+                    key: plugin.key.clone(),
+                });
             }
         } else {
             ui.add_space(20.0);
@@ -690,9 +799,27 @@ impl Plugins {
 
         ui.add_space(18.0);
         ui.separator();
+        self.draw_hosted_section(ui, p, Target::Master, actions);
+        if p.tracks.get(p.selected_track).is_some() {
+            ui.add_space(10.0);
+            self.draw_hosted_section(ui, p, Target::Track(p.selected_track), actions);
+        }
+    }
+
+    fn draw_hosted_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: &Project,
+        target: Target,
+        actions: &mut Vec<Action>,
+    ) {
         ui.add_space(10.0);
-        ui.label(RichText::new("On Stereo Out").weak().small());
-        let Some(saved) = p.master_hosted.as_ref() else {
+        ui.label(
+            RichText::new(format!("On {}", target.label(p)))
+                .weak()
+                .small(),
+        );
+        let Some(saved) = insert_of(p, target) else {
             ui.add_space(4.0);
             ui.label(RichText::new("No hosted plug-in.").weak());
             return;
@@ -707,36 +834,40 @@ impl Plugins {
             );
             let mut bypass = saved.bypass;
             if ui.checkbox(&mut bypass, "Bypass").changed() {
-                actions.push(Action::Bypass(bypass));
+                actions.push(Action::Bypass { target, on: bypass });
             }
         });
         ui.horizontal(|ui| {
             if ui.button("Controls…").clicked() {
-                actions.push(Action::OpenControls);
+                actions.push(Action::OpenControls(target));
             }
             if ui.button("Plug-in editor").clicked() {
-                actions.push(Action::OpenEditor);
+                actions.push(Action::OpenEditor(target));
             }
             if ui.button("Remove").clicked() {
-                actions.push(Action::Remove);
+                actions.push(Action::Remove(target));
             }
         });
     }
 
-    fn draw_parameters(&mut self, ctx: &egui::Context, p: &mut Project, actions: &mut Vec<Action>) {
-        let title = p
-            .master_hosted
-            .as_ref()
-            .map_or_else(|| "Plug-in".to_string(), |saved| saved.name.clone());
-        let mut open = self.window_open;
-        egui::Window::new(format!("{title} · Stereo Out"))
+    fn draw_parameters(
+        &mut self,
+        ctx: &egui::Context,
+        p: &mut Project,
+        target: Target,
+        actions: &mut Vec<Action>,
+    ) {
+        let title =
+            insert_of(p, target).map_or_else(|| "Plug-in".to_string(), |saved| saved.name.clone());
+        let mut open = self.window == Some(target);
+        egui::Window::new(format!("{title} · {}", target.label(p)))
             .id(egui::Id::unique("plugin_controls"))
             .open(&mut open)
             .default_size([480.0, 540.0])
             .min_size([360.0, 260.0])
             .resizable(true)
             .show(ctx, |ui| {
-                let Some(saved) = p.master_hosted.as_ref() else {
+                let Some(saved) = insert_of(p, target) else {
                     ui.label(RichText::new("The plug-in was removed.").weak());
                     return;
                 };
@@ -749,25 +880,30 @@ impl Plugins {
                     ui.label(RichText::new(&saved.vendor).weak());
                     let mut bypass = saved.bypass;
                     if ui.checkbox(&mut bypass, "Bypass").changed() {
-                        actions.push(Action::Bypass(bypass));
+                        actions.push(Action::Bypass { target, on: bypass });
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Reset").clicked() {
-                            actions.push(Action::ResetParameters);
+                            actions.push(Action::ResetParameters(target));
                         }
                         if ui.button("Editor").clicked() {
-                            actions.push(Action::OpenEditor);
+                            actions.push(Action::OpenEditor(target));
                         }
                     });
                 });
                 ui.separator();
-                if self.parameters.is_empty() {
+                let Some(active) = self.active.get_mut(&target) else {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("The plug-in is not loaded.").weak());
+                    return;
+                };
+                if active.parameters.is_empty() {
                     ui.add_space(10.0);
                     ui.label(RichText::new("This plug-in exposes no parameters.").weak());
                     return;
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for parameter in &mut self.parameters {
+                    for parameter in &mut active.parameters {
                         let Some(value) = parameter.value else {
                             continue;
                         };
@@ -788,6 +924,7 @@ impl Plugins {
                             if response.changed() {
                                 parameter.value = Some(v);
                                 actions.push(Action::SetParameter {
+                                    target,
                                     id: parameter.id,
                                     value: v,
                                 });
@@ -813,9 +950,11 @@ impl Plugins {
                     .small(),
                 );
             });
-        if !open && self.window_open {
+        if !open && self.window == Some(target) {
             actions.push(Action::CloseControls);
         }
-        self.window_open = open;
+        if open {
+            self.window = Some(target);
+        }
     }
 }

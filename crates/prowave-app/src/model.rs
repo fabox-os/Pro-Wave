@@ -254,6 +254,8 @@ pub struct HostedInsert {
     pub bypass: bool,
     /// The plug-in's state (`PluginState::to_bytes`), or empty when it would not save.
     pub state: Vec<u8>,
+    /// The host adapter's latency in frames (not saved; measured when the plug-in loads).
+    pub latency: u32,
 }
 
 impl HostedInsert {
@@ -265,6 +267,7 @@ impl HostedInsert {
             format: plugin.format,
             bypass: false,
             state,
+            latency: 0,
         }
     }
 }
