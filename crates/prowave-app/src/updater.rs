@@ -269,10 +269,11 @@ pub fn parse_releases(
     let list = value
         .as_array()
         .ok_or_else(|| "unexpected answer from GitHub".to_string())?;
-    // The list is newest first; drafts are not public.
+    // The list is newest first; drafts and prereleases are not offered.
     let newest = list
         .iter()
         .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+        .filter(|r| !r["prerelease"].as_bool().unwrap_or(false))
         .filter_map(|r| {
             let tag = r["tag_name"].as_str()?;
             // Only plain `1.2.3` tags: a `-rc1` build is not the version it is a candidate for.
@@ -491,6 +492,9 @@ pub fn unpack_app(zip_path: &Path, dest: &Path) -> Result<(), String> {
             .find(|p| p.is_dir() && p.extension().is_some_and(|e| e == "app"))
             .ok_or_else(|| "the update does not contain the app".to_string())?;
         let program = app.join("Contents").join("MacOS").join("prowave");
+        if !app.join("Contents").join("Info.plist").is_file() {
+            return Err("the update does not contain a complete app".into());
+        }
         let size = std::fs::metadata(&program).map_or(0, |m| m.len());
         if size < 1_000_000 {
             return Err("the program in the update is missing or too small".into());
@@ -524,13 +528,34 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Renames `from` to `to`, trying again briefly: Windows antivirus and SmartScreen can hold a
+/// file for a moment after it was written or closed.
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut last = None;
+    for attempt in 0..5 {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last = Some(e);
+                if attempt < 4 {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    }
+    match last {
+        Some(e) => Err(e),
+        None => Err(std::io::Error::other("rename failed")),
+    }
+}
+
 /// Swaps the new version in: the current one is renamed to `old`, then the new one takes its
 /// name. If the second rename fails, the first is undone, so there is always a program.
 pub fn swap_in(current: &Path, new: &Path, old: &Path) -> Result<(), String> {
     let _ = remove_path(old);
-    std::fs::rename(current, old).map_err(|e| format!("{}: {e}", current.display()))?;
-    if let Err(e) = std::fs::rename(new, current) {
-        let undo = std::fs::rename(old, current);
+    rename_with_retry(current, old).map_err(|e| format!("{}: {e}", current.display()))?;
+    if let Err(e) = rename_with_retry(new, current) {
+        let undo = rename_with_retry(old, current);
         return Err(match undo {
             Ok(()) => format!("{}: {e}", current.display()),
             Err(u) => format!(
@@ -541,6 +566,19 @@ pub fn swap_in(current: &Path, new: &Path, old: &Path) -> Result<(), String> {
         });
     }
     Ok(())
+}
+
+/// Makes sure a program is in place after a failed swap: if the swap was cut short between its
+/// two renames, the old version is put back.
+fn ensure_program(target: &Target) -> Result<(), String> {
+    if target.path.exists() {
+        return Ok(());
+    }
+    let old = with_suffix(&target.path, ".old");
+    if !old.exists() {
+        return Ok(());
+    }
+    rename_with_retry(&old, &target.path).map_err(|e| format!("{}: {e}", target.path.display()))
 }
 
 /// `prowave.exe` becomes `prowave.exe.new` and so on.
@@ -591,6 +629,9 @@ fn stage_for(
         .as_ref()
         .filter(|a| target.kind.matches(&a.name))
         .ok_or_else(|| "there is no file for this system".to_string())?;
+    if asset.size > MAX_DOWNLOAD {
+        return Err(format!("the update file is too big ({} bytes)", asset.size));
+    }
     let expected = asset
         .sha256
         .as_deref()
@@ -734,13 +775,27 @@ fn remember_update() {
     }
 }
 
+/// Removes the leftovers of an update. `just_updated` is the first run of the new version: the
+/// old one is kept until the new one has started once.
+fn clean_up(target: &Target, just_updated: bool) {
+    for suffix in [".new", ".stage"] {
+        let _ = remove_path(&with_suffix(&target.path, suffix));
+    }
+    // An unpacked macOS update works in `<target>.new.stage`.
+    let _ = remove_path(&with_suffix(&with_suffix(&target.path, ".new"), ".stage"));
+    if !just_updated {
+        let _ = remove_path(&with_suffix(&target.path, ".old"));
+    }
+}
+
 /// The leftover of the previous update is deleted when the new version is used for the second
 /// time (the first time after an update the old one is kept, in case the new one is bad).
 pub fn clean_up_after_update() {
-    if let Some(marker) = config_file("update-installed") {
-        if marker.exists() {
+    let marker = config_file("update-installed");
+    let just_updated = marker.as_ref().is_some_and(|m| m.exists());
+    if just_updated {
+        if let Some(marker) = marker {
             let _ = std::fs::remove_file(marker);
-            return;
         }
     }
     let Ok(exe) = std::env::current_exe() else {
@@ -756,9 +811,7 @@ pub fn clean_up_after_update() {
     ) else {
         return;
     };
-    for suffix in [".old", ".new", ".stage"] {
-        let _ = remove_path(&with_suffix(&target.path, suffix));
-    }
+    clean_up(&target, just_updated);
 }
 
 // ------------------------------------------------------------------ the helper
@@ -812,11 +865,22 @@ pub fn parse_helper_args(args: &[OsString]) -> Option<Job> {
     if flag != HELPER_FLAG {
         return None;
     }
+    let kind = Kind::from_word(kind.to_str()?)?;
+    let target = PathBuf::from(path);
+    let staged = PathBuf::from(staged);
+    // Only the paths this program stages itself: an update is the program or folder with
+    // `.new` on its name, and a package is a file in a temporary folder.
+    if !target.is_absolute() || !staged.is_absolute() {
+        return None;
+    }
+    if !kind.is_package() && staged != with_suffix(&target, ".new") {
+        return None;
+    }
     Some(Job {
         wait_for: pid.to_str()?.parse().ok()?,
         plan: Plan {
-            target: Target::new(Kind::from_word(kind.to_str()?)?, path),
-            staged: PathBuf::from(staged),
+            target: Target::new(kind, target),
+            staged,
         },
     })
 }
@@ -829,7 +893,9 @@ pub fn run_helper_if_requested() -> bool {
     };
     wait_for_exit(job.wait_for);
     if let Err(e) = apply(&job.plan, &have_program) {
-        // The old version is still there and is opened again; it tells what went wrong.
+        // Put the old version back if the swap was cut short, then open it: it tells what
+        // went wrong.
+        let _ = ensure_program(&job.plan.target);
         if let Some(file) = config_file("update-error") {
             if let Some(dir) = file.parent() {
                 let _ = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(file, e));
@@ -854,30 +920,56 @@ fn wait_for_exit(pid: u32) {
     }
 }
 
+/// The error shown when a package manager could not install the update. The downloaded file is
+/// kept so the user can install it themselves.
+fn package_error(kind: Kind, staged: &Path, have: &dyn Fn(&str) -> bool, detail: &str) -> String {
+    format!(
+        "{detail}\nThe downloaded file is kept at {}.\nTo install it yourself, run: {}",
+        staged.display(),
+        manual_command(kind, staged, have)
+    )
+}
+
+/// Runs the package manager as the administrator; a failure says why.
+fn run_pkexec(command: &[OsString]) -> Result<(), String> {
+    let output = std::process::Command::new("pkexec")
+        .args(command)
+        .output()
+        .map_err(|e| format!("pkexec: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    // 126 and 127: the password prompt was dismissed or not allowed.
+    Err(match output.status.code() {
+        Some(126 | 127) => "the installation was not allowed".to_string(),
+        _ => String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("the package manager failed")
+            .to_string(),
+    })
+}
+
 /// Puts the update in place. Files and folders are swapped; packages are installed by the
 /// package manager.
 pub fn apply(plan: &Plan, have: &dyn Fn(&str) -> bool) -> Result<(), String> {
+    apply_with(plan, have, &run_pkexec)
+}
+
+fn apply_with(
+    plan: &Plan,
+    have: &dyn Fn(&str) -> bool,
+    run: &dyn Fn(&[OsString]) -> Result<(), String>,
+) -> Result<(), String> {
     let (path, staged) = (&plan.target.path, &plan.staged);
     match plan.target.kind {
         Kind::Deb | Kind::Rpm | Kind::Flatpak => {
             let command = package_command(plan.target.kind, staged, have);
-            let output = std::process::Command::new("pkexec")
-                .args(&command)
-                .output()
-                .map_err(|e| format!("pkexec: {e}"))?;
+            // The file stays where it is if the package manager fails, so it can be installed
+            // by hand; the error says where it is and what to run.
+            run(&command).map_err(|e| package_error(plan.target.kind, staged, have, &e))?;
             let _ = std::fs::remove_file(staged);
-            if !output.status.success() {
-                // 126 and 127: the password prompt was dismissed or not allowed.
-                return Err(match output.status.code() {
-                    Some(126 | 127) => "the installation was not allowed".to_string(),
-                    _ => String::from_utf8_lossy(&output.stderr)
-                        .lines()
-                        .rev()
-                        .find(|l| !l.trim().is_empty())
-                        .unwrap_or("the package manager failed")
-                        .to_string(),
-                });
-            }
             remember_update();
             Ok(())
         }
@@ -1484,34 +1576,34 @@ mod tests {
 
     #[test]
     fn the_helper_is_told_what_to_do_on_its_command_line() {
-        let args = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
-        let job = parse_helper_args(&args(&[
-            "--apply-update",
-            "1234",
-            "appimage",
-            "/home/me/Pro Wave.AppImage",
-            "/home/me/Pro Wave.AppImage.new",
-        ]))
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("Pro Wave.AppImage");
+        let staged = with_suffix(&image, ".new");
+        let words = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        let job = parse_helper_args(&[
+            OsString::from("--apply-update"),
+            OsString::from("1234"),
+            OsString::from("appimage"),
+            image.clone().into_os_string(),
+            staged.clone().into_os_string(),
+        ])
         .unwrap();
         assert_eq!(job.wait_for, 1234);
         assert_eq!(job.plan.target.kind, Kind::AppImage);
-        assert_eq!(
-            job.plan.target.path,
-            Path::new("/home/me/Pro Wave.AppImage")
-        );
-        assert_eq!(job.plan.staged, Path::new("/home/me/Pro Wave.AppImage.new"));
+        assert_eq!(job.plan.target.path, image);
+        assert_eq!(job.plan.staged, staged);
         for kind in ALL_KINDS {
             assert_eq!(Kind::from_word(kind.word()), Some(kind));
         }
         // Ordinary starts, and nonsense, are not the helper.
-        assert_eq!(parse_helper_args(&args(&[])), None);
-        assert_eq!(parse_helper_args(&args(&["project.prowave"])), None);
+        assert_eq!(parse_helper_args(&[]), None);
+        assert_eq!(parse_helper_args(&words(&["project.prowave"])), None);
         assert_eq!(
-            parse_helper_args(&args(&["--apply-update", "x", "deb", "a", "b"])),
+            parse_helper_args(&words(&["--apply-update", "x", "deb", "a", "b"])),
             None
         );
         assert_eq!(
-            parse_helper_args(&args(&["--apply-update", "1", "nope", "a", "b"])),
+            parse_helper_args(&words(&["--apply-update", "1", "nope", "a", "b"])),
             None
         );
     }
@@ -1669,6 +1761,11 @@ mod tests {
         assert!(unpack_app(&none, &dir.path().join("a.new")).is_err());
         let empty = zip_with(dir.path(), &[("Pro Wave.app/Contents/Info.plist", 10)]);
         assert!(unpack_app(&empty, &dir.path().join("b.new")).is_err());
+        let no_plist = zip_with(
+            dir.path(),
+            &[("Pro Wave.app/Contents/MacOS/prowave", 1_500_000)],
+        );
+        assert!(unpack_app(&no_plist, &dir.path().join("c.new")).is_err());
     }
 
     #[test]
@@ -1706,6 +1803,154 @@ mod tests {
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o755
         );
+    }
+
+    #[test]
+    fn prereleases_are_not_offered() {
+        let json = r#"[
+          {"tag_name":"v0.2.0","draft":false,"prerelease":true,"body":"beta","html_url":"x","assets":[]},
+          {"tag_name":"v0.1.9","draft":false,"prerelease":false,"body":"stable","html_url":"y","assets":[]}
+        ]"#;
+        let release = parse_releases(json, "0.1.8", None).unwrap().unwrap();
+        assert_eq!(release.version, "0.1.9", "the beta is skipped");
+        let only_beta = r#"[{"tag_name":"v0.2.0","draft":false,"prerelease":true,"body":"","html_url":"x","assets":[]}]"#;
+        assert_eq!(parse_releases(only_beta, "0.1.8", None).unwrap(), None);
+    }
+
+    #[test]
+    fn an_asset_bigger_than_the_limit_is_refused_before_downloading() {
+        let release = Release {
+            version: "9.9.9".into(),
+            notes: String::new(),
+            page: String::new(),
+            asset: Some(Asset {
+                name: "prowave-windows-x86_64.zip".into(),
+                url: "https://example.invalid/update.zip".into(),
+                size: MAX_DOWNLOAD + 1,
+                sha256: None,
+            }),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let target = Target::new(Kind::Windows, dir.path().join("prowave.exe"));
+        let err = stage_for(&release, &Progress::default(), &target, &|_| false).unwrap_err();
+        assert!(err.contains("too big"), "{err}");
+        assert!(!with_suffix(&target.path, ".new").exists());
+    }
+
+    #[test]
+    fn the_helper_ignores_a_staged_file_that_is_not_the_expected_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("Pro Wave").join("prowave.exe");
+        let staged = with_suffix(&exe, ".new");
+        let parse = |kind: &str, target: &Path, staged: &Path| {
+            parse_helper_args(&[
+                OsString::from("--apply-update"),
+                OsString::from("1"),
+                OsString::from(kind),
+                target.as_os_str().to_owned(),
+                staged.as_os_str().to_owned(),
+            ])
+        };
+        let job = parse("windows", &exe, &staged).expect("the expected staged file");
+        assert_eq!(job.wait_for, 1);
+        assert_eq!(job.plan.target.kind, Kind::Windows);
+        assert_eq!(job.plan.target.path, exe);
+        assert_eq!(job.plan.staged, staged);
+        // A path this program would not have staged is not a job.
+        assert_eq!(parse("windows", &exe, &dir.path().join("passwd")), None);
+        assert_eq!(
+            parse(
+                "windows",
+                Path::new("prowave.exe"),
+                Path::new("prowave.exe.new")
+            ),
+            None,
+            "relative paths are not accepted"
+        );
+        // A package lives in a temporary folder, so only its path being absolute counts.
+        assert!(parse(
+            "deb",
+            &dir.path().join("usr/bin/prowave"),
+            &dir.path().join("prowave-studio_1_amd64.deb")
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn a_failed_package_install_keeps_the_downloaded_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("prowave-studio_1.2.3_amd64.deb");
+        std::fs::write(&staged, b"package").unwrap();
+        let plan = Plan {
+            target: Target::new(Kind::Deb, dir.path().join("usr/bin/prowave")),
+            staged: staged.clone(),
+        };
+        let err = apply_with(&plan, &|_| false, &|_| {
+            Err("the installation was not allowed".to_string())
+        })
+        .unwrap_err();
+        assert!(staged.exists(), "the file is kept for a manual install");
+        assert!(err.contains("the installation was not allowed"));
+        assert!(err.contains("sudo apt install"), "{err}");
+    }
+
+    #[test]
+    fn a_failed_package_install_keeps_the_file_and_says_how_to_retry() {
+        let file = Path::new("/tmp/prowave-studio_1.2.3_amd64.deb");
+        let none = |_: &str| false;
+        let message = package_error(Kind::Deb, file, &none, "the installation was not allowed");
+        assert!(message.contains("the installation was not allowed"));
+        assert!(message.contains("/tmp/prowave-studio_1.2.3_amd64.deb"));
+        assert!(message.contains("sudo apt install"));
+    }
+
+    #[test]
+    fn the_first_run_after_an_update_keeps_the_old_version_and_drops_stale_downloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("prowave");
+        std::fs::write(&exe, b"new").unwrap();
+        for suffix in [".old", ".new", ".new.stage", ".stage"] {
+            std::fs::write(with_suffix(&exe, suffix), suffix.as_bytes()).unwrap();
+        }
+        let target = Target::new(Kind::Tarball, &exe);
+        clean_up(&target, true);
+        assert!(with_suffix(&exe, ".old").exists(), "kept for one run");
+        assert!(!with_suffix(&exe, ".new").exists());
+        assert!(
+            !with_suffix(&with_suffix(&exe, ".new"), ".stage").exists(),
+            "the folder an unpacked macOS update works in"
+        );
+        assert!(!with_suffix(&exe, ".stage").exists());
+        clean_up(&target, false);
+        assert!(
+            !with_suffix(&exe, ".old").exists(),
+            "gone after the first run"
+        );
+    }
+
+    #[test]
+    fn a_half_finished_swap_is_undone_before_the_old_version_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("prowave");
+        let old = with_suffix(&exe, ".old");
+        std::fs::write(&old, b"old").unwrap();
+        let target = Target::new(Kind::Tarball, &exe);
+        ensure_program(&target).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+        assert!(!old.exists(), "the old version moved back into place");
+        // With a program in place nothing changes.
+        std::fs::write(&exe, b"new").unwrap();
+        ensure_program(&target).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new");
+    }
+
+    #[test]
+    fn a_rename_that_keeps_failing_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let dest = dir.path().join("dest");
+        assert!(rename_with_retry(&missing, &dest).is_err());
+        assert!(!dest.exists());
     }
 
     #[test]
