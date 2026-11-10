@@ -455,6 +455,19 @@ pub enum Command {
     SetMasterHosted(Option<Box<dyn crate::hosted::HostedEffect>>),
     /// Bypass the hosted master plug-in without unloading it.
     SetMasterHostedBypass(bool),
+    /// A hosted plug-in in `slot` of `track`'s insert section (`None` clears the slot). The old
+    /// one goes back through the garbage queue.
+    SetTrackHosted {
+        track: u16,
+        slot: u8,
+        effect: Option<Box<dyn crate::hosted::HostedEffect>>,
+    },
+    /// Bypass slot `slot` of a track's hosted plug-ins.
+    SetTrackHostedBypass {
+        track: u16,
+        slot: u8,
+        bypass: bool,
+    },
     /// Space Designer: a new impulse response for the effect in `slot` of `track` (made with
     /// [`Convolver::for_params`]); the old one goes back through the garbage queue.
     SetConvolver {
@@ -799,6 +812,9 @@ pub struct EngineCore {
     master_chain: Option<Box<Chain>>,
     /// A hosted plug-in after the master effects, before the master fader.
     master_hosted: Option<Box<dyn crate::hosted::HostedEffect>>,
+    /// Hosted plug-ins per track, after the built-in insert chain and before delay
+    /// compensation. Slots may be sparse.
+    track_hosted: Vec<Vec<Option<Box<dyn crate::hosted::HostedEffect>>>>,
     /// Delay compensation per strip.
     pdc: Vec<Option<Box<Pdc>>>,
     routes: Vec<Route>,
@@ -948,6 +964,7 @@ impl EngineCore {
             chains: (0..MAX_TRACKS).map(|_| None).collect(),
             master_chain: None,
             master_hosted: None,
+            track_hosted: (0..MAX_TRACKS).map(|_| Vec::new()).collect(),
             pdc: (0..MAX_TRACKS).map(|_| None).collect(),
             routes: vec![Route::default(); MAX_TRACKS],
             complex: Vec::with_capacity(MAX_TRACKS),
@@ -1354,6 +1371,11 @@ impl EngineCore {
         if let Some(chain) = self.chains[t].as_mut() {
             (xl, xr) = chain.process(xl, xr);
         }
+        if let Some(slots) = self.track_hosted.get_mut(t) {
+            for effect in slots.iter_mut().flatten() {
+                (xl, xr) = effect.process(xl, xr);
+            }
+        }
         if let Some(pdc) = self.pdc[t].as_mut() {
             (xl, xr) = pdc.delay_before(xl, xr);
         }
@@ -1697,6 +1719,39 @@ impl EngineCore {
                 Command::SetMasterHostedBypass(bypass) => {
                     if let Some(hosted) = self.master_hosted.as_mut() {
                         hosted.set_bypass(bypass);
+                    }
+                }
+                Command::SetTrackHosted {
+                    track,
+                    slot,
+                    effect,
+                } => {
+                    let t = track as usize;
+                    if t < MAX_TRACKS {
+                        let slots = &mut self.track_hosted[t];
+                        let at = slot as usize;
+                        if slots.len() <= at {
+                            slots.resize_with(at + 1, || None);
+                        }
+                        if let Some(old) = std::mem::replace(&mut slots[at], effect) {
+                            let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                        }
+                    } else if let Some(old) = effect {
+                        let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                    }
+                }
+                Command::SetTrackHostedBypass {
+                    track,
+                    slot,
+                    bypass,
+                } => {
+                    if let Some(effect) = self
+                        .track_hosted
+                        .get_mut(track as usize)
+                        .and_then(|slots| slots.get_mut(slot as usize))
+                        .and_then(Option::as_mut)
+                    {
+                        effect.set_bypass(bypass);
                     }
                 }
                 Command::SetConvolver { track, slot, conv } => {
