@@ -801,11 +801,13 @@ fn transfer_curve(
             [plot.left_bottom(), plot.right_top()],
             Stroke::new(1.0, Color32::from_gray(0x38)),
         );
-        let db_x = |x: f32| plot.left() + x.clamp(-60.0, 0.0) / 60.0 * plot.width();
-        let db_y = |y: f32| plot.bottom() + (y.clamp(-60.0, 0.0) / 60.0) * plot.height();
+        // A gate's threshold can sit at -80 dB, so it gets the wider scale.
+        let span = if kind == FxKind::Gate { 80.0 } else { 60.0 };
+        let db_x = |x: f32| plot.left() + x.clamp(-span, 0.0) / span * plot.width();
+        let db_y = |y: f32| plot.bottom() + (y.clamp(-span, 0.0) / span) * plot.height();
         let curve: Vec<Pos2> = (0..=120)
             .map(|i| {
-                let x = -60.0 + 60.0 * i as f32 / 120.0;
+                let x = -span + span * i as f32 / 120.0;
                 let y = match kind {
                     FxKind::Compressor => {
                         let threshold = params[0];
@@ -833,6 +835,39 @@ fn transfer_curve(
             })
             .collect();
         g.add(Shape::line(curve, Stroke::new(2.0, accent)));
+        // The threshold (dynamics) or ceiling (limiter) that shapes the curve.
+        match kind {
+            FxKind::Compressor | FxKind::Gate => {
+                let threshold = params[0].clamp(-span, 0.0);
+                let x = db_x(threshold);
+                g.line_segment(
+                    [pos2(x, plot.top()), pos2(x, plot.bottom())],
+                    Stroke::new(1.0, accent.gamma_multiply(0.35)),
+                );
+                g.text(
+                    pos2(x + 3.0, plot.top() + 2.0),
+                    Align2::LEFT_TOP,
+                    format!("{threshold:.0} dB"),
+                    FontId::monospace(8.0),
+                    accent,
+                );
+            }
+            _ => {
+                let ceiling = params[1].clamp(-span, 0.0);
+                let y = db_y(ceiling);
+                g.line_segment(
+                    [pos2(plot.left(), y), pos2(plot.right(), y)],
+                    Stroke::new(1.0, accent.gamma_multiply(0.35)),
+                );
+                g.text(
+                    pos2(plot.right() - 2.0, y - 2.0),
+                    Align2::RIGHT_BOTTOM,
+                    format!("{ceiling:.1} dB"),
+                    FontId::monospace(8.0),
+                    accent,
+                );
+            }
+        }
         // The live gain-reduction meter on the right.
         let meter = Rect::from_min_max(
             pos2(rect.right() - 34.0, plot.top()),

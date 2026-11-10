@@ -15,6 +15,7 @@
 //! interface size). When no window can be opened (a build server without a display), only the
 //! DSP numbers are written, with `window_error`.
 use crate::model::{Project, TrackKind};
+use crate::UiState;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -22,6 +23,24 @@ use std::time::{Duration, Instant};
 
 pub const ARG: &str = "--bench";
 pub const SHOTS_ARG: &str = "--layout-shots";
+pub const FX_SHOTS_ARG: &str = "--fx-shots";
+
+/// The built-in effects `--fx-shots` opens, in rack order (Space Designer included).
+pub const FX_SHOT_KINDS: [prowave_engine::FxKind; 13] = [
+    prowave_engine::FxKind::ChannelEq,
+    prowave_engine::FxKind::MultiEq,
+    prowave_engine::FxKind::Compressor,
+    prowave_engine::FxKind::MultiComp,
+    prowave_engine::FxKind::Delay,
+    prowave_engine::FxKind::Chorus,
+    prowave_engine::FxKind::Phaser,
+    prowave_engine::FxKind::Overdrive,
+    prowave_engine::FxKind::Filter,
+    prowave_engine::FxKind::Gate,
+    prowave_engine::FxKind::Limiter,
+    prowave_engine::FxKind::Amp,
+    prowave_engine::FxKind::Reverb,
+];
 
 /// Window sizes (inner, in points) for `--layout-shots`: a large display, a 13-inch MacBook
 /// Air, a common laptop, and a small window.
@@ -98,6 +117,11 @@ pub fn requested(args: &[std::ffi::OsString]) -> Option<PathBuf> {
 /// The folder given after `--layout-shots`.
 pub fn shots_requested(args: &[std::ffi::OsString]) -> Option<PathBuf> {
     value_after(args, SHOTS_ARG)
+}
+
+/// `--fx-shots <folder>`: a picture of every built-in effect window, then exit.
+pub fn fx_shots_requested(args: &[std::ffi::OsString]) -> Option<PathBuf> {
+    value_after(args, FX_SHOTS_ARG)
 }
 
 fn value_after(args: &[std::ffi::OsString], flag: &str) -> Option<PathBuf> {
@@ -336,6 +360,92 @@ impl LayoutShots {
         }
         false
     }
+}
+
+/// Steps through [`FX_SHOT_KINDS`], opening each effect window and saving a picture of it.
+pub struct FxShots {
+    dir: PathBuf,
+    slot: usize,
+    frames: u32,
+    saved: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    requested: bool,
+    /// `PROWAVE_FX_SLOT=<index>`: capture only that window, after a longer settle. Sequential
+    /// captures through one process can lag the slot; single shots are reliable.
+    single: bool,
+}
+
+impl FxShots {
+    pub fn new(dir: PathBuf) -> Self {
+        let start = std::env::var("PROWAVE_FX_SLOT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|slot| *slot < FX_SHOT_KINDS.len());
+        Self {
+            dir,
+            slot: start.unwrap_or(0),
+            frames: 0,
+            saved: Default::default(),
+            requested: false,
+            single: start.is_some(),
+        }
+    }
+
+    /// Call once per frame. Returns true when every window has a picture and the app should
+    /// close. The project must hold `FX_SHOT_KINDS` in track 0, in the same order.
+    pub fn frame(&mut self, ctx: &egui::Context, ui: &mut UiState) -> bool {
+        use std::sync::atomic::Ordering;
+        ctx.request_repaint();
+        let Some(kind) = FX_SHOT_KINDS.get(self.slot) else {
+            ui.mixer.fx_window = None;
+            return true;
+        };
+        if self.frames == 0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1200.0, 860.0)));
+            ui.mixer.fx_window = Some((0, self.slot));
+            tracing::info!("fx shot: slot {} = {}", self.slot, kind.name());
+        }
+        self.frames += 1;
+        let settle = if self.single {
+            3 * SHOT_FRAMES
+        } else {
+            SHOT_FRAMES
+        };
+        if self.frames == settle && !self.requested {
+            self.requested = true;
+            let file = self
+                .dir
+                .join(format!("fx-{:02}-{}.png", self.slot + 1, slug(kind.name())));
+            let saved = self.saved.clone();
+            ctx.request_screenshot(move |image| {
+                save_png(&file, &image);
+                saved.store(true, Ordering::Release);
+            });
+        }
+        if self.saved.swap(false, Ordering::Acquire) {
+            if self.single {
+                return true;
+            }
+            self.slot += 1;
+            self.frames = 0;
+            self.requested = false;
+        }
+        false
+    }
+}
+
+fn slug(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
 }
 
 fn save_png(file: &std::path::Path, image: &egui::ColorImage) {

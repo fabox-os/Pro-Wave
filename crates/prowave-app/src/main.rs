@@ -314,6 +314,8 @@ struct App {
     bench: Option<bench::Probe>,
     /// `--layout-shots <folder>`: pictures of the layout at several window sizes, then closing.
     shots: Option<bench::LayoutShots>,
+    /// `--fx-shots <folder>`: pictures of every built-in effect window, then closing.
+    fx_shots: Option<bench::FxShots>,
     /// Edit > Undo / Redo.
     history: undo::History,
     /// Frames since the history last looked for an edit.
@@ -1062,6 +1064,12 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+        if let Some(shots) = self.fx_shots.as_mut() {
+            if shots.frame(&ctx, &mut self.ui) {
+                self.fx_shots = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         if self.ui.chooser.is_some() {
             self.chooser_ui(ui, &ctx);
             return;
@@ -1569,6 +1577,9 @@ fn print_help() {
     println!(
         "  --layout-shots <folder>   save pictures of the layout at four window sizes, then exit"
     );
+    println!(
+        "  --fx-shots <folder>       save a picture of every built-in effect window, then exit"
+    );
     println!();
     println!("A .prowave path opens that project; other paths are imported as audio files.");
 }
@@ -1595,11 +1606,12 @@ fn main() -> eframe::Result {
     }
     let bench_out = bench::requested(&all_args);
     let shots_dir = bench::shots_requested(&all_args);
-    if bench_out.is_none() && shots_dir.is_none() {
+    let fx_shots_dir = bench::fx_shots_requested(&all_args);
+    if bench_out.is_none() && shots_dir.is_none() && fx_shots_dir.is_none() {
         updater::clean_up_after_update();
     }
     // Measuring runs leave the user's settings (recent projects, size) alone.
-    let measuring = bench_out.is_some() || shots_dir.is_some();
+    let measuring = bench_out.is_some() || shots_dir.is_some() || fx_shots_dir.is_some();
     // Release builds: on a crash, write a report to the temp folder instead of a raw panic.
     human_panic::setup_panic!(human_panic::Metadata::new(
         "Pro Wave",
@@ -1649,7 +1661,15 @@ fn main() -> eframe::Result {
             // also keeps the fit for small windows.
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
             // Every start begins clean; only the layout pictures need something to show.
-            let project = if shots_dir.is_some() {
+            let project = if fx_shots_dir.is_some() {
+                let mut p = Project::empty();
+                p.tracks[0].inserts = bench::FX_SHOT_KINDS
+                    .iter()
+                    .copied()
+                    .map(crate::model::Insert::new)
+                    .collect();
+                p
+            } else if shots_dir.is_some() {
                 Project::demo()
             } else {
                 Project::empty()
@@ -1689,6 +1709,7 @@ fn main() -> eframe::Result {
                 native_menu: None,
                 bench: bench_out.clone().map(bench::Probe::new),
                 shots: shots_dir.clone().map(bench::LayoutShots::new),
+                fx_shots: fx_shots_dir.clone().map(bench::FxShots::new),
                 frames_since_record: 0,
                 midi: (!measuring).then(midi_in::MidiIn::new),
                 midi_out,
