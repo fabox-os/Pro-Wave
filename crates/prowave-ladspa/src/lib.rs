@@ -490,7 +490,10 @@ unsafe fn read_info(raw: *const RawDescriptor) -> Result<PluginInfo, Error> {
     }
 
     Ok(PluginInfo {
-        unique_id: u64::from(descriptor.unique_id),
+        // `c_ulong` is 32-bit on Windows and 64-bit elsewhere; the cast is needed there even
+        // though it is a no-op on this target.
+        #[allow(clippy::unnecessary_cast)]
+        unique_id: descriptor.unique_id as u64,
         label: string(descriptor.label),
         name: string(descriptor.name),
         maker: string(descriptor.maker),
