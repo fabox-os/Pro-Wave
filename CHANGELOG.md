@@ -7,7 +7,6 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
-✅ **Hardened updates:** the check no longer offers prereleases, and a file bigger than 400 MiB is refused before it is downloaded. The helper only accepts update paths shaped like the ones the program stages itself. A failed package install keeps the downloaded `.deb`/`.rpm` and shows the command to retry it; a swap briefly blocked by antivirus is retried; and if a swap is cut short, the old version is put back. The old version is kept for one run after an update while stale `.new`/`.stage` files are removed. A macOS update must contain a complete `.app` (`Info.plist` and the program).
 
 ✅ **Rename Project…:** **File > Project Management > Rename Project…** now opens Project Settings on its General tab, where the project's name is edited — the name the window title and a Save As default to. The entry used to be greyed out.
 ✅ **GarageBand projects (audio):** **File > Import > Other Projects…** takes a GarageBand `.band` bundle (the macOS folder) and adds an audio track for each of its audio files, read from the project's `Media/` folder. The project's tempo, signature and arrangement (MIDI regions, where each audio region sits) are not read yet — `GARAGEBAND-FORMAT-SPEC.md` has the plan — and an iPad/iPhone `.band` zip is recognised but says to unzip it first.

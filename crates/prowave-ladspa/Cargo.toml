@@ -1,0 +1,10 @@
+[package]
+name = "prowave-ladspa"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: in-process LADSPA plug-in hosting"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+libloading = "0.8"
+
