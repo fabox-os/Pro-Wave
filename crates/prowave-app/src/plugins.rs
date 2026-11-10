@@ -104,6 +104,8 @@ pub struct Plugins {
     error: Option<String>,
     /// A hosted parameter changed since the last save/snapshot.
     dirty: bool,
+    /// When the live parameter lists were last fetched for change detection.
+    last_poll: Option<Instant>,
 }
 
 /// A reborrow of the engine link, so the same option can be used more than once.
@@ -157,6 +159,16 @@ impl Plugins {
         }
         if let Some(error) = resync_error {
             self.error = Some(error);
+        }
+        let due = self
+            .last_poll
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(1));
+        if due && !self.active.is_empty() {
+            let targets: Vec<Target> = self.active.keys().copied().collect();
+            for target in targets {
+                self.refresh_now(target);
+            }
+            self.last_poll = Some(Instant::now());
         }
 
         let mut actions = Vec::new();
@@ -239,7 +251,6 @@ impl Plugins {
             if self.window == Some(target) {
                 self.window = None;
             }
-            self.dirty = true;
         }
     }
 

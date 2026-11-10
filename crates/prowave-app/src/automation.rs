@@ -388,10 +388,14 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
                         }
                         if let Some(saved) = &t.hosted {
                             for k in 0..saved.parameters.len() {
-                                choices.push(AutoTarget::Fx {
-                                    slot: HOSTED_SLOT,
-                                    param: k as u8,
-                                });
+                                // Automation parameters are u8 indexes; higher parameters can
+                                // be controlled but not automated yet.
+                                if let Ok(param) = u8::try_from(k) {
+                                    choices.push(AutoTarget::Fx {
+                                        slot: HOSTED_SLOT,
+                                        param,
+                                    });
+                                }
                             }
                         }
                         for (slot, send) in t.sends.iter().enumerate() {
