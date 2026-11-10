@@ -7,6 +7,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **Time stretching and pitch shifting:** the new `prowave-stretch` crate changes a region's duration without changing its pitch (WSOLA with a waveform-similarity search and Hann overlap-add) and shifts pitch without changing duration (stretch by the pitch ratio, then resample back). It works on interleaved audio with any channel count, using one alignment for all channels so stereo stays in step. Tests cover length and pitch on sine tones, stereo channels, and bounded output. It is an offline algorithm for now; Flex Time and the app are not wired to it yet.
 
 ✅ **Rename Project…:** **File > Project Management > Rename Project…** now opens Project Settings on its General tab, where the project's name is edited — the name the window title and a Save As default to. The entry used to be greyed out.
 ✅ **GarageBand projects (audio):** **File > Import > Other Projects…** takes a GarageBand `.band` bundle (the macOS folder) and adds an audio track for each of its audio files, read from the project's `Media/` folder. The project's tempo, signature and arrangement (MIDI regions, where each audio region sits) are not read yet — `GARAGEBAND-FORMAT-SPEC.md` has the plan — and an iPad/iPhone `.band` zip is recognised but says to unzip it first.

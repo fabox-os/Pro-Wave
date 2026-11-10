@@ -65,12 +65,11 @@ pub fn stretch(input: &[f32], channels: usize, factor: f64) -> Vec<f32> {
         };
         let start = (nominal + offset).max(0) as usize;
         let write = f * hop_out;
-        for n in 0..frame {
+        for (n, w) in window.iter().copied().enumerate() {
             let at = write + n;
             if at >= out_frames {
                 break;
             }
-            let w = window[n];
             window_sum[at] += w;
             let source = start + n;
             if source >= frames_in {
