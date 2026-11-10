@@ -63,6 +63,10 @@ impl Control {
         Err(Error::unsupported())
     }
 
+    pub fn resync_if_needed(&mut self) -> Result<(), Error> {
+        Err(Error::unsupported())
+    }
+
     pub fn open_editor(&mut self) -> Result<(), Error> {
         Err(Error::unsupported())
     }

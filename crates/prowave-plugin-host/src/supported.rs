@@ -1,6 +1,8 @@
 //! The real implementation, built on `plughost`'s helper-process hosting.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use plughost::{
     AutomationEvent, BlockContext, Chain, ChainSlot, Events, Layout, ParameterChange, PluginId,
@@ -38,6 +40,8 @@ pub struct Hosted {
 /// The control side of a live plug-in.
 pub struct Control {
     chain: Chain,
+    /// Set by the audio-thread adapter when the endpoint needs a resynchronization.
+    resync: Arc<AtomicBool>,
 }
 
 /// True when this build can host plug-ins.
@@ -139,9 +143,19 @@ impl Catalog {
             .realtime_endpoint(&RealtimeConfig::new(quantum))
             .map_err(describe)?;
         let latency = chain.start_realtime().map_err(describe)?;
-        let effect = Box::new(RealtimeEffect::new(endpoint, latency, quantum, ids));
+        let resync = Arc::new(AtomicBool::new(false));
+        let effect = Box::new(RealtimeEffect::new(
+            endpoint,
+            latency,
+            quantum,
+            ids,
+            Arc::clone(&resync),
+        ));
+        // `RealtimeEffect` collects one quantum before it can submit it, so the strip is late
+        // by the endpoint latency plus that quantum; delay compensation must know both.
+        let latency = latency.saturating_add(u32::try_from(quantum).unwrap_or(u32::MAX));
         Ok(Hosted {
-            control: Control { chain },
+            control: Control { chain, resync },
             effect,
             latency,
             parameters,
@@ -180,6 +194,14 @@ impl Control {
     /// Logic's Bypass: the plug-in keeps running but its output is not used.
     pub fn set_bypass(&mut self, bypass: bool) -> Result<(), Error> {
         self.chain.set_bypass(0, bypass).map_err(describe)
+    }
+
+    /// Resynchronizes the endpoint after a block it could not render. Call from the UI thread.
+    pub fn resync_if_needed(&mut self) -> Result<(), Error> {
+        if self.resync.swap(false, Ordering::AcqRel) {
+            self.chain.resync_realtime().map(|_| ()).map_err(describe)?;
+        }
+        Ok(())
     }
 
     /// Opens the plug-in's own editor window (it belongs to the helper process).
@@ -266,10 +288,18 @@ pub struct RealtimeEffect {
     /// reserve their room when the effect is created, so the audio thread never allocates.
     pending: Vec<(u64, f64)>,
     automation: Vec<AutomationEvent>,
+    /// Told to the control side when a block fails; it resynchronizes the endpoint.
+    resync: Arc<AtomicBool>,
 }
 
 impl RealtimeEffect {
-    fn new(endpoint: RealtimeEndpoint, latency: u32, quantum: usize, ids: Vec<u64>) -> Self {
+    fn new(
+        endpoint: RealtimeEndpoint,
+        latency: u32,
+        quantum: usize,
+        ids: Vec<u64>,
+        resync: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             endpoint,
             quantum,
@@ -286,6 +316,7 @@ impl RealtimeEffect {
             ids,
             pending: Vec::with_capacity(32),
             automation: Vec::with_capacity(32),
+            resync,
         }
     }
 }
@@ -312,6 +343,7 @@ impl HostedEffect for RealtimeEffect {
                 if result.is_err() {
                     self.output_l.fill(0.0);
                     self.output_r.fill(0.0);
+                    self.resync.store(true, Ordering::Relaxed);
                 }
                 self.events.clear();
                 self.produced.clear();

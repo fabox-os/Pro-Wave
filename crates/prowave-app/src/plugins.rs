@@ -56,6 +56,8 @@ struct Active {
     control: host::Control,
     parameters: Vec<host::Parameter>,
     last_refresh: Instant,
+    /// The class key this control was loaded for, to notice a track that moved or went away.
+    key: String,
 }
 
 /// What the windows asked for, applied after drawing so borrows stay simple.
@@ -76,7 +78,7 @@ enum Action {
     SetParameter {
         target: Target,
         id: u64,
-        param: u8,
+        param: Option<u8>,
         value: f64,
         ended: bool,
     },
@@ -100,6 +102,8 @@ pub struct Plugins {
     search: String,
     selected: Option<String>,
     error: Option<String>,
+    /// A hosted parameter changed since the last save/snapshot.
+    dirty: bool,
 }
 
 /// A reborrow of the engine link, so the same option can be used more than once.
@@ -144,6 +148,17 @@ impl Plugins {
             self.restore_pending(p, reborrow(&mut sync), s);
         }
 
+        self.reconcile(p, reborrow(&mut sync));
+        let mut resync_error = None;
+        for active in self.active.values_mut() {
+            if let Err(error) = active.control.resync_if_needed() {
+                resync_error = Some(error.to_string());
+            }
+        }
+        if let Some(error) = resync_error {
+            self.error = Some(error);
+        }
+
         let mut actions = Vec::new();
         if self.manager_open {
             self.draw_manager(ctx, p, &mut actions);
@@ -166,6 +181,7 @@ impl Plugins {
         self.active.clear();
         self.pending.clear();
         self.window = None;
+        self.dirty = false;
         if let Some(saved) = p.master_hosted.clone() {
             self.pending.push((Target::Master, saved));
         }
@@ -190,6 +206,43 @@ impl Plugins {
         self.restore_pending(p, sync, s);
     }
 
+    /// Drops control chains whose project insert moved to another track or disappeared.
+    ///
+    /// Controls are keyed by track index, so deleting or reordering tracks can leave one pointing
+    /// at a different strip. Comparing the class key catches that: the stale engine stage is
+    /// removed rather than processing another track's audio. The plug-in is unloaded (re-insert
+    /// it, or reopen the project); moving the live instance to the new index is a follow-up.
+    fn reconcile(&mut self, p: &Project, mut sync: Option<&mut EngineSync>) {
+        if self.active.is_empty() {
+            return;
+        }
+        let stale: Vec<Target> = self
+            .active
+            .iter()
+            .filter(|(target, active)| {
+                insert_of(p, **target).is_none_or(|saved| saved.key != active.key)
+            })
+            .map(|(target, _)| *target)
+            .collect();
+        for target in stale {
+            if let Some(sync) = reborrow(&mut sync) {
+                match target {
+                    Target::Master => {
+                        sync.set_master_hosted(None, false);
+                    }
+                    Target::Track(i) => {
+                        sync.set_track_hosted(i, None, false);
+                    }
+                }
+            }
+            self.active.remove(&target);
+            if self.window == Some(target) {
+                self.window = None;
+            }
+            self.dirty = true;
+        }
+    }
+
     /// Saves every live plug-in's state into the project before it is written to disk.
     pub fn snapshot(&mut self, p: &mut Project) {
         let states: Vec<(Target, Vec<u8>)> = self
@@ -204,6 +257,12 @@ impl Plugins {
                 saved.state = state;
             }
         }
+        self.dirty = false;
+    }
+
+    /// True when a hosted parameter changed but the project's saved snapshot is stale.
+    pub fn dirty(&self) -> bool {
+        self.dirty
     }
 
     fn poll_scan(&mut self) {
@@ -327,6 +386,7 @@ impl Plugins {
                 control,
                 parameters,
                 last_refresh: Instant::now(),
+                key: key.to_string(),
             },
         );
         let mut insert = HostedInsert::new(&descriptor, fresh);
@@ -450,25 +510,28 @@ impl Plugins {
                     ended,
                 } => {
                     if let Some(active) = self.active.get_mut(&target) {
-                        if let Err(error) = active.control.set_parameter(id, value) {
-                            self.error = Some(error.to_string());
+                        match active.control.set_parameter(id, value) {
+                            Ok(()) => self.dirty = true,
+                            Err(error) => self.error = Some(error.to_string()),
                         }
                     }
-                    if let Some(saved) = insert_of_mut(p, target) {
-                        if let Some(parameter) = saved.parameters.get_mut(param as usize) {
-                            parameter.value = value as f32;
+                    if let Some(param) = param {
+                        if let Some(saved) = insert_of_mut(p, target) {
+                            if let Some(parameter) = saved.parameters.get_mut(param as usize) {
+                                parameter.value = value as f32;
+                            }
                         }
-                    }
-                    if let Target::Track(i) = target {
-                        let (beat, playing) = (p.position_beats, p.playing);
-                        if let Some(track) = p.tracks.get_mut(i) {
-                            let auto = AutoTarget::Fx {
-                                slot: HOSTED_SLOT,
-                                param,
-                            };
-                            automation::moved(track, auto, value as f32);
-                            if ended {
-                                automation::released(track, auto, beat, playing);
+                        if let Target::Track(i) = target {
+                            let (beat, playing) = (p.position_beats, p.playing);
+                            if let Some(track) = p.tracks.get_mut(i) {
+                                let auto = AutoTarget::Fx {
+                                    slot: HOSTED_SLOT,
+                                    param,
+                                };
+                                automation::moved(track, auto, value as f32);
+                                if ended {
+                                    automation::released(track, auto, beat, playing);
+                                }
                             }
                         }
                     }
@@ -490,6 +553,7 @@ impl Plugins {
                     for (id, value) in defaults {
                         if let Some(active) = self.active.get_mut(&target) {
                             let _ = active.control.set_parameter(id, value);
+                            self.dirty = true;
                             if let Some(parameter) =
                                 active.parameters.iter_mut().find(|p| p.id == id)
                             {
@@ -507,7 +571,17 @@ impl Plugins {
             return;
         };
         match active.control.parameters() {
-            Ok(parameters) => active.parameters = parameters,
+            Ok(parameters) => {
+                let changed = parameters.len() != active.parameters.len()
+                    || parameters
+                        .iter()
+                        .zip(&active.parameters)
+                        .any(|(new, old)| new.id != old.id || new.value != old.value);
+                if changed {
+                    self.dirty = true;
+                }
+                active.parameters = parameters;
+            }
             Err(error) => self.error = Some(error.to_string()),
         }
         active.last_refresh = Instant::now();
@@ -959,25 +1033,33 @@ impl Plugins {
                         };
                         // Read-mode lanes move the control; the engine's automation reaches the
                         // plug-in through the host adapter, so the value shown follows it.
-                        let auto = AutoTarget::Fx {
+                        // Automation targets carry a u8 parameter index; a plug-in with more
+                        // than 256 parameters can still be controlled, just not automated.
+                        let auto_param = u8::try_from(param).ok();
+                        let auto = auto_param.map(|param| AutoTarget::Fx {
                             slot: HOSTED_SLOT,
-                            param: param as u8,
-                        };
+                            param,
+                        });
                         let track_i = match target {
                             Target::Track(i) => Some(i),
                             Target::Master => None,
                         };
-                        let played = track_i
-                            .and_then(|i| p.tracks.get(i))
-                            .and_then(|track| track.auto.played(auto, beat));
-                        let editable = track_i.is_none_or(|i| {
-                            p.tracks
-                                .get(i)
-                                .is_some_and(|track| automation::editable(track, auto))
+                        let played = auto
+                            .zip(track_i)
+                            .and_then(|(auto, i)| p.tracks.get(i).and_then(|t| t.auto.played(auto, beat)));
+                        let editable = match auto {
+                            Some(auto) => track_i.is_none_or(|i| {
+                                p.tracks
+                                    .get(i)
+                                    .is_some_and(|track| automation::editable(track, auto))
+                            }),
+                            None => true,
+                        };
+                        let automated = auto.is_some_and(|auto| {
+                            track_i.and_then(|i| p.tracks.get(i)).is_some_and(|track| {
+                                !track.auto.lane(auto).is_empty()
+                            })
                         });
-                        let automated = track_i
-                            .and_then(|i| p.tracks.get(i))
-                            .is_some_and(|track| !track.auto.lane(auto).is_empty());
                         ui.horizontal(|ui| {
                             let label = ui.add_sized(
                                 [148.0, 18.0],
@@ -1002,7 +1084,7 @@ impl Plugins {
                                 actions.push(Action::SetParameter {
                                     target,
                                     id: parameter.id,
-                                    param: param as u8,
+                                    param: auto_param,
                                     value: v,
                                     ended: !response.dragged(),
                                 });
@@ -1010,7 +1092,7 @@ impl Plugins {
                                 actions.push(Action::SetParameter {
                                     target,
                                     id: parameter.id,
-                                    param: param as u8,
+                                    param: auto_param,
                                     value: v,
                                     ended: true,
                                 });

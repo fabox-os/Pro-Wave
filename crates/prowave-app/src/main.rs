@@ -1227,7 +1227,8 @@ impl eframe::App for App {
         if std::mem::take(&mut self.ui.update_check) {
             self.updater.start_check(true);
         }
-        let unsaved = || file_commands::content(&self.project) != self.saved;
+        let unsaved =
+            || self.plugins.dirty() || file_commands::content(&self.project) != self.saved;
         if self.updater.show(&ctx, &unsaved) == updater::Action::Quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }

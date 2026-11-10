@@ -522,6 +522,9 @@ impl Command {
                 | Self::SetInserts { .. }
                 | Self::SetConvolver { .. }
                 | Self::SetMasterInserts(_)
+                | Self::SetMasterHosted(_)
+                | Self::SetTrackHosted { .. }
+                | Self::ClearHosted
                 | Self::SetPdc { .. }
                 | Self::SetAutomation(_)
                 | Self::SetInput(_)
@@ -967,7 +970,9 @@ impl EngineCore {
             chains: (0..MAX_TRACKS).map(|_| None).collect(),
             master_chain: None,
             master_hosted: None,
-            track_hosted: (0..MAX_TRACKS).map(|_| Vec::new()).collect(),
+            track_hosted: (0..MAX_TRACKS)
+                .map(|_| (0..crate::fx::MAX_INSERTS).map(|_| None).collect())
+                .collect(),
             pdc: (0..MAX_TRACKS).map(|_| None).collect(),
             routes: vec![Route::default(); MAX_TRACKS],
             complex: Vec::with_capacity(MAX_TRACKS),
@@ -1293,11 +1298,12 @@ impl EngineCore {
         for i in 0..MAX_TRACKS {
             let has_chain = self.chains[i].as_ref().is_some_and(|c| !c.fx.is_empty());
             let has_pdc = self.pdc[i].as_ref().is_some_and(|p| !p.is_empty());
+            let has_hosted = self.track_hosted[i].iter().any(Option::is_some);
             let to_bus = self.routes[i].output > 0;
             self.strip_kind[i] = if self.routes[i].bus_in > 0 {
                 self.aux.push(i as u16);
                 2
-            } else if has_chain || has_pdc || to_bus || self.routes[i].has_sends() {
+            } else if has_chain || has_pdc || has_hosted || to_bus || self.routes[i].has_sends() {
                 self.complex.push(i as u16);
                 1
             } else {
@@ -1742,14 +1748,14 @@ impl EngineCore {
                 } => {
                     let t = track as usize;
                     if t < MAX_TRACKS {
-                        let slots = &mut self.track_hosted[t];
-                        let at = slot as usize;
-                        if slots.len() <= at {
-                            slots.resize_with(at + 1, || None);
-                        }
-                        if let Some(old) = std::mem::replace(&mut slots[at], effect) {
+                        if let Some(slot) = self.track_hosted[t].get_mut(slot as usize) {
+                            if let Some(old) = std::mem::replace(slot, effect) {
+                                let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                            }
+                        } else if let Some(old) = effect {
                             let _ = self.trash.push(Garbage::Hosted(Some(old)));
                         }
+                        self.sort_strips();
                     } else if let Some(old) = effect {
                         let _ = self.trash.push(Garbage::Hosted(Some(old)));
                     }
@@ -1773,10 +1779,13 @@ impl EngineCore {
                         let _ = self.trash.push(Garbage::Hosted(Some(old)));
                     }
                     for slots in &mut self.track_hosted {
-                        for old in slots.drain(..).flatten() {
-                            let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                        for slot in slots.iter_mut() {
+                            if let Some(old) = slot.take() {
+                                let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                            }
                         }
                     }
+                    self.sort_strips();
                 }
                 Command::SetConvolver { track, slot, conv } => {
                     let chain = if track == MASTER_TRACK {

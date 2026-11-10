@@ -803,8 +803,8 @@ fn transfer_curve(
         );
         // A gate's threshold can sit at -80 dB, so it gets the wider scale.
         let span = if kind == FxKind::Gate { 80.0 } else { 60.0 };
-        let db_x = |x: f32| plot.left() + x.clamp(-span, 0.0) / span * plot.width();
-        let db_y = |y: f32| plot.bottom() + (y.clamp(-span, 0.0) / span) * plot.height();
+        let db_x = |x: f32| plot.left() + ((x.clamp(-span, 0.0) + span) / span) * plot.width();
+        let db_y = |y: f32| plot.bottom() - ((y.clamp(-span, 0.0) + span) / span) * plot.height();
         let curve: Vec<Pos2> = (0..=120)
             .map(|i| {
                 let x = -span + span * i as f32 / 120.0;

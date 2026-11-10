@@ -138,7 +138,7 @@ impl App {
         );
         if cmd == FileCmd::Revert {
             self.request_revert();
-        } else if discards && content(&self.project) != self.saved {
+        } else if discards && (self.plugins.dirty() || content(&self.project) != self.saved) {
             self.ui.ask_save = Some(cmd);
         } else {
             self.do_file_cmd(cmd, ctx);
@@ -267,7 +267,7 @@ impl App {
         if self.path.is_none() {
             self.ui.status =
                 Some(tr("nothing to revert to: the project has not been saved yet").into());
-        } else if content(&self.project) == self.saved {
+        } else if !self.plugins.dirty() && content(&self.project) == self.saved {
             self.ui.status = Some(tr("no unsaved changes to revert").into());
         } else {
             self.ui.ask_revert = true;
