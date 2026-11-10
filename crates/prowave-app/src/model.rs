@@ -248,6 +248,20 @@ pub const HOSTED_SLOT: u8 = u8::MAX;
 /// The plug-in itself lives in [`crate::plugins::Plugins`] (its control chains) and in the
 /// engine (its realtime adapter); this is the part a project file keeps: what to load, whether
 /// it is bypassed, and the plug-in's own state blob.
+/// One parameter of a hosted plug-in, as the Automation editor needs it. Values are
+/// normalized to 0..=1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostedParam {
+    /// The plug-in's native parameter ID.
+    pub id: u64,
+    pub title: String,
+    pub default: f32,
+    /// The current value, when the plug-in reports one.
+    pub value: f32,
+    pub steps: u32,
+    pub discrete: bool,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct HostedInsert {
     /// `format:class-id`, the key `prowave_plugin_host::Catalog::instantiate` takes.
@@ -260,6 +274,8 @@ pub struct HostedInsert {
     pub state: Vec<u8>,
     /// The host adapter's latency in frames (not saved; measured when the plug-in loads).
     pub latency: u32,
+    /// The parameters the Automation editor can address (not saved; read when it loads).
+    pub parameters: Vec<HostedParam>,
 }
 
 impl HostedInsert {
@@ -272,6 +288,7 @@ impl HostedInsert {
             bypass: false,
             state,
             latency: 0,
+            parameters: Vec::new(),
         }
     }
 }

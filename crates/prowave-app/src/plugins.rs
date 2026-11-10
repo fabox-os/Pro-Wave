@@ -310,6 +310,17 @@ impl Plugins {
             return Err("the audio engine is busy; try again".to_string());
         }
         let fresh = control.state().unwrap_or_default();
+        let meta: Vec<crate::model::HostedParam> = parameters
+            .iter()
+            .map(|parameter| crate::model::HostedParam {
+                id: parameter.id,
+                title: parameter.title.clone(),
+                default: parameter.default.unwrap_or(0.0) as f32,
+                value: parameter.value.or(parameter.default).unwrap_or(0.0) as f32,
+                steps: parameter.steps,
+                discrete: parameter.discrete,
+            })
+            .collect();
         self.active.insert(
             target,
             Active {
@@ -321,6 +332,7 @@ impl Plugins {
         let mut insert = HostedInsert::new(&descriptor, fresh);
         insert.bypass = bypass;
         insert.latency = latency;
+        insert.parameters = meta;
         if let Some(state) = state {
             insert.state = state;
         }
@@ -440,6 +452,11 @@ impl Plugins {
                     if let Some(active) = self.active.get_mut(&target) {
                         if let Err(error) = active.control.set_parameter(id, value) {
                             self.error = Some(error.to_string());
+                        }
+                    }
+                    if let Some(saved) = insert_of_mut(p, target) {
+                        if let Some(parameter) = saved.parameters.get_mut(param as usize) {
+                            parameter.value = value as f32;
                         }
                     }
                     if let Target::Track(i) = target {

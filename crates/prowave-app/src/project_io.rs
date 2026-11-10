@@ -206,6 +206,7 @@ fn hosted_from_doc(h: &prowave_project::HostedDoc) -> crate::model::HostedInsert
         // A project is untrusted input; plughost accepts at most 128 MiB of state.
         state: h.state.iter().copied().take(128 << 20).collect(),
         latency: 0,
+        parameters: Vec::new(),
     }
 }
 
@@ -297,8 +298,14 @@ fn automation_from_doc(t: &prowave_project::TrackDoc) -> crate::model::Automatio
     a.volume = points_from_doc(AutoTarget::Volume, &t.auto_volume);
     a.pan = points_from_doc(AutoTarget::Pan, &t.auto_pan);
     for l in t.auto_fx.iter().take(MAX_FX_LANES) {
-        let known = usize::from(l.slot) < prowave_engine::MAX_INSERTS
-            && usize::from(l.param) < prowave_engine::MAX_FX_PARAMS;
+        // Slot 255 is the hosted plug-in's virtual slot; its parameter list is loaded with
+        // the plug-in, so any index is accepted here and labelled later.
+        let known = if l.slot == crate::model::HOSTED_SLOT {
+            true
+        } else {
+            usize::from(l.slot) < prowave_engine::MAX_INSERTS
+                && usize::from(l.param) < prowave_engine::MAX_FX_PARAMS
+        };
         let target = AutoTarget::Fx {
             slot: l.slot,
             param: l.param,
@@ -1328,6 +1335,44 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_hosted_parameter_lane_is_saved() {
+        use crate::model::{AutoTarget, HostedParam, HOSTED_SLOT};
+        let mut p = Project::empty();
+        p.tracks[0].hosted = Some(crate::model::HostedInsert {
+            key: "au:eq".into(),
+            name: "EQ".into(),
+            vendor: String::new(),
+            format: prowave_plugin_host::Format::AudioUnit,
+            bypass: false,
+            state: Vec::new(),
+            latency: 0,
+            parameters: vec![HostedParam {
+                id: 7,
+                title: "Gain".into(),
+                default: 0.5,
+                value: 0.5,
+                steps: 0,
+                discrete: false,
+            }],
+        });
+        let target = AutoTarget::Fx {
+            slot: HOSTED_SLOT,
+            param: 0,
+        };
+        p.tracks[0].auto.set_point(target, 1.0, 0.25);
+        let (doc, _) = to_doc(&p);
+        assert!(
+            doc.tracks[0]
+                .auto_fx
+                .iter()
+                .any(|lane| lane.slot == HOSTED_SLOT),
+            "the lane is written to the project"
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert!(!q.tracks[0].auto.lane(target).is_empty());
+    }
+
+    #[test]
     fn a_track_hosted_plug_in_is_saved_with_its_state() {
         let mut p = Project::empty();
         p.tracks[0].hosted = Some(crate::model::HostedInsert {
@@ -1338,6 +1383,7 @@ pub(crate) mod tests {
             bypass: false,
             state: vec![1, 2, 3],
             latency: 0,
+            parameters: Vec::new(),
         });
         let (doc, _) = to_doc(&p);
         assert_eq!(
@@ -1366,6 +1412,7 @@ pub(crate) mod tests {
             bypass: true,
             state: vec![9, 8, 7, 6],
             latency: 0,
+            parameters: Vec::new(),
         });
         let (doc, _) = to_doc(&p);
         assert_eq!(
