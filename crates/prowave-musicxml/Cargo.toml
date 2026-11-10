@@ -1,0 +1,9 @@
+[package]
+name = "prowave-musicxml"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: MusicXML score reading (the import half of Score export)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+quick-xml = "0.42.0"

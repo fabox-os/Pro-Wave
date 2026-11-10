@@ -7,7 +7,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
-✅ **REX2 loops, read:** the new `prowave-rex` crate opens a Propellerhead ReCycle/Reason `.rx2` (and `.rex`) loop: the IFF container, the preview and original tempo, the sample rate, channel count and frame count, the sliced waveform (the DWOP adaptive-predictor decoder), and each slice as a frame range with its mute, lock and selected flags. Damaged, truncated and hostile files are refused or reported in `warnings`; decoding stops when the bitstream ends instead of running on. The crate's writer produces files the reader decodes back, which is how both halves are tested (mono and stereo round trips, truncation at every offset, 2000 random inputs). `REX-FORMAT-SPEC.md` documents the layout and the codec. **Not yet:** an Import menu entry that puts a loop on a track (the crate is not wired into the app), and 24-bit files are decoded through the same 16-bit codec (the crate says so in `warnings`).
+
 
 ✅ **Rename Project…:** **File > Project Management > Rename Project…** now opens Project Settings on its General tab, where the project's name is edited — the name the window title and a Save As default to. The entry used to be greyed out.
 ✅ **GarageBand projects (audio):** **File > Import > Other Projects…** takes a GarageBand `.band` bundle (the macOS folder) and adds an audio track for each of its audio files, read from the project's `Media/` folder. The project's tempo, signature and arrangement (MIDI regions, where each audio region sits) are not read yet — `GARAGEBAND-FORMAT-SPEC.md` has the plan — and an iPad/iPhone `.band` zip is recognised but says to unzip it first.
