@@ -12,7 +12,7 @@ use crate::routing::AutoPoint;
 use crate::routing::SendSpec;
 use crate::routing::{send_gain, AutoLane, AutoTarget, Route, MAX_BUSES, MAX_SENDS};
 use crate::soundfont::SfPlayer;
-use crate::synth::{kit_voice, osc, Kit, Svf, SynthPatch};
+use crate::synth::{kit_voice, leslie_hz, osc, Kit, Svf, SynthPatch, VoiceKind, DRAWBAR_RATIOS};
 use crate::tempo_map::{SmpteRate, TempoMap};
 use crate::triple::{triple_buffer, Reader, Writer};
 use rtrb::{Consumer, Producer};
@@ -683,6 +683,16 @@ struct Voice {
     vibrato: f32,
     noise: u32,
     pitch_env: f32,
+    /// Drawbar phases for the organ voice, and its percussion, key click and Leslie state.
+    phases: [f32; 9],
+    perc_env: f32,
+    perc_phase: f32,
+    perc_ratio: f32,
+    perc_block: f32,
+    click_env: f32,
+    click_block: f32,
+    rotor_phase: f32,
+    leslie_amp: f32,
     /// Oscillator B / A frequency ratio (fixed per note).
     ratio_b: f32,
     /// `pitch_env` decay over one control block.
@@ -1825,6 +1835,27 @@ impl EngineCore {
             vibrato: 0.0,
             noise: 0x9E37_79B9 ^ (n.pitch as u32).wrapping_mul(2_654_435_761) | 1,
             pitch_env: patch.pitch_drop,
+            phases: [0.0; 9],
+            perc_env: if patch.voice == VoiceKind::DrawbarOrgan && patch.percussion != 0 {
+                1.0
+            } else {
+                0.0
+            },
+            perc_phase: 0.0,
+            perc_ratio: match patch.percussion {
+                2 => 2.0,
+                3 => 3.0,
+                _ => 0.0,
+            },
+            perc_block: (-(CTRL_BLOCK as f32) / (patch.percussion_decay.max(0.02) * self.sr)).exp(),
+            click_env: if patch.voice == VoiceKind::DrawbarOrgan {
+                patch.key_click
+            } else {
+                0.0
+            },
+            click_block: (-(CTRL_BLOCK as f32) / (0.004 * self.sr)).exp(),
+            rotor_phase: 0.0,
+            leslie_amp: 1.0,
             ratio_b: 2f32.powf((patch.semi_b + patch.detune_b / 100.0) / 12.0),
             pitch_decay_block: (-(CTRL_BLOCK as f32) / (patch.pitch_decay.max(0.001) * self.sr))
                 .exp(),
@@ -2092,7 +2123,8 @@ impl EngineCore {
                         }
                     }
                 }
-                let filtered = pt.cutoff < 19_000.0 || pt.highpass;
+                let organ = pt.voice == VoiceKind::DrawbarOrgan;
+                let filtered = !organ && (pt.cutoff < 19_000.0 || pt.highpass);
                 if v.ctrl_left == 0 {
                     v.ctrl_left = CTRL_BLOCK;
                     let vib = if pt.vibrato_cents != 0.0 {
@@ -2101,7 +2133,29 @@ impl EngineCore {
                     } else {
                         0.0
                     };
-                    let bend = v.pitch_env / 12.0 + vib;
+                    // The Leslie is an amplitude and pitch modulation of the organ; it is
+                    // computed with the other control-rate values and held for the block.
+                    let leslie = if organ && pt.leslie > 0 {
+                        v.rotor_phase = wrap_phase(
+                            v.rotor_phase + leslie_hz(pt.leslie) * CTRL_BLOCK as f32 / sr,
+                        );
+                        let s = (v.rotor_phase * std::f32::consts::TAU).sin();
+                        v.leslie_amp = 1.0 + pt.leslie_depth * 0.25 * s;
+                        pt.leslie_depth * 12.0 * s / 1200.0
+                    } else {
+                        v.leslie_amp = 1.0;
+                        0.0
+                    };
+                    // Percussion and key click fade out; at control rate that is smooth.
+                    v.perc_env *= v.perc_block;
+                    v.click_env *= v.click_block;
+                    if v.perc_env < 1e-6 {
+                        v.perc_env = 0.0;
+                    }
+                    if v.click_env < 1e-6 {
+                        v.click_env = 0.0;
+                    }
+                    let bend = v.pitch_env / 12.0 + vib + leslie;
                     let mul = if bend == 0.0 { 1.0 } else { 2f32.powf(bend) };
                     if pt.pitch_drop != 0.0 {
                         v.pitch_env *= v.pitch_decay_block;
@@ -2122,14 +2176,39 @@ impl EngineCore {
                 let (dt_a, dt_b) = (v.dt_a, v.dt_b);
                 v.phase_a = wrap_phase(v.phase_a + dt_a);
                 v.phase_b = wrap_phase(v.phase_b + dt_b);
-                let mut x = osc(pt.wave_a, v.phase_a, dt_a, pt.pulse_width) * pt.level_a
-                    + osc(pt.wave_b, v.phase_b, dt_b, pt.pulse_width) * pt.level_b;
-                if pt.noise > 0.0 {
-                    v.noise ^= v.noise << 13;
-                    v.noise ^= v.noise >> 17;
-                    v.noise ^= v.noise << 5;
-                    x += ((v.noise as f32 / u32::MAX as f32) * 2.0 - 1.0) * pt.noise;
-                }
+                let mut x = if organ {
+                    // Nine sine drawbars at their harmonic ratios.
+                    let mut sum = 0.0;
+                    for (i, phase) in v.phases.iter_mut().enumerate() {
+                        *phase = wrap_phase(*phase + dt_a * DRAWBAR_RATIOS[i]);
+                        sum += (*phase * std::f32::consts::TAU).sin()
+                            * (pt.drawbars[i].min(8) as f32 / 8.0);
+                    }
+                    let mut x = sum * 0.2;
+                    if v.perc_env > 0.0 {
+                        v.perc_phase = wrap_phase(v.perc_phase + dt_a * v.perc_ratio);
+                        x += (v.perc_phase * std::f32::consts::TAU).sin()
+                            * v.perc_env
+                            * pt.percussion_level;
+                    }
+                    if v.click_env > 0.0 {
+                        v.noise ^= v.noise << 13;
+                        v.noise ^= v.noise >> 17;
+                        v.noise ^= v.noise << 5;
+                        x += ((v.noise as f32 / u32::MAX as f32) * 2.0 - 1.0) * v.click_env * 0.3;
+                    }
+                    x * v.leslie_amp
+                } else {
+                    let mut x = osc(pt.wave_a, v.phase_a, dt_a, pt.pulse_width) * pt.level_a
+                        + osc(pt.wave_b, v.phase_b, dt_b, pt.pulse_width) * pt.level_b;
+                    if pt.noise > 0.0 {
+                        v.noise ^= v.noise << 13;
+                        v.noise ^= v.noise >> 17;
+                        v.noise ^= v.noise << 5;
+                        x += ((v.noise as f32 / u32::MAX as f32) * 2.0 - 1.0) * pt.noise;
+                    }
+                    x
+                };
                 if filtered {
                     let (low, high) = v.filter.tick(x, v.filter_f, v.filter_damping);
                     x = if pt.highpass { high } else { low };
@@ -4145,5 +4224,109 @@ mod tests {
             .is_ok());
         render(&mut e, 0.01);
         assert_eq!(e.pdc[3].as_ref().map(|p| p.lengths()), Some((2, 2)));
+    }
+
+    /// One-bin DFT magnitude of `samples` at `hz` (the engine's 48 kHz rate).
+    fn energy_at(samples: &[f32], hz: f32) -> f32 {
+        let (mut re, mut im) = (0.0f32, 0.0f32);
+        for (n, x) in samples.iter().enumerate() {
+            let phase = std::f32::consts::TAU * hz * n as f32 / 48_000.0;
+            re += x * phase.cos();
+            im -= x * phase.sin();
+        }
+        (re * re + im * im).sqrt() / samples.len() as f32
+    }
+
+    /// Mean absolute first difference: grows with high-frequency content (key click, noise).
+    fn roughness(samples: &[f32]) -> f32 {
+        samples.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / samples.len() as f32
+    }
+
+    fn organ(drawbars: [u8; 9]) -> SynthPatch {
+        SynthPatch {
+            voice: VoiceKind::DrawbarOrgan,
+            drawbars,
+            ..SynthPatch::default()
+        }
+    }
+
+    #[test]
+    fn drawbar_organ_plays_the_selected_harmonics() {
+        // A4: the 8' drawbar is the 440 Hz fundamental, the 16' drawbar the octave below.
+        let eight = play_note_with(organ([0, 0, 8, 0, 0, 0, 0, 0, 0]), 69, 24_000);
+        let base = energy_at(&eight, 440.0);
+        assert!(base > 0.008, "fundamental {base}");
+        assert!(energy_at(&eight, 220.0) < base * 0.1);
+        assert!(energy_at(&eight, 880.0) < base * 0.1);
+
+        let sixteen = play_note_with(organ([8, 0, 0, 0, 0, 0, 0, 0, 0]), 69, 24_000);
+        let sub = energy_at(&sixteen, 220.0);
+        assert!(sub > 0.008, "sub-octave {sub}");
+        assert!(energy_at(&sixteen, 440.0) < sub * 0.1);
+    }
+
+    #[test]
+    fn organ_percussion_decays_after_the_attack() {
+        let patch = SynthPatch {
+            percussion: 3,
+            percussion_decay: 0.1,
+            percussion_level: 1.0,
+            ..organ([0, 0, 8, 0, 0, 0, 0, 0, 0])
+        };
+        let samples = play_note_with(patch, 69, 24_000);
+        // The steady 8' drawbar has no third harmonic, so 1320 Hz is percussion only.
+        let early = energy_at(&samples[..4_800], 1_320.0);
+        let late = energy_at(&samples[19_200..], 1_320.0);
+        assert!(early > late * 5.0, "early {early}, late {late}");
+        assert!(late < early * 0.2);
+    }
+
+    #[test]
+    fn organ_key_click_is_a_short_transient() {
+        let without = play_note_with(organ([0, 0, 8, 0, 0, 0, 0, 0, 0]), 69, 24_000);
+        let patch = SynthPatch {
+            key_click: 1.0,
+            ..organ([0, 0, 8, 0, 0, 0, 0, 0, 0])
+        };
+        let with = play_note_with(patch, 69, 24_000);
+        // The click is high-frequency noise for a few milliseconds; the tone is a slow 440 Hz
+        // sine. Compare the first two milliseconds with and without the click.
+        let clicked = roughness(&with[..96]);
+        let plain = roughness(&without[..96]);
+        assert!(clicked > plain * 1.5, "clicked {clicked}, plain {plain}");
+        // And it is gone by half a second.
+        assert!(roughness(&with[19_200..]) < clicked * 0.5);
+    }
+
+    #[test]
+    fn organ_leslie_modulates_the_amplitude() {
+        fn swing(samples: &[f32]) -> f32 {
+            // Ratio of the loudest 21 ms window to the quietest, over steady tone.
+            let windows: Vec<f32> = samples[9_600..19_200]
+                .chunks(1_024)
+                .map(|w| (w.iter().map(|x| x * x).sum::<f32>() / w.len() as f32).sqrt())
+                .collect();
+            let loud = windows.iter().copied().fold(0.0f32, f32::max);
+            let quiet = windows.iter().copied().fold(f32::MAX, f32::min);
+            loud / quiet.max(1e-9)
+        }
+
+        let still = play_note_with(organ([0, 0, 8, 0, 0, 0, 0, 0, 0]), 69, 24_000);
+        let moving = play_note_with(
+            SynthPatch {
+                leslie: 2,
+                leslie_depth: 1.0,
+                ..organ([0, 0, 8, 0, 0, 0, 0, 0, 0])
+            },
+            69,
+            24_000,
+        );
+        assert!(swing(&still) < 1.1, "still {}", swing(&still));
+        assert!(
+            swing(&moving) > swing(&still) * 1.3,
+            "moving {} still {}",
+            swing(&moving),
+            swing(&still)
+        );
     }
 }

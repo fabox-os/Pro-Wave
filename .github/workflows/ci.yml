@@ -49,6 +49,11 @@ jobs:
       - name: cargo xtask check
         run: cargo xtask check
 
+      # The pure Wayland build (no X11); see README "Wayland without X11".
+      - name: cargo check without X11
+        if: runner.os == 'Linux'
+        run: cargo check -p prowave-app --no-default-features
+
   # The lightweight targets of LINUX-MACOS-LIGHTWEIGHT.md (startup, memory, binary size, 24-track
   # DSP load) on a release build, plus pictures of the layout at several window sizes (a 13-inch
   # MacBook Air among them) to look at in the run's artifacts. Linux is left out: its build
