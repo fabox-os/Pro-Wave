@@ -48,7 +48,7 @@ fn assert_finite(samples: &[f32]) {
 #[test]
 fn stretching_doubles_the_length_and_keeps_the_pitch() {
     let input = mono(440.0);
-    let output = stretch(&input, 1, 2.0);
+    let output = stretch(&input, 1, 2.0).expect("a valid stretch");
     assert_finite(&output);
     let expected = 2 * FRAMES;
     assert!(
@@ -64,7 +64,7 @@ fn stretching_doubles_the_length_and_keeps_the_pitch() {
 #[test]
 fn an_octave_shift_raises_pitch_and_keeps_length() {
     let input = mono(440.0);
-    let output = shift_pitch(&input, 1, 12.0);
+    let output = shift_pitch(&input, 1, 12.0).expect("a valid shift");
     assert_finite(&output);
     assert!(
         output.len().abs_diff(FRAMES) <= 2,
@@ -79,7 +79,7 @@ fn an_octave_shift_raises_pitch_and_keeps_length() {
 #[test]
 fn stereo_channels_stay_in_step() {
     let input = stereo(440.0, 880.0);
-    let output = stretch(&input, 2, 1.5);
+    let output = stretch(&input, 2, 1.5).expect("a valid stretch");
     assert_finite(&output);
     assert_eq!(output.len() % 2, 0);
     let frames = output.len() / 2;
@@ -102,31 +102,46 @@ fn stereo_channels_stay_in_step() {
 fn output_stays_bounded_and_never_panics() {
     let input = mono(220.0);
     for factor in [0.5, 0.75, 1.25, 3.0] {
-        let output = stretch(&input, 1, factor);
+        let output = stretch(&input, 1, factor).expect("a valid stretch");
         assert_finite(&output);
         let peak = output
             .iter()
             .fold(0f32, |peak, sample| peak.max(sample.abs()));
         assert!(peak <= 2.0, "factor {factor} peaked at {peak}");
     }
-    assert!(stretch(&[0.25; 1], 1, 2.0).iter().all(|s| s.is_finite()));
+    assert!(stretch(&[0.25; 1], 1, 2.0)
+        .expect("a one-frame stretch")
+        .iter()
+        .all(|s| s.is_finite()));
 }
 
 #[test]
 fn an_oversized_request_is_refused() {
     let input = mono(440.0);
-    assert!(stretch(&input, 1, 1.0e9).is_empty());
+    assert_eq!(
+        stretch(&input, 1, 1.0e9),
+        Err(prowave_stretch::Error::TooLarge)
+    );
 }
 
 #[test]
 fn a_quiet_input_is_stretched_like_a_loud_one() {
     let loud = mono(440.0);
     let quiet: Vec<f32> = loud.iter().map(|s| s * 0.01).collect();
-    let a = stretch(&loud, 1, 1.5);
-    let b = stretch(&quiet, 1, 1.5);
+    let a = stretch(&loud, 1, 1.5).expect("a valid stretch");
+    let b = stretch(&quiet, 1, 1.5).expect("a valid stretch");
     assert_eq!(a.len(), b.len());
     // Same choices of offset, so the quiet result is the loud one scaled.
     for (x, y) in a.iter().zip(&b).skip(64).take(4_000) {
         assert!((x * 0.01 - y).abs() < 1e-3, "{x} {y}");
     }
+}
+
+#[test]
+fn the_end_of_a_stretched_clip_is_not_silent() {
+    let input = mono(440.0);
+    let output = stretch(&input, 1, 2.0).expect("a valid stretch");
+    let tail = &output[output.len() - output.len() / 20..];
+    let rms = (tail.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / tail.len() as f64).sqrt();
+    assert!(rms > 0.05, "the last 5% of the clip is silent (RMS {rms})");
 }
