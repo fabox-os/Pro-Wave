@@ -145,6 +145,9 @@ pub struct FlexState {
     renders: Vec<Render>,
     /// Regions whose edits are to be removed (it needs the context, which the menus lack).
     removals: Vec<(usize, usize)>,
+    /// A Flex marker is being dragged with the pointer: the sound is made once it is let go,
+    /// not for every position on the way there.
+    pub dragging: bool,
 }
 
 impl FlexState {
@@ -273,6 +276,94 @@ pub fn markers_from(pairs: impl IntoIterator<Item = (f64, f64)>) -> Vec<WarpPoin
     out
 }
 
+/// The marker nearest `dst` (seconds of the result) within `tol` seconds, for a click at
+/// `dst` (Logic: the Flex marker under the pointer).
+pub fn marker_near(markers: &[WarpPoint], dst: f64, tol: f64) -> Option<usize> {
+    if !(dst.is_finite() && tol.is_finite() && tol >= 0.0) {
+        return None;
+    }
+    markers
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (i, (m.dst - dst).abs()))
+        .filter(|(_, d)| *d <= tol)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// Moves marker `i` to `dst` seconds of the result. It stays after the marker before it and
+/// before the one after it, so the markers keep their order.
+pub fn move_marker(markers: &mut [WarpPoint], i: usize, dst: f64) {
+    /// The least distance between two markers, in seconds.
+    const GAP: f64 = 0.002;
+    if !dst.is_finite() || i >= markers.len() {
+        return;
+    }
+    let low = match i.checked_sub(1).and_then(|k| markers.get(k)) {
+        Some(m) => m.dst + GAP,
+        None => 0.0,
+    };
+    let high = markers.get(i + 1).map_or(f64::INFINITY, |m| m.dst - GAP);
+    if high > low {
+        markers[i].dst = dst.clamp(low, high);
+    }
+}
+
+/// Adds a marker: moment `src` of the recording plays at moment `dst` of the result. Returns
+/// its index. Nothing is added for a value that is not finite, that lands on another marker,
+/// or that would put the markers out of order.
+pub fn add_marker(markers: &mut Vec<WarpPoint>, src: f64, dst: f64) -> Option<usize> {
+    const GAP: f64 = 0.002;
+    if !(src.is_finite() && dst.is_finite() && src > 0.0 && dst > 0.0) {
+        return None;
+    }
+    let at = markers
+        .iter()
+        .position(|m| m.src > src)
+        .unwrap_or(markers.len());
+    if at > 0 {
+        let before = &markers[at - 1];
+        if src <= before.src + GAP || dst <= before.dst + GAP {
+            return None;
+        }
+    }
+    if let Some(after) = markers.get(at) {
+        if src >= after.src - GAP || dst >= after.dst - GAP {
+            return None;
+        }
+    }
+    markers.insert(at, WarpPoint { src, dst });
+    Some(at)
+}
+
+/// Removes marker `i`. False when there is no such marker.
+pub fn remove_marker(markers: &mut Vec<WarpPoint>, i: usize) -> bool {
+    if i < markers.len() {
+        markers.remove(i);
+        true
+    } else {
+        false
+    }
+}
+
+/// Where moment `dst` of the result is in the recording: the inverse of
+/// [`FlexEdit::place_of`].
+pub fn source_at(markers: &[WarpPoint], dst: f64) -> f64 {
+    let mut prev = WarpPoint { src: 0.0, dst: 0.0 };
+    for m in markers {
+        if dst < m.dst {
+            let span = m.dst - prev.dst;
+            return if span > 0.0 {
+                prev.src + (dst - prev.dst) * (m.src - prev.src) / span
+            } else {
+                m.src
+            };
+        }
+        prev = *m;
+    }
+    prev.src + (dst - prev.dst)
+}
+
 /// The markers that make the beats `beats` (seconds into the recording) land on the project's
 /// beats, from the beat nearest the first one on. Also the result's length.
 pub fn follow_tempo(
@@ -309,25 +400,12 @@ pub fn follow_beats(p: &mut Project, t: usize, r: usize, beats: &[f64]) {
     // The editor's beats are of the file the region plays; with an edit already there they are
     // taken back to the recording.
     let edit = a.flex.clone();
-    let to_src = |x: f64| match &edit {
+    let src: Vec<f64> = match &edit {
         Some(e) if !e.markers.is_empty() => {
-            let mut prev = WarpPoint { src: 0.0, dst: 0.0 };
-            for m in &e.markers {
-                if x < m.dst {
-                    let span = m.dst - prev.dst;
-                    return if span > 0.0 {
-                        prev.src + (x - prev.dst) * (m.src - prev.src) / span
-                    } else {
-                        m.src
-                    };
-                }
-                prev = *m;
-            }
-            prev.src + (x - prev.dst)
+            beats.iter().map(|b| source_at(&e.markers, *b)).collect()
         }
-        _ => x,
+        _ => beats.to_vec(),
     };
-    let src: Vec<f64> = beats.iter().map(|b| to_src(*b)).collect();
     let (markers, length) = follow_tempo(&src, duration, &map, origin);
     let mode = flex_mode_of(p, t, r);
     set_mode(p, t, r, mode);
@@ -438,6 +516,11 @@ fn work(
 /// Applies the commands that finished and the sounds that are ready, and starts making the
 /// sound of edits that changed. Call once per frame.
 pub fn poll(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
+    // A drag that ended without the marker seeing its release (the region was deleted under
+    // the pointer, say) must not keep the sound from being made.
+    if s.flex.dragging && !ctx.input(|i| i.pointer.any_down()) {
+        s.flex.dragging = false;
+    }
     for (t, r) in std::mem::take(&mut s.flex.removals) {
         remove(p, t, r, ctx);
     }
@@ -607,6 +690,11 @@ fn clean_cache(dir: &std::path::Path, days: u64) {
 }
 
 fn start_renders(p: &mut Project, s: &mut UiState) {
+    // A marker being dragged changes the markers every frame; the sound follows the hand
+    // when it stops (`FlexState::dragging`).
+    if s.flex.dragging {
+        return;
+    }
     static CLEANED: std::sync::Once = std::sync::Once::new();
     for track in &mut p.tracks {
         for region in &mut track.regions {
@@ -881,6 +969,57 @@ mod tests {
         let mut other = edit.clone();
         other.mode = FlexMode::Slicing;
         assert_ne!(edit.fingerprint(), other.fingerprint());
+    }
+
+    #[test]
+    fn flex_markers_are_found_dragged_added_and_removed() {
+        let mut m = markers_from([(1.0, 1.0), (2.0, 2.0)]);
+        // A press takes the marker nearest the pointer, within the tolerance.
+        assert_eq!(marker_near(&m, 1.04, 0.05), Some(0));
+        assert_eq!(marker_near(&m, 2.0, 0.05), Some(1));
+        assert_eq!(marker_near(&m, 1.5, 0.05), None);
+
+        // A dragged marker keeps its neighbours' order, and its moment in the recording.
+        move_marker(&mut m, 0, 5.0);
+        assert!(
+            (m[0].dst - 1.998).abs() < 1e-9,
+            "stopped before the next one"
+        );
+        assert_eq!(m[0].src, 1.0);
+        move_marker(&mut m, 0, -1.0);
+        assert_eq!(m[0].dst, 0.0, "not before the start");
+        move_marker(&mut m, 1, f64::NAN);
+        assert!((m[1].dst - 2.0).abs() < 1e-9, "a bad value changes nothing");
+
+        // A marker added between two keeps the order; one on top of another is refused.
+        let at = add_marker(&mut m, 1.5, 1.5).expect("between the two");
+        assert_eq!(at, 1);
+        assert!(add_marker(&mut m, 1.5, 1.5).is_none());
+        assert!(add_marker(&mut m, f64::NAN, 1.0).is_none());
+        assert!(remove_marker(&mut m, at));
+        assert_eq!(m.len(), 2);
+        assert!(!remove_marker(&mut m, 9));
+
+        // source_at is place_of backwards.
+        let edit = FlexEdit {
+            markers: markers_from([(1.0, 0.5), (2.0, 2.5)]),
+            ..FlexEdit::new(
+                AudioFile {
+                    path: "x.wav".into(),
+                    sample_rate: 44_100,
+                    frames: 1,
+                    channels: 2,
+                },
+                FlexMode::Rhythmic,
+            )
+        };
+        for src in [0.25, 0.9, 1.0, 1.4, 2.0, 3.0] {
+            let dst = edit.place_of(src);
+            assert!(
+                (source_at(&edit.markers, dst) - src).abs() < 1e-9,
+                "src {src} at {dst}"
+            );
+        }
     }
 
     #[test]
