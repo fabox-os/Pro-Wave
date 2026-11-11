@@ -1,13 +1,27 @@
-# Pro Wave
+<p align="center"><img src="docs/logo.png" alt="Pro Wave logo" width="160"></p>
 
-**ProWave** is an open-source music production DAW in pure Rust, with a look and
-workflow modelled on Apple's Logic Pro. It is drawn entirely with [egui](https://github.com/emilk/egui)
-and plays audio through [cpal](https://github.com/RustAudio/cpal): no Electron, no JUCE.
+<h1 align="center">Pro Wave</h1>
 
-> **Status:** early development. Tracks, MIDI and audio regions, MIDI and audio recording, the
-> Piano Roll, the Mixer with effects and automation, the Library and the built-in synthesizer
-> work; most of Logic's instruments and many editing commands are still to come. [`ROADMAP.md`](ROADMAP.md) has the full plan and
-> [`resume.md`](resume.md) a detailed status of what works today.
+<p align="center"><b>An open-source music production app in pure Rust, with the look and workflow of Logic Pro.</b></p>
+
+<p align="center">Tracks, MIDI and audio, a Piano Roll, a Mixer with real effects and automation, and a lock-free real-time engine. Drawn with egui, played through cpal: no Electron, no JUCE.</p>
+
+<p align="center">
+  <a href="https://github.com/fabox-os/Pro-Wave/actions"><img src="https://img.shields.io/github/actions/workflow/status/fabox-os/Pro-Wave/ci.yml?branch=main&label=CI" alt="CI"></a>
+  <a href="https://github.com/fabox-os/Pro-Wave/releases"><img src="https://img.shields.io/github/v/release/fabox-os/Pro-Wave?include_prereleases&label=release" alt="release"></a>
+  <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="license GPL-3.0">
+  <img src="https://img.shields.io/badge/rust-stable-orange" alt="rust">
+</p>
+
+<p align="center">
+  <a href="https://fabox-os.github.io/Pro-Wave/">Website</a> •
+  <a href="#downloads">Download</a> •
+  <a href="#features">Features</a> •
+  <a href="#building">Build from source</a> •
+  <a href="#workspace">Architecture</a> •
+  <a href="ROADMAP.md">Roadmap</a> •
+  <a href="AGENTS.md">Contributing</a>
+</p>
 
 ![Pro Wave: Tracks area with MIDI and audio regions, the Library, inspector and Mixer](docs/screenshots/tracks-and-mixer.webp)
 
@@ -41,24 +55,26 @@ to update this section.
 | Roadmap items | 24 | 12 | 77 | 31.17% |
 <!-- status:end -->
 
-## What works
+Pro Wave does a lot, and aims to do it the way Logic Pro does. It is a full DAW: arranging, recording, editing, mixing and bouncing in one window, on an engine built so the audio thread never waits.
 
-- **Engine** (`prowave-engine`): sample-accurate transport with cycle, metronome and a tempo map;
-  a lock-free command queue between UI and audio thread, with no allocations on the audio
-  thread; a built-in subtractive synthesizer with drum-kit modes (48 voices); per-track volume,
-  pan, mute, solo and meters; WAV, AIFF, FLAC, MP3 and CAF regions streamed from disk.
-- **Tracks area:** ruler, cycle band, playhead, track headers, MIDI and audio regions with
-  waveforms; move, repeat and delete regions with snapping; per-track heights.
-- **Piano Roll:** draw, select, move, resize and delete notes; quantize (with strength and swing),
-  scale quantize, velocity lane, playable keyboard.
-- **Mixer:** channel strips with sends, pan, faders and meters, and real effects in the Audio FX
-  slots: EQ, compressor, multi-band compressor, reverb, delay, chorus, phaser, overdrive, filter,
-  gate, limiter, multi-band EQ and the **Amp Designer** for guitar and bass (five amplifiers, three
-  cabinets and a microphone position); buses, automation and mix groups; Library patches that
-  change a track's instrument and sound; Region and Track inspectors applied non-destructively.
-- **Projects:** `.prowave` files (a zip with `project.json` and the audio in `media/`), and
-  **File > Bounce > Project or Section…** writes the mix to a WAV.
-- **Time signatures:** any signature, including compound meters such as 6/8 and 7/8.
+> **Note:** Pro Wave is alpha software. The project file format may still change, so keep backups. Plug-in hosting, Live Loops and much of Logic's instrument list are still to come: [`ROADMAP.md`](ROADMAP.md) says what.
+
+## Features
+
+- **Real-time engine.** Sample-accurate transport with cycle, metronome, count-in and a tempo and signature map (any meter, including 6/8 and 7/8). A lock-free command queue between the UI and the audio thread, with no allocation, locks or disk access on the audio thread. 64-bit summing and plug-in delay compensation.
+- **Tracks and regions.** Audio, Instrument, Drummer, Pattern, Aux, VCA, Folder and External MIDI tracks. Move, repeat, cut, copy, paste, split, join and delete regions with snapping; Paste Replace, Bounce in Place and Bounce and Join; undo with a jumpable history.
+- **Recording.** MIDI and audio recording with count-in, cycle and takes. Follow or send MIDI clock and MIDI Time Code; MIDI output with program, bank, pitch bend and SysEx.
+- **Piano Roll, Score and more editors.** Draw, select, move and resize notes; time and scale quantize with strength and swing; velocity lane, Event List, Step Sequencer and MIDI Transform. A Score view with clefs, key and time signatures, rests and ties, and **MusicXML export**.
+- **Mixer and automation.** Channel strips with sends, buses, groups, VCA, pan, faders and meters. Automation for faders, pan, send levels and every effect parameter, with Read, Touch, Latch and Write modes.
+- **Real effects.** Channel EQ, Multi-Band EQ, Compressor, **Multi-Band Compressor**, Noise Gate, Limiter, **Space Designer** convolution reverb (Volume and Filter envelopes, X-Over, Output EQ, mastering presets), Tape Delay, Chorus, Phaser, Overdrive, Filter and the **Amp Designer** for guitar and bass. They work on any strip, **including the Stereo Out**.
+- **Instruments and sounds.** A built-in subtractive synthesizer with drum-kit modes (48 voices), **SoundFont (.sf2)** instruments, **Hydrogen drum kits**, and Library patches that set a track's instrument and effects.
+- **Flex Time, Flex Pitch and Smart Tempo.** Warp and re-pitch audio, detect tempo, and make a project follow a recording.
+- **Audio regions.** WAV, AIFF, FLAC, MP3, CAF, OGG and M4A streamed from disk; region gain, fades, crossfades, reverse and normalize, never destructive.
+- **Bounce and export.** Bounce the project or a cycle section to a 32-bit WAV, export one track, and write the selection as a MIDI file.
+- **Open formats.** `.prowave` projects (a zip with `project.json` and the audio in `media/`), MIDI files (including SMPTE time and markers), audio files, and the audio of GarageBand projects.
+- **Light on resources.** A program of about 15 MB that starts in a few hundred milliseconds. See [`LINUX-MACOS-LIGHTWEIGHT.md`](LINUX-MACOS-LIGHTWEIGHT.md).
+- **Command line.** `prowave --help`, `--play`, `--bench` and `--layout-shots`.
+- **Linux, macOS and Windows.** Releases for all three, as .deb, .rpm, AppImage, Flatpak, a macOS app and a Windows zip.
 
 ## Downloads
 
@@ -120,7 +136,6 @@ cargo xtask check                      # fmt, clippy -D warnings, tests, no-allo
 | [`crates/prowave-engine`](crates/prowave-engine) | Real-time audio engine: transport, tempo map, synth, mixer, disk streaming, cpal output |
 | [`crates/prowave-app`](crates/prowave-app) | The desktop app (egui): every view and editor |
 | [`crates/prowave-project`](crates/prowave-project) | The `.prowave` project file format |
-| [`crates/prowave-hydrogen-import`](crates/prowave-hydrogen-import) | Hydrogen `.h2song` session reading: kit, instruments, patterns and sequence |
 | [`xtask`](xtask) | `cargo xtask check`, `wasm-check` and `rt-check` |
 | [`dist/linux`](dist/linux) | Linux desktop entry, icon, MIME type, `install.sh` and the .deb, .rpm and Flatpak recipes |
 

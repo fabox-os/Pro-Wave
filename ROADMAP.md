@@ -397,6 +397,11 @@ Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
 - **Instruments and effects:** Hydrogen drum kits, Multi-Band Compressor.
 - **GarageBand:** `GARAGEBAND-FORMAT-SPEC.md`, the `prowave-garageband-import` crate and
   File > Import > Other Projects… (audio files only; tempo, signature and arrangement are phase 2).
+- **Logic Pro `.logicx` bundles:** the `prowave-logicx-import` crate finds the bundle in either
+  save shape, follows the active alternative and reads `MetaData.plist` and
+  `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
+  with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
+  regions, plug-ins, Session Players) is the next step.
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.
@@ -499,7 +504,7 @@ test of all the features above on Windows and macOS.
 - **DoD:** Import vocal, Flex Pitch correct to scale, Flex Time quantize to groove
 
 ### Phase 4: Mixer & Channel Strip (Weeks 25-30)
-- [~] Mixer UI: faders, pan, inserts (8 slots, done), sends (4 slots, pre/post, done), VCA, Sends on Fader and Groups (done); stereo pan puck, 15 inserts and 8 sends to do
+- [~] Mixer UI: faders, pan, inserts (15 slots, Logic's limit, done), sends (8 slots, pre/post, done), VCA, Sends on Fader and Groups (done); stereo pan puck to do
 - [~] DSP (basic versions done: 3-band Channel EQ, 6-band Multi-Band EQ, Compressor, Noise Gate, Limiter, Overdrive): Channel EQ (8-band with FFT analyzer - use `rustfft` + `egui` plot), Compressor (6 models: Platinum, VCA, FET, Vintage VCA/FET/Opto with sidechain), Gate, Limiter, Overdrive
 - [~] Automation (fader, pan and every effect setting with Read/Touch/Latch/Write, curved stretches: done): Track vs Region, Trim, two-handle Bezier curves, Automation Quick Access, Sample-accurate parameter automation
 - [~] Bus summing: 64-bit double (done), PDC (done for the effects' look-ahead; plug-in and instrument latency to do), Low Latency Mode

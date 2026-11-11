@@ -7,6 +7,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
+
 
 ✅ **Rename Project…:** **File > Project Management > Rename Project…** now opens Project Settings on its General tab, where the project's name is edited — the name the window title and a Save As default to. The entry used to be greyed out.
 ✅ **GarageBand projects (audio):** **File > Import > Other Projects…** takes a GarageBand `.band` bundle (the macOS folder) and adds an audio track for each of its audio files, read from the project's `Media/` folder. The project's tempo, signature and arrangement (MIDI regions, where each audio region sits) are not read yet — `GARAGEBAND-FORMAT-SPEC.md` has the plan — and an iPad/iPhone `.band` zip is recognised but says to unzip it first.

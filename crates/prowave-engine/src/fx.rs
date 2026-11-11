@@ -12,7 +12,7 @@ use std::f32::consts::{PI, TAU};
 /// Most parameters one effect has.
 pub const MAX_FX_PARAMS: usize = 32;
 /// Most effects in one channel strip.
-pub const MAX_INSERTS: usize = 8;
+pub const MAX_INSERTS: usize = 15;
 
 /// The kinds of effect, in the order the mixer's menu lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
