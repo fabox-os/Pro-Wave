@@ -23,6 +23,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fmt;
+use std::io::Read;
 use std::path::Path;
 
 /// The largest SFZ file the reader accepts (16 MiB). Real instruments are far smaller; the cap
@@ -173,7 +174,19 @@ pub fn load(path: &Path) -> Result<Instrument, Error> {
             limit: MAX_FILE_BYTES,
         });
     }
-    let bytes = std::fs::read(path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+    // The metadata length is zero for devices and some special files, and a file can grow
+    // after it is checked, so read at most one byte past the limit and judge the real size.
+    let file =
+        std::fs::File::open(path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(Error::TooLarge {
+            limit: MAX_FILE_BYTES,
+        });
+    }
     parse_bytes(&bytes)
 }
 
@@ -292,7 +305,13 @@ impl Parser {
             _ => Section::Unknown,
         };
         self.current = match section {
-            Section::Global => Settings::default(),
+            Section::Global => {
+                // A new <global> starts a new instrument-wide scope: the master and group
+                // settings of the previous one must not leak into the regions after it.
+                self.master = Settings::default();
+                self.group = Settings::default();
+                Settings::default()
+            }
             Section::Master => self.global.clone(),
             Section::Group => self.master.clone(),
             Section::Region => {
@@ -596,8 +615,12 @@ fn note_name(value: &str) -> Option<u8> {
             rest = &rest[1..];
         }
     }
+    // Saturating, so a huge octave in an untrusted file cannot overflow (a panic in debug builds).
     let octave = rest.parse::<i32>().ok()?;
-    let midi = 12 * (octave + 1) + semitone;
+    let midi = octave
+        .saturating_add(1)
+        .saturating_mul(12)
+        .saturating_add(semitone);
     Some(midi.clamp(0, 127) as u8)
 }
 
@@ -637,6 +660,46 @@ mod tests {
         assert_eq!(note_name("Cb4"), Some(59));
         assert_eq!(note_name("B#3"), Some(60));
         assert_eq!(note_name("nope"), None);
+    }
+
+    #[test]
+    fn load_refuses_a_file_over_the_limit() {
+        let dir = std::env::temp_dir().join(format!("sfz-load-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let big = dir.join("big.sfz");
+        let small = dir.join("small.sfz");
+        let Ok(()) = std::fs::write(&big, vec![b' '; MAX_FILE_BYTES + 1]) else {
+            panic!("the test file should be written");
+        };
+        let Ok(()) = std::fs::write(&small, "<region> sample=a.wav key=60") else {
+            panic!("the test file should be written");
+        };
+        assert_eq!(
+            load(&big),
+            Err(Error::TooLarge {
+                limit: MAX_FILE_BYTES
+            })
+        );
+        assert!(load(&small).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_huge_octave_does_not_overflow() {
+        assert_eq!(note_name("C2147483647"), Some(127));
+        assert_eq!(note_name("C-2147483648"), Some(0));
+    }
+
+    #[test]
+    fn a_second_global_does_not_inherit_the_old_group() {
+        let text = "<global> volume=-6\n<group> pan=50\n<region> sample=a.wav\n\
+                    <global>\n<region> sample=b.wav\n";
+        let Ok(inst) = parse(text) else {
+            panic!("the instrument should parse");
+        };
+        assert_eq!(inst.regions[0].pan_percent, 50.0);
+        assert_eq!(inst.regions[1].pan_percent, 0.0);
+        assert_eq!(inst.regions[1].volume_db, 0.0);
     }
 
     #[test]
