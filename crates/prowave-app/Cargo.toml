@@ -36,6 +36,9 @@ rhai = { version = "1", features = ["no_module"] }
 # The menus in the macOS system menu bar (see src/native_menu.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "=0.21.0", default-features = false }
+# `--screenshot` must not take the focus on macOS (see `event_loop_builder` in main.rs);
+# eframe re-exports winit's types but not the `platform::macos` extension trait.
+winit = "0.30.13"
 
 [build-dependencies]
 winresource = "0.1.34"

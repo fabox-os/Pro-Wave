@@ -11,6 +11,10 @@
 //! [`LAYOUT_SIZES`] and saves a picture of what it drew as `layout-<w>x<h>.png`, to check the
 //! layout on small screens on any system (a build server included).
 //!
+//! `prowave --screenshot <file.png>`: opens the window without taking the focus, draws a few
+//! frames, saves one picture of it as `<file.png>` and exits. Meant for tools that photograph
+//! the app for comparison; nothing of the user's is changed.
+//!
 //! In bench mode the app touches none of the user's settings (recent projects,
 //! interface size). When no window can be opened (a build server without a display), only the
 //! DSP numbers are written, with `window_error`.
@@ -22,6 +26,11 @@ use std::time::{Duration, Instant};
 
 pub const ARG: &str = "--bench";
 pub const SHOTS_ARG: &str = "--layout-shots";
+pub const SCREENSHOT_ARG: &str = "--screenshot";
+
+/// Frames to draw before `--screenshot` takes its picture: long enough for the layout, the
+/// fonts and the first audio device to settle.
+const SCREENSHOT_FRAMES: u32 = 120;
 
 /// Window sizes (inner, in points) for `--layout-shots`: a large display, a 13-inch MacBook
 /// Air, a common laptop, and a small window.
@@ -98,6 +107,11 @@ pub fn requested(args: &[std::ffi::OsString]) -> Option<PathBuf> {
 /// The folder given after `--layout-shots`.
 pub fn shots_requested(args: &[std::ffi::OsString]) -> Option<PathBuf> {
     value_after(args, SHOTS_ARG)
+}
+
+/// The picture file given after `--screenshot`.
+pub fn screenshot_requested(args: &[std::ffi::OsString]) -> Option<PathBuf> {
+    value_after(args, SCREENSHOT_ARG)
 }
 
 fn value_after(args: &[std::ffi::OsString], flag: &str) -> Option<PathBuf> {
@@ -338,6 +352,47 @@ impl LayoutShots {
     }
 }
 
+/// One picture of the whole window at its current size (see the module docs).
+pub struct Screenshot {
+    file: PathBuf,
+    frames: u32,
+    /// Set by the screenshot callback once the picture is saved.
+    saved: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    requested: bool,
+}
+
+impl Screenshot {
+    pub fn new(file: PathBuf) -> Self {
+        Self {
+            file,
+            frames: 0,
+            saved: Default::default(),
+            requested: false,
+        }
+    }
+
+    /// Call once per frame. Returns true when the picture is saved and the app should close.
+    pub fn frame(&mut self, ctx: &egui::Context) -> bool {
+        use std::sync::atomic::Ordering;
+        ctx.request_repaint();
+        if self.frames == 0 {
+            // The picture should be the same size on every screen (see `with_inner_size`).
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+        }
+        self.frames += 1;
+        if self.frames == SCREENSHOT_FRAMES && !self.requested {
+            self.requested = true;
+            let file = self.file.clone();
+            let saved = self.saved.clone();
+            ctx.request_screenshot(move |image| {
+                save_png(&file, &image);
+                saved.store(true, Ordering::Release);
+            });
+        }
+        self.saved.swap(false, Ordering::Acquire)
+    }
+}
+
 fn save_png(file: &std::path::Path, image: &egui::ColorImage) {
     let [w, h] = image.size;
     let bytes: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
@@ -348,7 +403,7 @@ fn save_png(file: &std::path::Path, image: &egui::ColorImage) {
                 .map_err(|e| e.to_string())
         });
     match result {
-        Ok(()) => tracing::info!("layout shot saved: {}", file.display()),
+        Ok(()) => tracing::info!("picture saved: {}", file.display()),
         Err(e) => tracing::error!("cannot save {}: {e}", file.display()),
     }
 }

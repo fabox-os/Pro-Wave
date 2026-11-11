@@ -439,6 +439,7 @@ mod tests {
             native_menu: None,
             bench: None,
             shots: None,
+            shot: None,
             frames_since_record: 0,
             midi: None,
             midi_out: None,
