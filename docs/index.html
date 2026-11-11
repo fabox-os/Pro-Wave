@@ -46,7 +46,7 @@ code{background:#1d1d23;border:1px solid var(--line);border-radius:6px;padding:2
 pre{background:#121216;border:1px solid var(--line);border-radius:10px;padding:16px;overflow:auto;font-size:14px}
 .dc{display:flex;flex-direction:column;gap:12px}.dc .row{display:flex;gap:10px;flex-wrap:wrap}.dc pre{margin:0;font-size:13px;color:#cfe0ff}.warn{max-width:760px;margin:26px auto 0;padding:14px 18px;border:1px solid #3a3320;background:#17150e;border-radius:10px;color:#e8d9a8;text-align:left;font-size:14px}.dl{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
 footer{border-top:1px solid var(--line);padding:34px 0;color:var(--dim);font-size:13px}
-footer p{margin:6px 0;max-width:780px}
+footer p{margin:6px 0;max-width:780px}.frow{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}.flinks{display:flex;gap:22px}.flinks a:hover{color:var(--text)}.fine{margin-top:22px!important;font-size:12px;opacity:.8}
 @media(max-width:700px){nav a.l{display:none}}
 </style>
 </head>
@@ -150,8 +150,12 @@ $ ./ProWave-*.AppImage</pre></div>
 </div></section>
 
 <footer><div class="wrap">
-  <p>Pro Wave is free software under the GPL-3.0-or-later licence.</p>
-  <p>Pro Wave is an independent project. It is not affiliated with, sponsored by or endorsed by Apple Inc. Logic Pro is a trademark of Apple Inc., used only to describe the workflow Pro Wave follows. Pro Wave contains no Apple code, artwork or sounds.</p>
+  <div class="frow">
+    <div><a class="logo" href="#top"><img src="logo.png" alt="" width="28" height="28">Pro Wave</a>
+      <p>Free and open source software, GPL-3.0-or-later.</p></div>
+    <div class="flinks"><a href="https://github.com/fabox-os/Pro-Wave">GitHub</a><a href="https://github.com/fabox-os/Pro-Wave/releases">Releases</a><a href="https://github.com/fabox-os/Pro-Wave/blob/main/ROADMAP.md">Roadmap</a><a href="https://github.com/fabox-os/Pro-Wave/blob/main/LICENSE">Licence</a></div>
+  </div>
+  <p class="fine">Pro Wave is an independent project. It is not affiliated with, sponsored by or endorsed by Apple Inc. Logic Pro is a trademark of Apple Inc., used only to describe the workflow Pro Wave follows. Pro Wave contains no Apple code, artwork or sounds.</p>
 </div></footer>
 </body>
 </html>
