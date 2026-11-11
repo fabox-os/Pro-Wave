@@ -25,6 +25,27 @@ use std::sync::Arc;
 const MAX_PLUGINS: usize = 1024;
 /// The most parameters, programs, bin names or value names one plug-in may have.
 const MAX_LISTS: usize = 4096;
+/// The most feature outputs one analyser may report.
+const MAX_OUTPUTS: usize = 256;
+/// The most bins one output may have.
+const MAX_BINS: usize = 65_536;
+/// The most features one process call may return.
+const MAX_FEATURES: usize = 100_000;
+/// The most values one feature may hold.
+const MAX_VALUES: usize = 65_536;
+/// Bounds the shared `instantiate` and `cleanup` calls (see [`shared_calls`]).
+static SHARED_CALLS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Some Vamp plug-ins keep state shared by every instance. The host serialises `instantiate`
+/// and `cleanup` so no two threads are inside them at once; this is what makes the `Sync` claim
+/// on [`Inner`] true for such a library. A poisoned gate still lets the call through: the
+/// plug-in was not the one that panicked.
+fn shared_calls() -> std::sync::MutexGuard<'static, ()> {
+    match SHARED_CALLS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 /// The sample window a host picks when the plug-in states no preference.
 pub const DEFAULT_BLOCK_SIZE: u32 = 1024;
 /// The Vamp API level this crate speaks.
@@ -400,8 +421,12 @@ impl Instance {
             .instantiate
             .ok_or(Error::Malformed("instantiate"))?;
         // SAFETY: the descriptor's `instantiate` takes its own descriptor and a sample rate, as
-        // the Vamp ABI specifies.
-        let handle = unsafe { instantiate(raw, sample_rate as f32) };
+        // the Vamp ABI specifies. The gate keeps two threads out of a plug-in that shares state
+        // between instances.
+        let handle = {
+            let _gate = shared_calls();
+            unsafe { instantiate(raw, sample_rate as f32) }
+        };
         if handle.is_null() {
             return Err(Error::Instantiate);
         }
@@ -476,6 +501,10 @@ impl Instance {
             .ok_or(Error::Malformed("releaseOutputDescriptor"))?;
         // SAFETY: the callback belongs to this descriptor and takes its handle.
         let output_count = unsafe { count(self.handle) } as usize;
+        // The count is the plug-in's, so it is capped before the loop trusts it.
+        if output_count > MAX_OUTPUTS {
+            return Err(Error::Malformed("output count"));
+        }
         let mut outputs = Vec::new();
         for index in 0..output_count {
             // SAFETY: the index is below the count the plug-in reported. The returned
@@ -486,8 +515,9 @@ impl Instance {
             }
             // SAFETY: the pointer was just returned by the plug-in and is non-null.
             let output = unsafe { &*raw };
+            // The bin count is the plug-in's too: never read more names than the cap allows.
             let bin_count = if output.has_fixed_bin_count != 0 {
-                output.bin_count as usize
+                (output.bin_count as usize).min(MAX_BINS)
             } else {
                 0
             };
@@ -719,61 +749,86 @@ impl Instance {
         list: *mut RawFeatureList,
         fallback: Option<f64>,
     ) -> Vec<Feature> {
-        if list.is_null() {
-            return Vec::new();
-        }
-        let release = self.descriptor_ref().release_feature_set;
-        let count = (*list).feature_count as usize;
-        let mut features = Vec::with_capacity(count.min(MAX_LISTS));
-        if !(*list).features.is_null() {
-            for index in 0..count {
-                // API version 2 lists hold the version 1 features first, then one union per
-                // feature that may carry a duration.
-                let feature = &(*(*list).features.add(index)).v1;
-                let timestamp = if feature.has_timestamp != 0 {
-                    Some(f64::from(feature.sec) + f64::from(feature.nsec) / 1e9)
-                } else {
-                    fallback
-                };
-                let values = if feature.values.is_null() || feature.value_count == 0 {
-                    Vec::new()
-                } else {
-                    std::slice::from_raw_parts(feature.values, feature.value_count as usize)
-                        .to_vec()
-                };
-                let label = if feature.label.is_null() {
-                    None
-                } else {
-                    Some(CStr::from_ptr(feature.label).to_string_lossy().into_owned())
-                };
-                let duration = if self.api_version >= 2 {
-                    let v2 = &(*(*list).features.add(count + index)).v2;
-                    (v2.has_duration != 0)
-                        .then(|| f64::from(v2.duration_sec) + f64::from(v2.duration_nsec) / 1e9)
-                } else {
-                    None
-                };
-                features.push(Feature {
-                    timestamp,
-                    duration,
-                    values,
-                    label,
-                });
-            }
-        }
-        if let Some(release) = release {
-            // SAFETY: the plug-in owns the list and frees it and its feature data in one call;
-            // it is released once, after the copy.
-            release(list);
-        }
-        features
+        // SAFETY: forwarded from this method's contract.
+        unsafe { copy_feature_list(self.descriptor_ref(), self.api_version, list, fallback) }
     }
+}
+
+/// Copies a plug-in feature list into owned features and releases it. The counts come from the
+/// plug-in, so they are capped before the memory they describe is read; the list is released
+/// once, whether or not every entry was copied.
+///
+/// SAFETY: `list` must be null or a list the plug-in returned for an instance of `descriptor`
+/// and has not released; `fallback` is the timestamp for features that carry none.
+unsafe fn copy_feature_list(
+    descriptor: &RawDescriptor,
+    api_version: u32,
+    list: *mut RawFeatureList,
+    fallback: Option<f64>,
+) -> Vec<Feature> {
+    if list.is_null() {
+        return Vec::new();
+    }
+    let release = descriptor.release_feature_set;
+    let declared = (*list).feature_count as usize;
+    let count = declared.min(MAX_FEATURES);
+    let mut features = Vec::with_capacity(count);
+    if !(*list).features.is_null() {
+        for index in 0..count {
+            // API version 2 lists hold the version 1 features first, then one union per
+            // feature that may carry a duration.
+            let feature = &(*(*list).features.add(index)).v1;
+            let timestamp = if feature.has_timestamp != 0 {
+                Some(f64::from(feature.sec) + f64::from(feature.nsec) / 1e9)
+            } else {
+                fallback
+            };
+            // The value count is the plug-in's; read at most `MAX_VALUES` of them.
+            let values = if feature.values.is_null() || feature.value_count == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(
+                    feature.values,
+                    (feature.value_count as usize).min(MAX_VALUES),
+                )
+                .to_vec()
+            };
+            let label = if feature.label.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(feature.label).to_string_lossy().into_owned())
+            };
+            // The version 2 half starts after the *declared* count. When that count was capped
+            // the second half is past the trusted range, so it is not read.
+            let duration = if api_version >= 2 && declared <= MAX_FEATURES {
+                let v2 = &(*(*list).features.add(declared + index)).v2;
+                (v2.has_duration != 0)
+                    .then(|| f64::from(v2.duration_sec) + f64::from(v2.duration_nsec) / 1e9)
+            } else {
+                None
+            };
+            features.push(Feature {
+                timestamp,
+                duration,
+                values,
+                label,
+            });
+        }
+    }
+    if let Some(release) = release {
+        // SAFETY: the plug-in owns the list and frees it and its feature data in one call; it
+        // is released once, after the copy.
+        release(list);
+    }
+    features
 }
 
 impl Drop for Instance {
     fn drop(&mut self) {
         if let Some(cleanup) = self.descriptor_ref().cleanup {
-            // SAFETY: `cleanup` frees the instance created by `instantiate`; called once.
+            // SAFETY: `cleanup` frees the instance created by `instantiate`; called once. The
+            // gate is the same one `instantiate` uses, for plug-ins that share state.
+            let _gate = shared_calls();
             unsafe { cleanup(self.handle) };
         }
     }
@@ -889,5 +944,162 @@ mod layout_tests {
             std::mem::offset_of!(RawFeatureList, features),
             std::mem::size_of::<*mut RawFeatureUnion>()
         );
+    }
+}
+
+/// Tests on memory built in Rust: no plug-in is loaded and no foreign function is called, so
+/// these also run under `cargo +nightly miri test --lib`.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod memory_tests {
+    use super::*;
+    use std::ffi::CString;
+
+    /// A descriptor with no metadata and no callbacks.
+    fn descriptor() -> RawDescriptor {
+        RawDescriptor {
+            api_version: 2,
+            identifier: std::ptr::null(),
+            name: std::ptr::null(),
+            description: std::ptr::null(),
+            maker: std::ptr::null(),
+            plugin_version: 0,
+            copyright: std::ptr::null(),
+            parameter_count: 0,
+            parameters: std::ptr::null(),
+            program_count: 0,
+            programs: std::ptr::null(),
+            input_domain: 0,
+            instantiate: None,
+            cleanup: None,
+            initialise: None,
+            reset: None,
+            get_parameter: None,
+            set_parameter: None,
+            get_current_program: None,
+            select_program: None,
+            preferred_step_size: None,
+            preferred_block_size: None,
+            min_channel_count: None,
+            max_channel_count: None,
+            output_count: None,
+            get_output_descriptor: None,
+            release_output_descriptor: None,
+            process: None,
+            get_remaining_features: None,
+            release_feature_set: None,
+        }
+    }
+
+    #[test]
+    fn a_feature_list_built_in_rust_is_copied() {
+        let label = CString::new("beat").unwrap();
+        let mut values = [0.25f32, 0.75];
+        let count = 2;
+        let mut unions = vec![
+            RawFeatureUnion {
+                v1: RawFeature {
+                    has_timestamp: 1,
+                    sec: 3,
+                    nsec: 500_000_000,
+                    value_count: 2,
+                    values: values.as_mut_ptr(),
+                    label: label.as_ptr() as *mut c_char,
+                },
+            },
+            RawFeatureUnion {
+                v1: RawFeature {
+                    has_timestamp: 0,
+                    sec: 0,
+                    nsec: 0,
+                    value_count: 0,
+                    values: std::ptr::null_mut(),
+                    label: std::ptr::null_mut(),
+                },
+            },
+            // API version 2: the duration half follows the version 1 features.
+            RawFeatureUnion {
+                v2: RawFeatureV2 {
+                    has_duration: 1,
+                    duration_sec: 1,
+                    duration_nsec: 250_000_000,
+                },
+            },
+            RawFeatureUnion {
+                v2: RawFeatureV2 {
+                    has_duration: 0,
+                    duration_sec: 0,
+                    duration_nsec: 0,
+                },
+            },
+        ];
+        let mut list = RawFeatureList {
+            feature_count: count,
+            features: unions.as_mut_ptr(),
+        };
+        // SAFETY: the list, its unions, values and label all live in this test.
+        let copied = unsafe { copy_feature_list(&descriptor(), 2, &mut list, Some(9.5)) };
+        assert_eq!(copied.len(), 2);
+        assert_eq!(copied[0].timestamp, Some(3.5));
+        assert_eq!(copied[0].duration, Some(1.25));
+        assert_eq!(copied[0].values, vec![0.25, 0.75]);
+        assert_eq!(copied[0].label.as_deref(), Some("beat"));
+        // A feature with no timestamp of its own takes the block's.
+        assert_eq!(copied[1].timestamp, Some(9.5));
+        assert!(copied[1].values.is_empty());
+        assert_eq!(copied[1].duration, None);
+    }
+
+    #[test]
+    fn descriptor_tables_over_the_cap_are_refused_before_they_are_read() {
+        // The tables are NULL: the cap must be checked before anything dereferences them.
+        let mut raw = descriptor();
+        raw.parameter_count = MAX_LISTS as c_uint + 1;
+        // SAFETY: the count is over the cap, so `read_info` returns before reading the table.
+        assert_eq!(
+            unsafe { read_info(&raw) },
+            Err(Error::Malformed("parameter table"))
+        );
+        raw.parameter_count = 0;
+        raw.program_count = MAX_LISTS as c_uint + 1;
+        // SAFETY: as above, for the program table.
+        assert_eq!(
+            unsafe { read_info(&raw) },
+            Err(Error::Malformed("program table"))
+        );
+    }
+
+    #[test]
+    fn metadata_built_in_rust_is_read_into_owned_values() {
+        let identifier = CString::new("vamp-test:gain").unwrap();
+        let name = CString::new("Gain").unwrap();
+        let description = CString::new("").unwrap();
+        let unit = CString::new("dB").unwrap();
+        let parameter = RawParameterDescriptor {
+            identifier: identifier.as_ptr(),
+            name: name.as_ptr(),
+            description: description.as_ptr(),
+            unit: unit.as_ptr(),
+            min_value: -60.0,
+            max_value: 12.0,
+            default_value: 0.0,
+            is_quantized: 0,
+            quantize_step: 0.1,
+            value_names: std::ptr::null(),
+        };
+        let parameters = [&parameter as *const RawParameterDescriptor];
+        let raw = RawDescriptor {
+            parameter_count: 1,
+            parameters: parameters.as_ptr(),
+            ..descriptor()
+        };
+        // SAFETY: the parameter and its strings live in this test, and the count matches.
+        let info = unsafe { read_info(&raw) }.unwrap();
+        assert_eq!(info.parameters.len(), 1);
+        assert_eq!(info.parameters[0].identifier, "vamp-test:gain");
+        assert_eq!(info.parameters[0].name, "Gain");
+        assert_eq!(info.parameters[0].unit, "dB");
+        assert_eq!(info.parameters[0].min, -60.0);
+        assert_eq!(info.parameters[0].max, 12.0);
     }
 }
