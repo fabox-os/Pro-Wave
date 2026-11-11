@@ -4534,7 +4534,4 @@ mod tests {
         render(&mut e, 0.01);
         assert_eq!(e.pdc[3].as_ref().map(|p| p.lengths()), Some((2, 2)));
     }
-
- main
-    }
 }

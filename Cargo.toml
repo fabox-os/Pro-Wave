@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+members = ["crates/prowave-app", "crates/prowave-engine", "crates/prowave-garageband-import", "crates/prowave-guitarpro", "crates/prowave-ladspa", "crates/prowave-logicx-import", "crates/prowave-musicxml", "crates/prowave-plugin-helper", "crates/prowave-plugin-host", "crates/prowave-project", "xtask"]
 
 
 [profile.release]
