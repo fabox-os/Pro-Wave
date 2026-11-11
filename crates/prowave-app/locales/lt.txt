@@ -799,3 +799,4 @@ Redo {} = Pakartoti {}
 Nothing to undo yet = Kol kas nėra ką atšaukti
 Send {} = Siuntimas {}
 Disk streaming load: {}% = Disko srautinio perdavimo apkrova: {}%
+No plug-ins match = Joks papildinys neatitinka

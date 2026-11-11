@@ -43,6 +43,7 @@ mod note_edit;
 mod patches;
 mod pattern;
 mod piano_roll;
+mod plugin_picker;
 mod project_io;
 mod project_settings;
 mod recent_files;

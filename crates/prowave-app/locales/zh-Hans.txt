@@ -799,3 +799,4 @@ Redo {} = 重做 {}
 Nothing to undo yet = 暂无可撤销的操作
 Send {} = 发送 {}
 Disk streaming load: {}% = 磁盘流式传输负载：{}%
+No plug-ins match = 没有匹配的插件
