@@ -397,6 +397,11 @@ Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
 - **Instruments and effects:** Hydrogen drum kits, Multi-Band Compressor.
 - **GarageBand:** `GARAGEBAND-FORMAT-SPEC.md`, the `prowave-garageband-import` crate and
   File > Import > Other Projects… (audio files only; tempo, signature and arrangement are phase 2).
+- **Logic Pro `.logicx` bundles:** the `prowave-logicx-import` crate finds the bundle in either
+  save shape, follows the active alternative and reads `MetaData.plist` and
+  `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
+  with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
+  regions, plug-ins, Session Players) is the next step.
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.

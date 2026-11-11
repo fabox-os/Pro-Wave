@@ -3484,6 +3484,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-logicx-import"
+version = "0.1.0"
+dependencies = [
+ "plist",
+ "tempfile",
+]
+
+[[package]]
 name = "prowave-musicxml"
 version = "0.1.0"
 dependencies = [

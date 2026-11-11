@@ -1,0 +1,12 @@
+[package]
+name = "prowave-logicx-import"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: read Logic Pro .logicx bundles (metadata and ProjectData envelope)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+plist = "1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
