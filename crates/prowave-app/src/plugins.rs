@@ -51,6 +51,20 @@ impl Target {
     }
 }
 
+/// Where the project now holds the insert with class key `key`, if anywhere.
+fn target_with_key(p: &Project, key: &str) -> Option<Target> {
+    if p.master_hosted
+        .as_ref()
+        .is_some_and(|saved| saved.key == key)
+    {
+        return Some(Target::Master);
+    }
+    p.tracks
+        .iter()
+        .position(|track| track.hosted.as_ref().is_some_and(|saved| saved.key == key))
+        .map(Target::Track)
+}
+
 /// The live control side of one hosted plug-in.
 struct Active {
     control: host::Control,
@@ -222,21 +236,23 @@ impl Plugins {
     ///
     /// Controls are keyed by track index, so deleting or reordering tracks can leave one pointing
     /// at a different strip. Comparing the class key catches that: the stale engine stage is
-    /// removed rather than processing another track's audio. The plug-in is unloaded (re-insert
-    /// it, or reopen the project); moving the live instance to the new index is a follow-up.
-    fn reconcile(&mut self, p: &Project, mut sync: Option<&mut EngineSync>) {
+    /// removed rather than processing another track's audio. When the insert is still in the
+    /// project under another index (a track moved), it is queued for loading there again with
+    /// its saved state, so the plug-in is not lost until the project is reopened.
+    fn reconcile(&mut self, p: &mut Project, mut sync: Option<&mut EngineSync>) {
         if self.active.is_empty() {
             return;
         }
-        let stale: Vec<Target> = self
+        let stale: Vec<(Target, String)> = self
             .active
             .iter()
             .filter(|(target, active)| {
                 insert_of(p, **target).is_none_or(|saved| saved.key != active.key)
             })
-            .map(|(target, _)| *target)
+            .map(|(target, active)| (*target, active.key.clone()))
             .collect();
-        for target in stale {
+        let mut moved: Vec<(Target, HostedInsert)> = Vec::new();
+        for (target, key) in stale {
             if let Some(sync) = reborrow(&mut sync) {
                 match target {
                     Target::Master => {
@@ -251,7 +267,16 @@ impl Plugins {
             if self.window == Some(target) {
                 self.window = None;
             }
+            // The same insert under another index: load it there again.
+            if let Some(new) = target_with_key(p, &key) {
+                if new != target && !self.active.contains_key(&new) {
+                    if let Some(saved) = insert_of(p, new) {
+                        moved.push((new, saved.clone()));
+                    }
+                }
+            }
         }
+        self.pending.extend(moved);
     }
 
     /// Saves every live plug-in's state into the project before it is written to disk.
@@ -1135,5 +1160,49 @@ impl Plugins {
         if open {
             self.window = Some(target);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Track, TrackKind};
+
+    fn insert(key: &str) -> HostedInsert {
+        HostedInsert {
+            key: key.to_string(),
+            name: key.to_string(),
+            vendor: String::new(),
+            format: host::Format::Clap,
+            bypass: false,
+            state: Vec::new(),
+            latency: 0,
+            parameters: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_moved_insert_is_found_under_its_new_track_index() {
+        let mut p = Project::empty();
+        p.tracks.clear();
+        p.master_hosted = None;
+        let mut a = Track::new("A", TrackKind::Audio);
+        a.name = "A".into();
+        let mut b = Track::new("B", TrackKind::Audio);
+        b.name = "B".into();
+        b.hosted = Some(insert("clap:test"));
+        p.tracks.push(a);
+        p.tracks.push(b);
+        assert_eq!(target_with_key(&p, "clap:test"), Some(Target::Track(1)));
+        // Moving the track moves the insert with it.
+        let moved = p.tracks.remove(1);
+        p.tracks.insert(0, moved);
+        assert_eq!(target_with_key(&p, "clap:test"), Some(Target::Track(0)));
+        // Deleting the track leaves nothing to point at: the control is unloaded, not reused.
+        p.tracks.clear();
+        assert_eq!(target_with_key(&p, "clap:test"), None);
+        // The master insert is found too.
+        p.master_hosted = Some(insert("au:master"));
+        assert_eq!(target_with_key(&p, "au:master"), Some(Target::Master));
     }
 }
