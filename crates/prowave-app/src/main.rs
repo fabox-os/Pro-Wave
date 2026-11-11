@@ -315,6 +315,10 @@ struct App {
     bench: Option<bench::Probe>,
     /// `--layout-shots <folder>`: pictures of the layout at several window sizes, then closing.
     shots: Option<bench::LayoutShots>,
+    /// `--screenshot <file>`: one picture of the window, then closing.
+    shot: Option<bench::Screenshot>,
+    /// The exit code a failed `--screenshot` leaves for `main` (0 while it is fine).
+    shot_exit: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// Edit > Undo / Redo.
     history: undo::History,
     /// Frames since the history last looked for an edit.
@@ -1061,6 +1065,25 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+        if let Some(shot) = self.shot.as_mut() {
+            if let Some(outcome) = shot.frame(&ctx) {
+                self.shot = None;
+                match outcome {
+                    bench::ShotOutcome::Saved => {}
+                    bench::ShotOutcome::Failed(message) => {
+                        eprintln!("cannot save the picture: {message}");
+                        self.shot_exit
+                            .store(1, std::sync::atomic::Ordering::Release);
+                    }
+                    bench::ShotOutcome::TimedOut => {
+                        eprintln!("the window did not hand out a picture in time");
+                        self.shot_exit
+                            .store(1, std::sync::atomic::Ordering::Release);
+                    }
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         if self.ui.chooser.is_some() {
             self.chooser_ui(ui, &ctx);
             return;
@@ -1566,6 +1589,7 @@ fn print_help() {
     println!(
         "  --layout-shots <folder>   save pictures of the layout at four window sizes, then exit"
     );
+    println!("  --screenshot <file.png>   save one picture of the window, then exit");
     println!();
     println!("A .prowave path opens that project; other paths are imported as audio files.");
 }
@@ -1592,11 +1616,19 @@ fn main() -> eframe::Result {
     }
     let bench_out = bench::requested(&all_args);
     let shots_dir = bench::shots_requested(&all_args);
-    if bench_out.is_none() && shots_dir.is_none() {
+    let shot_out = bench::screenshot_requested(&all_args);
+    // A `--screenshot` without a file is an error before the window opens: the session it
+    // would otherwise start is not a measuring run and may change the user's settings.
+    if shot_out.is_none() && all_args.iter().any(|a| a == bench::SCREENSHOT_ARG) {
+        eprintln!("--screenshot needs a file name, for example: prowave --screenshot shot.png");
+        std::process::exit(2);
+    }
+    let shot_exit = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    if bench_out.is_none() && shots_dir.is_none() && shot_out.is_none() {
         updater::clean_up_after_update();
     }
     // Measuring runs leave the user's settings (recent projects, size) alone.
-    let measuring = bench_out.is_some() || shots_dir.is_some();
+    let measuring = bench_out.is_some() || shots_dir.is_some() || shot_out.is_some();
     // Release builds: on a crash, write a report to the temp folder instead of a raw panic.
     human_panic::setup_panic!(human_panic::Metadata::new(
         "Pro Wave",
@@ -1630,11 +1662,27 @@ fn main() -> eframe::Result {
             Err(e) => tracing::warn!("app icon could not be decoded: {e}"),
         }
     }
+    // `--screenshot`: a picture without stealing the focus, so whoever asked for it keeps
+    // working in their own window while the app draws.
+    if shot_out.is_some() {
+        viewport = viewport.with_active(false);
+    }
     let wgpu_options = graphics::config();
     let started_backends = graphics::started_backends(&wgpu_options);
     let opts = eframe::NativeOptions {
         viewport,
         wgpu_options,
+        // macOS activates a newly launched app and puts it in front; the picture must not
+        // pull the user away from what they are doing.
+        #[cfg(target_os = "macos")]
+        event_loop_builder: shot_out.as_ref().map(|_| {
+            Box::new(
+                |builder: &mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>| {
+                    use winit::platform::macos::EventLoopBuilderExtMacOS as _;
+                    builder.with_activate_ignoring_other_apps(false);
+                },
+            ) as eframe::EventLoopBuilderHook
+        }),
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -1645,8 +1693,8 @@ fn main() -> eframe::Result {
             // Cmd/Ctrl + = / - / 0 resize the interface through `ui_scale` instead, which
             // also keeps the fit for small windows.
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-            // Every start begins clean; only the layout pictures need something to show.
-            let project = if shots_dir.is_some() {
+            // Every start begins clean; the picture runs need something to show.
+            let project = if shots_dir.is_some() || shot_out.is_some() {
                 Project::demo()
             } else {
                 Project::empty()
@@ -1686,6 +1734,8 @@ fn main() -> eframe::Result {
                 native_menu: None,
                 bench: bench_out.clone().map(bench::Probe::new),
                 shots: shots_dir.clone().map(bench::LayoutShots::new),
+                shot: shot_out.clone().map(bench::Screenshot::new),
+                shot_exit: shot_exit.clone(),
                 frames_since_record: 0,
                 midi: (!measuring).then(midi_in::MidiIn::new),
                 midi_out,
@@ -1904,6 +1954,11 @@ fn main() -> eframe::Result {
     if let (Some(out), Err(e)) = (&bench_out, &result) {
         bench::report_without_window(out, &e.to_string());
         return Ok(());
+    }
+    // A `--screenshot` that failed to save or timed out is an error for the script that ran it.
+    let shot_code = shot_exit.load(std::sync::atomic::Ordering::Acquire);
+    if shot_code != 0 {
+        std::process::exit(shot_code);
     }
     result
 }

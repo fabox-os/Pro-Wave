@@ -108,6 +108,7 @@ cargo run --release -p prowave-app -- song.prowave   # open a project
 cargo run --release -p prowave-app -- drums.wav      # new project, import audio files
 cargo run --release -p prowave-app -- --play         # start playing right away
 cargo run --release -p prowave-app -- --piano        # open the Piano Roll on start
+cargo run --release -p prowave-app -- --screenshot shot.png   # save one picture of the window, then exit
 cargo run -p prowave-engine --example beep           # 440 Hz test tone, reports output latency
 ```
 
