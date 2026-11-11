@@ -243,6 +243,8 @@ pub struct TrackDoc {
     pub fx: Vec<InsertDoc>,
     /// A hosted VST3/Audio Unit/CLAP plug-in after the built-in effects.
     pub hosted: Option<HostedDoc>,
+    /// A hosted instrument (VST3, Audio Unit or CLAP) on the track.
+    pub hosted_instrument: Option<HostedDoc>,
     /// All sends of the strip (the first is also in `send_bus`, `send_level` and `send_pre`).
     pub sends: Vec<SendDoc>,
     /// Automation: "Off", "Read", "Touch", "Latch" or "Write", and the points (beat, value)
@@ -467,6 +469,7 @@ impl Default for TrackDoc {
             follow_groove: false,
             regions: Vec::new(),
             hosted: None,
+            hosted_instrument: None,
         }
     }
 }

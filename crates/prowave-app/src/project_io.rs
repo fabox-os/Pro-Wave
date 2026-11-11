@@ -390,6 +390,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             pan: t.pan,
             inserts: t.inserts.iter().map(|s| s.name().to_string()).collect(),
             hosted: t.hosted.as_ref().map(hosted_to_doc),
+            hosted_instrument: t.hosted_instrument.as_ref().map(hosted_to_doc),
             fx: t
                 .inserts
                 .iter()
@@ -825,6 +826,11 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             inserts: inserts_from_doc(t),
             hosted: t
                 .hosted
+                .as_ref()
+                .filter(|h| !h.plugin_key.is_empty())
+                .map(hosted_from_doc),
+            hosted_instrument: t
+                .hosted_instrument
                 .as_ref()
                 .filter(|h| !h.plugin_key.is_empty())
                 .map(hosted_from_doc),
@@ -1399,6 +1405,35 @@ pub(crate) mod tests {
         }
         let (r, _) = from_doc(&empty, Path::new("."), &egui::Context::default());
         assert!(r.tracks[0].hosted.is_none());
+    }
+
+    #[test]
+    fn a_hosted_instrument_is_saved_with_its_state() {
+        let mut p = Project::empty();
+        p.tracks[0].hosted_instrument = Some(crate::model::HostedInsert {
+            key: "au:61756D7553675854566D6241".into(),
+            name: "Surge XT".into(),
+            vendor: "Surge Synth Team".into(),
+            format: prowave_plugin_host::Format::AudioUnit,
+            bypass: false,
+            state: vec![4, 5, 6],
+            latency: 0,
+            parameters: Vec::new(),
+        });
+        let (doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0]
+                .hosted_instrument
+                .as_ref()
+                .map(|h| h.plugin_key.as_str()),
+            Some("au:61756D7553675854566D6241")
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].hosted_instrument, p.tracks[0].hosted_instrument);
+        // The document field defaults to none, so older projects open without an instrument.
+        assert!(prowave_project::TrackDoc::default()
+            .hosted_instrument
+            .is_none());
     }
 
     #[test]

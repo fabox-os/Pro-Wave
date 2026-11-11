@@ -62,7 +62,7 @@ pub use crate::fx::{
     eq_response_db, response_db, Chain, Fx, FxKind, ParamInfo, Pdc, AMP_CABS, AMP_MODELS,
     MAX_FX_PARAMS, MAX_INSERTS,
 };
-pub use crate::hosted::HostedEffect;
+pub use crate::hosted::{HostedEffect, HostedInstrument};
 pub use crate::monitor::{InputFeed, MonitorTrack, MAX_MONITORS};
 pub use crate::mtc::{
     full_frame, quarter_frame_data, rate_code, rate_of_code, MtcDecoder, MtcEvent, MtcGenerator,

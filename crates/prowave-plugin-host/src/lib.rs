@@ -17,11 +17,11 @@ use std::path::PathBuf;
 #[cfg(plugin_host)]
 mod supported;
 #[cfg(plugin_host)]
-pub use supported::{available, scan, Catalog, Control, Hosted};
+pub use supported::{available, scan, Catalog, Control, Hosted, HostedInstrument};
 #[cfg(not(plugin_host))]
 mod unsupported;
 #[cfg(not(plugin_host))]
-pub use unsupported::{available, scan, Catalog, Control, Hosted};
+pub use unsupported::{available, scan, Catalog, Control, Hosted, HostedInstrument};
 
 /// The block size hosted effects exchange with their helper, in samples. The engine adapter
 /// adds one such block of latency.

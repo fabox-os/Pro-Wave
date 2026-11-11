@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use plughost::{
-    AutomationEvent, BlockContext, Chain, ChainSlot, Events, Layout, ParameterChange, PluginId,
-    PluginInfo, PluginKind, PluginRef, PluginState, ProcessMode, RealtimeConfig, RealtimeEndpoint,
-    Scanner, SpawnOptions,
+    AutomationEvent, BlockContext, Chain, ChainSlot, Event, Events, Layout, ParameterChange,
+    PluginId, PluginInfo, PluginKind, PluginRef, PluginState, ProcessMode, RealtimeConfig,
+    RealtimeEndpoint, Scanner, SpawnOptions,
 };
 use prowave_engine::HostedEffect;
 
@@ -31,6 +31,18 @@ pub struct Hosted {
     pub control: Control,
     /// Per-sample adapter for the engine.
     pub effect: Box<dyn HostedEffect>,
+    /// The plug-in's latency plus the adapter's quantum, in frames.
+    pub latency: u32,
+    /// The parameters as they were when the plug-in loaded.
+    pub parameters: Vec<Parameter>,
+}
+
+/// A live hosted instrument: its control side and the realtime instrument for the audio graph.
+pub struct HostedInstrument {
+    /// Parameters, state and editor; stays on the UI thread.
+    pub control: Control,
+    /// Per-sample adapter for the engine.
+    pub instrument: Box<dyn prowave_engine::HostedInstrument>,
     /// The plug-in's latency plus the adapter's quantum, in frames.
     pub latency: u32,
     /// The parameters as they were when the plug-in loaded.
@@ -157,6 +169,63 @@ impl Catalog {
         Ok(Hosted {
             control: Control { chain, resync },
             effect,
+            latency,
+            parameters,
+        })
+    }
+
+    /// Loads instrument `key` at `sample_rate` in quanta of `quantum`, restoring `state` when
+    /// it belongs to the same class.
+    ///
+    /// An instrument has no audio input bus, so the chain is configured with no input layout
+    /// and its event input port receives the notes. Without that, the host would ask for a
+    /// stereo main input bus and the plug-in would refuse with "no main audio bus".
+    pub fn instantiate_instrument(
+        &self,
+        key: &str,
+        sample_rate: f64,
+        quantum: usize,
+        state: Option<&[u8]>,
+    ) -> Result<HostedInstrument, Error> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.key == key)
+            .ok_or_else(|| Error::new(format!("plug-in `{key}` is not installed")))?;
+        let quantum = quantum.max(1);
+        let mut slot = ChainSlot::new(entry.reference.clone());
+        if let Some(bytes) = state {
+            if let Ok(parsed) = PluginState::from_bytes(bytes) {
+                slot = slot.with_state(parsed);
+            }
+        }
+        let mut chain =
+            Chain::spawn(&self.helper, &[slot], &SpawnOptions::default()).map_err(describe)?;
+        let mut config = chain
+            .main_bus_config(sample_rate, quantum, Layout::None, &[Layout::Stereo])
+            .map_err(describe)?;
+        config.mode = ProcessMode::Realtime;
+        chain.prepare_audio(&config).map_err(describe)?;
+        let parameters = read_parameters(&mut chain)?;
+        let ids: Vec<u64> = parameters.iter().map(|parameter| parameter.id).collect();
+        let endpoint = chain
+            .realtime_endpoint(&RealtimeConfig::new(quantum))
+            .map_err(describe)?;
+        let latency = chain.start_realtime().map_err(describe)?;
+        let resync = Arc::new(AtomicBool::new(false));
+        let instrument = Box::new(RealtimeInstrument::new(
+            endpoint,
+            latency,
+            quantum,
+            ids,
+            Arc::clone(&resync),
+        ));
+        // `RealtimeInstrument` collects one quantum before it can submit it, so the strip is
+        // late by the helper latency plus that quantum; delay compensation must know both.
+        let latency = latency.saturating_add(u32::try_from(quantum).unwrap_or(u32::MAX));
+        Ok(HostedInstrument {
+            control: Control { chain, resync },
+            instrument,
             latency,
             parameters,
         })
@@ -396,6 +465,181 @@ impl HostedEffect for RealtimeEffect {
         } else if let Some(last) = self.pending.last_mut() {
             *last = (id, value);
         }
+    }
+}
+
+/// The adapter that turns the engine's per-sample calls into the helper's quanta for an
+/// instrument: no audio input, stereo output, and MIDI events at the sample they start.
+pub struct RealtimeInstrument {
+    endpoint: RealtimeEndpoint,
+    quantum: usize,
+    output_l: Vec<f32>,
+    output_r: Vec<f32>,
+    /// Samples collected in the quantum being prepared, and the output sample being played.
+    filled: usize,
+    played: usize,
+    /// Events of the quantum being prepared, and those of the next one (notes that arrive while
+    /// the current quantum is already full).
+    events: Events,
+    next_events: Events,
+    produced: Events,
+    /// The plug-in's latency plus one adapter quantum, in frames.
+    latency: usize,
+    /// The native parameter ID of each index in the host's parameter list.
+    ids: Vec<u64>,
+    pending: Vec<(u64, f64)>,
+    automation: Vec<AutomationEvent>,
+    resync: Arc<AtomicBool>,
+    bypass: bool,
+    /// Notes this adapter started and has not ended, for `all_notes_off`.
+    active: Vec<(u8, u8)>,
+}
+
+impl RealtimeInstrument {
+    fn new(
+        endpoint: RealtimeEndpoint,
+        latency: u32,
+        quantum: usize,
+        ids: Vec<u64>,
+        resync: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            endpoint,
+            quantum,
+            output_l: vec![0.0; quantum],
+            output_r: vec![0.0; quantum],
+            filled: 0,
+            played: quantum,
+            events: Events::for_block(),
+            next_events: Events::for_block(),
+            produced: Events::for_block(),
+            latency: latency as usize + quantum,
+            ids,
+            pending: Vec::with_capacity(32),
+            automation: Vec::with_capacity(32),
+            resync,
+            bypass: false,
+            active: Vec::with_capacity(128),
+        }
+    }
+
+    /// Queues `event` in the quantum it belongs to. The caller has already set its offset.
+    fn push_event(&mut self, event: Event<'_>) {
+        let target = if self.filled < self.quantum {
+            &mut self.events
+        } else {
+            &mut self.next_events
+        };
+        let _ = target.push_within_capacity(event);
+    }
+}
+
+impl prowave_engine::HostedInstrument for RealtimeInstrument {
+    fn process(&mut self) -> (f32, f32) {
+        // Start of an adapter quantum: exchange the events (and the silence the instrument
+        // needs as input) for the helper's output block, then play it sample by sample.
+        if self.played >= self.quantum {
+            if self.filled == self.quantum {
+                self.automation.clear();
+                for (id, value) in self.pending.drain(..) {
+                    self.automation
+                        .push(AutomationEvent::new(0, ParameterChange::new(id, 0, value)));
+                }
+                let result = self.endpoint.process_audio_f32(
+                    &BlockContext::new(self.quantum),
+                    &[],
+                    &mut [&mut self.output_l[..], &mut self.output_r[..]],
+                    &self.automation,
+                    &self.events,
+                    &mut self.produced,
+                );
+                if result.is_err() {
+                    self.output_l.fill(0.0);
+                    self.output_r.fill(0.0);
+                    self.resync.store(true, Ordering::Relaxed);
+                }
+                self.events.clear();
+                std::mem::swap(&mut self.events, &mut self.next_events);
+                self.next_events.clear();
+                self.produced.clear();
+                self.filled = 0;
+            } else {
+                // The first quantum has no output from the helper yet.
+                self.output_l.fill(0.0);
+                self.output_r.fill(0.0);
+            }
+            self.played = 0;
+        }
+        let out = if self.bypass {
+            // An instrument has no audio to pass through, so bypass is silence.
+            (0.0, 0.0)
+        } else {
+            (self.output_l[self.played], self.output_r[self.played])
+        };
+        self.played += 1;
+        self.filled += 1;
+        out
+    }
+
+    fn note_on(&mut self, channel: u8, key: u8, velocity: u8) {
+        let offset = if self.filled < self.quantum {
+            self.filled
+        } else {
+            0
+        };
+        self.push_event(Event::note_on(offset, channel, key, velocity.max(1)));
+        if !self.active.contains(&(channel, key)) && self.active.len() < self.active.capacity() {
+            self.active.push((channel, key));
+        }
+    }
+
+    fn note_off(&mut self, channel: u8, key: u8) {
+        let offset = if self.filled < self.quantum {
+            self.filled
+        } else {
+            0
+        };
+        self.push_event(Event::note_off(offset, channel, key, 0));
+        if let Some(at) = self.active.iter().position(|&note| note == (channel, key)) {
+            self.active.swap_remove(at);
+        }
+    }
+
+    fn all_notes_off(&mut self) {
+        let offset = if self.filled < self.quantum {
+            self.filled
+        } else {
+            0
+        };
+        let notes = std::mem::take(&mut self.active);
+        for &(channel, key) in &notes {
+            self.push_event(Event::note_off(offset, channel, key, 0));
+        }
+        self.active = notes;
+        self.active.clear();
+    }
+
+    fn latency_samples(&self) -> usize {
+        self.latency
+    }
+
+    fn set_param_norm(&mut self, param: usize, value: f32) {
+        let Some(&id) = self.ids.get(param) else {
+            return;
+        };
+        if !value.is_finite() {
+            return;
+        }
+        let value = f64::from(value.clamp(0.0, 1.0));
+        if self.pending.len() < self.pending.capacity() {
+            self.pending.push((id, value));
+        } else if let Some(last) = self.pending.last_mut() {
+            *last = (id, value);
+        }
+    }
+
+    fn set_bypass(&mut self, bypass: bool) {
+        self.bypass = bypass;
     }
 }
 

@@ -243,7 +243,12 @@ fn latency_of(t: &Track, sample_rate: f32) -> usize {
         .as_ref()
         .filter(|h| !h.bypass)
         .map_or(0, |h| h.latency as usize);
-    built_in + hosted
+    let instrument = t
+        .hosted_instrument
+        .as_ref()
+        .filter(|h| !h.bypass)
+        .map_or(0, |h| h.latency as usize);
+    built_in + hosted + instrument
 }
 
 /// Delay compensation for every track: (before the fader and sends, after them), in samples.
@@ -573,6 +578,31 @@ impl EngineSync {
     /// Removes every hosted plug-in when a project is replaced.
     pub fn clear_hosted(&mut self) -> bool {
         self.send(Command::ClearHosted)
+    }
+
+    /// Replaces the hosted instrument on `track` (`None` removes it).
+    pub fn set_track_hosted_instrument(
+        &mut self,
+        track: usize,
+        instrument: Option<Box<dyn prowave_engine::HostedInstrument>>,
+    ) -> bool {
+        self.send(Command::SetTrackHostedInstrument {
+            track: track as u16,
+            instrument,
+        })
+    }
+
+    /// Removes every hosted instrument when a project is replaced.
+    pub fn clear_hosted_instruments(&mut self) -> bool {
+        self.send(Command::ClearHostedInstruments)
+    }
+
+    /// Sets a track hosted instrument's bypass without reloading it.
+    pub fn set_track_instrument_bypass(&mut self, track: usize, bypass: bool) -> bool {
+        self.send(Command::SetTrackHostedInstrumentBypass {
+            track: track as u16,
+            bypass,
+        })
     }
 
     pub fn new(engine: Engine, p: &Project) -> Self {
@@ -1141,6 +1171,7 @@ mod tests {
             pan: 0.0,
             inserts: vec![],
             hosted: None,
+            hosted_instrument: None,
             instrument: None,
             regions: vec![Region {
                 name: "r".into(),

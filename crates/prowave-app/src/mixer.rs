@@ -38,6 +38,8 @@ const STRIP_SEL: Color32 = Color32::from_rgb(0x4d, 0x4d, 0x4d);
 const SLOT_EMPTY: Color32 = Color32::from_rgb(0x2c, 0x2c, 0x2c);
 const SLOT_GRAY: Color32 = Color32::from_rgb(0x55, 0x55, 0x55);
 const PLUGIN_BLUE: Color32 = Color32::from_rgb(0x36, 0x6f, 0xd2);
+/// Logic draws the Instrument slot green, unlike the blue Audio FX slots.
+const INSTRUMENT_GREEN: Color32 = Color32::from_rgb(0x2f, 0x8a, 0x45);
 /// A strip that makes no sound (muted, or another track is soloed): instruments, plug-ins
 /// and sends turn grey, and so do the meters.
 const PLUGIN_OFF: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x4a);
@@ -90,6 +92,21 @@ pub struct MixerView {
     pub inputs: crate::audio_rec::InputChoice,
     /// The text in the Audio FX plug-in picker's search field (see `plugin_picker`).
     pub picker_search: String,
+    /// The scanned hosted plug-ins the picker lists (filled by `Plugins`).
+    pub hosted_plugins: Vec<crate::plugin_picker::Hosted>,
+    /// The scanned instrument plug-ins the instrument picker lists (filled by `Plugins`).
+    pub hosted_instruments: Vec<crate::plugin_picker::Hosted>,
+    /// A hosted plug-in chosen in the picker for `Plugins` to load on the next frame:
+    /// (strip index, class key). `MASTER_STRIP` is the Stereo Out.
+    pub pending_hosted: Option<(usize, String)>,
+    /// An instrument chosen in the instrument picker for `Plugins` to load next frame.
+    pub pending_hosted_instrument: Option<(usize, String)>,
+    /// An Instrument slot menu choice for `Plugins` to apply next frame.
+    pub pending_instrument: Option<(usize, InstrumentAct)>,
+    /// A hosted effect's menu choice for `Plugins` to apply next frame.
+    pub pending_hosted_act: Option<(usize, HostedAct)>,
+    /// The instrument picker should open in this track's slot (the hover sliders button).
+    pub open_instrument_picker: Option<usize>,
 }
 
 /// A channel strip's effects, sends, level and pan, as Copy Channel Strip keeps them.
@@ -115,6 +132,13 @@ impl Default for MixerView {
             copied: None,
             inputs: crate::audio_rec::InputChoice::default(),
             picker_search: String::new(),
+            hosted_plugins: Vec::new(),
+            hosted_instruments: Vec::new(),
+            pending_hosted: None,
+            pending_hosted_instrument: None,
+            pending_instrument: None,
+            pending_hosted_act: None,
+            open_instrument_picker: None,
         }
     }
 }
@@ -819,6 +843,22 @@ enum InsertAct {
     Move(isize),
 }
 
+/// What the user asked for in the Instrument slot's menu, for `Plugins` to apply next frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InstrumentAct {
+    Open,
+    Bypass(bool),
+    Remove,
+}
+
+/// What the user asked for in a hosted effect's menu, for `Plugins` to apply next frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HostedAct {
+    Open,
+    Bypass(bool),
+    Remove,
+}
+
 /// The number the effect window and the Audio FX menus use for the Stereo Out strip (no track
 /// has it): its effects are `Project::master_inserts`.
 pub const MASTER_STRIP: usize = usize::MAX;
@@ -830,6 +870,201 @@ fn strip_inserts(p: &Project, i: usize) -> &[Insert] {
     } else {
         p.tracks.get(i).map_or(&[], |t| &t.inserts)
     }
+}
+
+/// What a plug-in slot's hover controls asked for (Logic shows them on hover).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SlotHover {
+    Power,
+    Open,
+    Up,
+    Down,
+}
+
+/// The blue the hover controls use (Logic's active control blue).
+const HOVER_BLUE: Color32 = Color32::from_rgb(0x0a, 0x84, 0xff);
+
+/// Draws the plug-in slot hover controls over the right end of `rect`: power (bypass), sliders
+/// (open), and, when `arrows`, up/down (move the insert). Returns the button clicked this frame.
+fn slot_hover_controls(
+    ui: &Ui,
+    g: &Painter,
+    rect: Rect,
+    uid: egui::Id,
+    bypassed: bool,
+    arrows: bool,
+    power: bool,
+) -> Option<SlotHover> {
+    let pointer = ui.ctx().pointer_latest_pos();
+    let button_w = 22.0;
+    let buttons = usize::from(power) + 1 + usize::from(arrows);
+    let controls = Rect::from_min_max(
+        pos2(rect.right() - buttons as f32 * button_w, rect.top()),
+        rect.right_bottom(),
+    );
+    let visible = pointer.is_some_and(|pos| rect.contains(pos) || controls.contains(pos));
+    if !visible {
+        return None;
+    }
+    g.rect_filled(controls, 3.0, HOVER_BLUE);
+    let white = Stroke::new(1.3, Color32::WHITE);
+    let mut clicked = None;
+    let mut x = controls.left();
+    if power {
+        let r = Rect::from_min_max(
+            pos2(x, controls.top()),
+            pos2(x + button_w, controls.bottom()),
+        );
+        let resp = ui.interact(r, uid.with("power"), Sense::click());
+        if resp.clicked() {
+            clicked = Some(SlotHover::Power);
+        }
+        let c = r.center();
+        g.circle_stroke(c + vec2(0.0, 1.0), 3.2, white);
+        g.line_segment([c + vec2(0.0, -4.5), c + vec2(0.0, -0.5)], white);
+        if bypassed {
+            g.circle_filled(c + vec2(0.0, 1.0), 1.1, Color32::WHITE);
+        }
+        x += button_w;
+    }
+    {
+        let r = Rect::from_min_max(
+            pos2(x, controls.top()),
+            pos2(x + button_w, controls.bottom()),
+        );
+        let resp = ui.interact(r, uid.with("open"), Sense::click());
+        if resp.clicked() {
+            clicked = Some(SlotHover::Open);
+        }
+        let c = r.center();
+        for (dy, dx) in [(-1.8, -1.5), (1.8, 1.5)] {
+            let y = c.y + dy;
+            g.line_segment([pos2(c.x - 4.0, y), pos2(c.x + 4.0, y)], white);
+            g.circle_filled(pos2(c.x + dx, y), 1.7, Color32::WHITE);
+        }
+        x += button_w;
+    }
+    if arrows {
+        let top = Rect::from_min_max(
+            pos2(x, controls.top()),
+            pos2(x + button_w, controls.center().y),
+        );
+        let bottom = Rect::from_min_max(
+            pos2(x, controls.center().y),
+            pos2(x + button_w, controls.bottom()),
+        );
+        for (r, action, up) in [(top, SlotHover::Up, true), (bottom, SlotHover::Down, false)] {
+            let resp = ui.interact(r, uid.with(if up { "up" } else { "down" }), Sense::click());
+            if resp.clicked() {
+                clicked = Some(action);
+            }
+            let c = r.center();
+            let dy = if up { 1.6 } else { -1.6 };
+            g.line_segment([c + vec2(-3.0, dy), c + vec2(0.0, -dy)], white);
+            g.line_segment([c + vec2(0.0, -dy), c + vec2(3.0, dy)], white);
+        }
+    }
+    clicked
+}
+
+/// The Instrument slot of track `i`: the hosted instrument, or the Library patch when none is
+/// loaded. Click for its menu and the instrument picker; double-click for its controls.
+#[allow(clippy::too_many_arguments)]
+fn instrument_slot(
+    ui: &Ui,
+    g: &Painter,
+    rect: Rect,
+    p: &mut Project,
+    v: &mut MixerView,
+    i: usize,
+    uid: egui::Id,
+    inactive: bool,
+    patch: &'static str,
+) {
+    let loaded = p.tracks.get(i).and_then(|t| t.hosted_instrument.as_ref());
+    let (name, bypassed) = match loaded {
+        Some(saved) => (saved.name.clone(), saved.bypass),
+        None => (patch.to_string(), false),
+    };
+    let off = inactive || bypassed;
+    slot(
+        g,
+        rect,
+        &name,
+        if off { PLUGIN_OFF } else { INSTRUMENT_GREEN },
+        if off { TEXT_DIM } else { Color32::WHITE },
+    );
+    let resp = ui.interact(rect, uid, Sense::click());
+    let hover = slot_hover_controls(
+        ui,
+        g,
+        rect,
+        uid.with("hover"),
+        bypassed,
+        false,
+        loaded.is_some(),
+    );
+    let mut acted = false;
+    if let Some(action) = hover {
+        match action {
+            SlotHover::Power if loaded.is_some() => {
+                v.pending_instrument = Some((i, InstrumentAct::Bypass(!bypassed)));
+                acted = true;
+            }
+            SlotHover::Open if loaded.is_some() => {
+                v.pending_instrument = Some((i, InstrumentAct::Open));
+                acted = true;
+            }
+            SlotHover::Open => {
+                // No instrument loaded: the sliders button opens the picker.
+                v.open_instrument_picker = Some(i);
+            }
+            _ => {}
+        }
+    }
+    let force_open = v.open_instrument_picker.take() == Some(i);
+    let set_state = if acted {
+        Some(egui::SetOpenCommand::Bool(false))
+    } else if force_open {
+        Some(egui::SetOpenCommand::Bool(true))
+    } else {
+        None
+    };
+    if loaded.is_some() && resp.double_clicked() {
+        v.pending_instrument = Some((i, InstrumentAct::Open));
+    }
+    let focus = resp.clicked() || force_open;
+    egui::Popup::menu(&resp)
+        .open_memory(set_state)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            if let Some(saved) = p.tracks.get(i).and_then(|t| t.hosted_instrument.as_ref()) {
+                if ui.button(tr("Open")).clicked() {
+                    v.pending_instrument = Some((i, InstrumentAct::Open));
+                    ui.close();
+                }
+                if ui.selectable_label(saved.bypass, tr("Bypass")).clicked() {
+                    v.pending_instrument = Some((i, InstrumentAct::Bypass(!saved.bypass)));
+                    ui.close();
+                }
+                if ui.button(tr("Remove")).clicked() {
+                    v.pending_instrument = Some((i, InstrumentAct::Remove));
+                    ui.close();
+                }
+                ui.separator();
+            }
+            if let Some(crate::plugin_picker::Pick::Hosted(key)) =
+                crate::plugin_picker::show_instruments(
+                    ui,
+                    &mut v.picker_search,
+                    &v.hosted_instruments,
+                    focus,
+                )
+            {
+                v.pending_hosted_instrument = Some((i, key));
+                ui.close();
+            }
+        });
 }
 
 /// One Audio FX slot of track `i`: the effect in it (blue, grey when bypassed or silenced),
@@ -861,62 +1096,165 @@ fn insert_slot(
         }
         None => slot(g, r, "", SLOT_EMPTY, TEXT),
     }
+    // The hosted plug-in after the built-in inserts takes the spare row.
+    let hosted = if have.is_none() && k == count {
+        match i {
+            MASTER_STRIP => p.master_hosted.as_ref(),
+            _ => p.tracks.get(i).and_then(|t| t.hosted.as_ref()),
+        }
+    } else {
+        None
+    };
+    if let Some(saved) = hosted {
+        let off = inactive || saved.bypass;
+        slot(
+            g,
+            r,
+            &saved.name,
+            if off { PLUGIN_OFF } else { PLUGIN_BLUE },
+            if off { TEXT_DIM } else { Color32::WHITE },
+        );
+        let resp = ui.interact(r, uid, Sense::click());
+        let hover = slot_hover_controls(ui, g, r, uid.with("hover"), saved.bypass, false, true);
+        let acted = match hover {
+            Some(SlotHover::Power) => {
+                v.pending_hosted_act = Some((i, HostedAct::Bypass(!saved.bypass)));
+                true
+            }
+            Some(SlotHover::Open) => {
+                v.pending_hosted_act = Some((i, HostedAct::Open));
+                true
+            }
+            _ => false,
+        };
+        if !acted {
+            let focus = resp.clicked();
+            egui::Popup::menu(&resp)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    if ui.button(tr("Open")).clicked() {
+                        v.pending_hosted_act = Some((i, HostedAct::Open));
+                        ui.close();
+                    }
+                    if ui.selectable_label(saved.bypass, tr("Bypass")).clicked() {
+                        v.pending_hosted_act = Some((i, HostedAct::Bypass(!saved.bypass)));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if let Some(crate::plugin_picker::Pick::Hosted(key)) =
+                        crate::plugin_picker::show(
+                            ui,
+                            &mut v.picker_search,
+                            &v.hosted_plugins,
+                            focus,
+                        )
+                    {
+                        v.pending_hosted = Some((i, key));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(tr("Remove")).clicked() {
+                        v.pending_hosted_act = Some((i, HostedAct::Remove));
+                        ui.close();
+                    }
+                });
+        }
+        return;
+    }
     if k > count || (have.is_none() && count >= prowave_engine::MAX_INSERTS) {
         return;
     }
     let resp = ui.interact(r, uid, Sense::click());
-    if have.is_some() && resp.double_clicked() {
-        v.fx_window = Some((i, k));
-    }
-    let mut act = None;
-    egui::Popup::menu(&resp).show(|ui| {
-        ui.set_min_width(150.0);
-        if let Some(fx) = have {
-            if ui.button(tr("Open")).clicked() {
-                act = Some(InsertAct::Open);
-                ui.close();
-            }
-            if ui.selectable_label(fx.bypass, tr("Bypass")).clicked() {
-                act = Some(InsertAct::Bypass);
-                ui.close();
-            }
-            ui.add_enabled_ui(k > 0, |ui| {
-                if ui.button(tr("Move Up")).clicked() {
-                    act = Some(InsertAct::Move(-1));
-                    ui.close();
-                }
-            });
-            ui.add_enabled_ui(k + 1 < count, |ui| {
-                if ui.button(tr("Move Down")).clicked() {
-                    act = Some(InsertAct::Move(1));
-                    ui.close();
-                }
-            });
-            ui.separator();
-            ui.menu_button(tr("Replace With"), |ui| {
-                if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-                    act = Some(InsertAct::Replace(pick_kind(pick)));
-                    ui.close();
-                }
-            });
-            if ui.button(tr("Remove")).clicked() {
-                act = Some(InsertAct::Remove);
-                ui.close();
-            }
-        } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-            act = Some(InsertAct::Add(pick_kind(pick)));
-            ui.close();
-        }
+    let hover =
+        have.and_then(|fx| slot_hover_controls(ui, g, r, uid.with("hover"), fx.bypass, true, true));
+    let mut act = hover.map(|action| match action {
+        SlotHover::Power => InsertAct::Bypass,
+        SlotHover::Open => InsertAct::Open,
+        SlotHover::Up => InsertAct::Move(-1),
+        SlotHover::Down => InsertAct::Move(1),
     });
+    if hover.is_none() {
+        if have.is_some() && resp.double_clicked() {
+            v.fx_window = Some((i, k));
+        }
+        egui::Popup::menu(&resp)
+            // A click inside the search field must not close the menu (the default closes on any
+            // click, which made the field vanish when it was clicked).
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(150.0);
+                if let Some(fx) = have {
+                    if ui.button(tr("Open")).clicked() {
+                        act = Some(InsertAct::Open);
+                        ui.close();
+                    }
+                    if ui.selectable_label(fx.bypass, tr("Bypass")).clicked() {
+                        act = Some(InsertAct::Bypass);
+                        ui.close();
+                    }
+                    ui.add_enabled_ui(k > 0, |ui| {
+                        if ui.button(tr("Move Up")).clicked() {
+                            act = Some(InsertAct::Move(-1));
+                            ui.close();
+                        }
+                    });
+                    ui.add_enabled_ui(k + 1 < count, |ui| {
+                        if ui.button(tr("Move Down")).clicked() {
+                            act = Some(InsertAct::Move(1));
+                            ui.close();
+                        }
+                    });
+                    ui.separator();
+                    let replace = ui.button(tr("Replace With"));
+                    // A submenu closes on any click by default; with the search field inside, only a
+                    // click outside it may close.
+                    let submenu = egui::containers::menu::SubMenu::new().config(
+                        egui::containers::menu::MenuConfig::new()
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                    );
+                    let focus = replace.clicked();
+                    submenu.show(ui, &replace, |ui| {
+                        if let Some(pick) = crate::plugin_picker::show(
+                            ui,
+                            &mut v.picker_search,
+                            &v.hosted_plugins,
+                            focus,
+                        ) {
+                            match pick {
+                                crate::plugin_picker::Pick::Effect(kind) => {
+                                    act = Some(InsertAct::Replace(kind));
+                                }
+                                crate::plugin_picker::Pick::Hosted(key) => {
+                                    v.pending_hosted = Some((i, key));
+                                }
+                            }
+                            ui.close();
+                        }
+                    });
+                    if ui.button(tr("Remove")).clicked() {
+                        act = Some(InsertAct::Remove);
+                        ui.close();
+                    }
+                } else if let Some(pick) = crate::plugin_picker::show(
+                    ui,
+                    &mut v.picker_search,
+                    &v.hosted_plugins,
+                    resp.clicked(),
+                ) {
+                    match pick {
+                        crate::plugin_picker::Pick::Effect(kind) => {
+                            act = Some(InsertAct::Add(kind))
+                        }
+                        crate::plugin_picker::Pick::Hosted(key) => {
+                            v.pending_hosted = Some((i, key))
+                        }
+                    }
+                    ui.close();
+                }
+            });
+    }
     if let Some(act) = act {
         apply_insert(p, v, i, k, act);
-    }
-}
-
-/// The effect a picker choice names (hosted plug-ins will join the picker later).
-fn pick_kind(pick: crate::plugin_picker::Pick) -> prowave_engine::FxKind {
-    match pick {
-        crate::plugin_picker::Pick::Effect(kind) => kind,
     }
 }
 
@@ -1169,7 +1507,21 @@ pub fn channel_strip(
         let input_r = row(r.input, 16.0);
         match (kind, instrument) {
             (Some(TrackKind::Instrument | TrackKind::Drummer), Some(inst)) => {
-                slot(g, input_r, inst, plug, plug_text)
+                if let StripKey::Track(i) = key {
+                    instrument_slot(
+                        ui,
+                        g,
+                        input_r,
+                        p,
+                        v,
+                        i,
+                        id(ns, (key, "instrument")),
+                        inactive,
+                        inst,
+                    );
+                } else {
+                    slot(g, input_r, inst, plug, plug_text);
+                }
             }
             // An aux strip's input is the bus it listens to: Aux 1 takes Bus 1, and so on.
             (Some(TrackKind::Aux), _) => {

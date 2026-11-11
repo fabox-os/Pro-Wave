@@ -468,6 +468,20 @@ pub enum Command {
         slot: u8,
         bypass: bool,
     },
+    /// A hosted instrument (VST3, Audio Unit or CLAP) on `track` (`None` clears it). The old
+    /// adapter goes back through the garbage queue.
+    SetTrackHostedInstrument {
+        track: u16,
+        instrument: Option<Box<dyn crate::hosted::HostedInstrument>>,
+    },
+    /// Remove every hosted instrument, for a project replace. The adapters go back through the
+    /// garbage queue.
+    ClearHostedInstruments,
+    /// Bypass a track's hosted instrument without unloading it.
+    SetTrackHostedInstrumentBypass {
+        track: u16,
+        bypass: bool,
+    },
     /// Remove every hosted plug-in (all tracks and the master), for a project replace. The
     /// adapters go back through the garbage queue.
     ClearHosted,
@@ -559,6 +573,8 @@ pub enum Garbage {
     Chain(Box<Chain>),
     /// A replaced hosted master plug-in, dropped on the UI thread.
     Hosted(Option<Box<dyn crate::hosted::HostedEffect>>),
+    /// A replaced hosted instrument, dropped on the UI thread.
+    HostedInstrument(Option<Box<dyn crate::hosted::HostedInstrument>>),
     Convolver(Box<crate::convolver::Convolver>),
     Pdc(Box<Pdc>),
     Automation(Vec<AutoLane>),
@@ -748,6 +764,24 @@ struct SfNote {
     released: bool,
 }
 
+/// A note started by a hosted instrument, so it can be ended at its end beat or on note-off.
+#[derive(Clone, Copy, Debug, Default)]
+struct HostedNote {
+    active: bool,
+    track: u16,
+    channel: u8,
+    pitch: u8,
+    /// Timeline notes end at this beat; live notes end on their `NoteOff`.
+    end_beat: f64,
+    live: bool,
+    /// Safety net so a live note whose `NoteOff` never came still ends.
+    live_left: u32,
+    released: bool,
+}
+
+/// The most hosted-instrument notes sounding at once across all tracks.
+const MAX_HOSTED_NOTES: usize = 128;
+
 /// The app's halves of the queues a core publishes to.
 pub(crate) struct Readers {
     pub state: Option<StateReader>,
@@ -821,6 +855,12 @@ pub struct EngineCore {
     /// Hosted plug-ins per track, after the built-in insert chain and before delay
     /// compensation. Slots may be sparse.
     track_hosted: Vec<Vec<Option<Box<dyn crate::hosted::HostedEffect>>>>,
+    /// One hosted instrument per track (a VST3, Audio Unit or CLAP synth).
+    track_instrument: Vec<Option<Box<dyn crate::hosted::HostedInstrument>>>,
+    /// The tracks that have a hosted instrument, for the per-sample render.
+    hosted_tracks: Vec<u16>,
+    /// Notes started by hosted instruments, so their note-offs are sent when they end.
+    hosted_notes: [HostedNote; MAX_HOSTED_NOTES],
     /// Delay compensation per strip.
     pdc: Vec<Option<Box<Pdc>>>,
     routes: Vec<Route>,
@@ -973,6 +1013,9 @@ impl EngineCore {
             track_hosted: (0..MAX_TRACKS)
                 .map(|_| (0..crate::fx::MAX_INSERTS).map(|_| None).collect())
                 .collect(),
+            track_instrument: (0..MAX_TRACKS).map(|_| None).collect(),
+            hosted_tracks: Vec::with_capacity(MAX_TRACKS),
+            hosted_notes: [HostedNote::default(); MAX_HOSTED_NOTES],
             pdc: (0..MAX_TRACKS).map(|_| None).collect(),
             routes: vec![Route::default(); MAX_TRACKS],
             complex: Vec::with_capacity(MAX_TRACKS),
@@ -1596,7 +1639,11 @@ impl EngineCore {
                     let b = self.start_beat;
                     self.seek(b);
                 }
-                Command::SetPosition { beat } => self.seek(beat),
+                Command::SetPosition { beat } => {
+                    self.seek(beat);
+                    // A hosted instrument must not hold notes from before the jump.
+                    self.hosted_all_notes_off();
+                }
                 Command::SetTempoMap(map) => {
                     let old = std::mem::replace(&mut self.tempo_map, map);
                     let _ = self.trash.push(Garbage::TempoMap(old));
@@ -1787,6 +1834,48 @@ impl EngineCore {
                     }
                     self.sort_strips();
                 }
+                Command::SetTrackHostedInstrument { track, instrument } => {
+                    let t = track as usize;
+                    if t < MAX_TRACKS {
+                        if let Some(mut old) =
+                            std::mem::replace(&mut self.track_instrument[t], instrument)
+                        {
+                            old.all_notes_off();
+                            let _ = self.trash.push(Garbage::HostedInstrument(Some(old)));
+                        }
+                        for note in self
+                            .hosted_notes
+                            .iter_mut()
+                            .filter(|note| note.active && note.track == track)
+                        {
+                            note.active = false;
+                        }
+                        self.rebuild_hosted_tracks();
+                    } else if let Some(old) = instrument {
+                        let _ = self.trash.push(Garbage::HostedInstrument(Some(old)));
+                    }
+                }
+                Command::ClearHostedInstruments => {
+                    for slot in &mut self.track_instrument {
+                        if let Some(mut old) = slot.take() {
+                            old.all_notes_off();
+                            let _ = self.trash.push(Garbage::HostedInstrument(Some(old)));
+                        }
+                    }
+                    for note in self.hosted_notes.iter_mut() {
+                        note.active = false;
+                    }
+                    self.rebuild_hosted_tracks();
+                }
+                Command::SetTrackHostedInstrumentBypass { track, bypass } => {
+                    if let Some(instrument) = self
+                        .track_instrument
+                        .get_mut(track as usize)
+                        .and_then(Option::as_mut)
+                    {
+                        instrument.set_bypass(bypass);
+                    }
+                }
                 Command::SetConvolver { track, slot, conv } => {
                     let chain = if track == MASTER_TRACK {
                         self.master_chain.as_mut()
@@ -1897,6 +1986,11 @@ impl EngineCore {
             self.ext_note_on(n, false);
             return 0;
         }
+        let track = n.track.min(MAX_TRACKS as u16 - 1);
+        if self.track_instrument[track as usize].is_some() {
+            self.hosted_note_on(n, false);
+            return 0;
+        }
         let sf_track = n.track.min(MAX_TRACKS as u16 - 1);
         if self.sf.get(sf_track as usize).is_some_and(Option::is_some) {
             self.sf_note_on(sf_track, n.pitch, n.vel, n.end_beat, false);
@@ -1968,6 +2062,19 @@ impl EngineCore {
             return;
         }
         let sf_track = track.min(MAX_TRACKS as u16 - 1);
+        if self.track_instrument[sf_track as usize].is_some() {
+            self.hosted_note_on(
+                NoteEvent {
+                    start_beat: 0.0,
+                    end_beat: f64::MAX,
+                    pitch,
+                    vel,
+                    track: sf_track,
+                },
+                true,
+            );
+            return;
+        }
         if self.sf.get(sf_track as usize).is_some_and(Option::is_some) {
             self.sf_note_on(sf_track, pitch, vel, f64::MAX, true);
             return;
@@ -2001,6 +2108,11 @@ impl EngineCore {
             v.active && v.live && v.pitch == pitch && track.is_none_or(|t| v.track == t)
         }) {
             v.releasing = true;
+        }
+        for n in self.hosted_notes.iter_mut().filter(|n| {
+            n.active && n.live && n.pitch == pitch && track.is_none_or(|t| n.track == t)
+        }) {
+            n.released = true;
         }
         for n in self.sf_notes.iter_mut().filter(|n| {
             n.active && n.live && n.pitch == pitch && track.is_none_or(|t| n.track == t)
@@ -2074,6 +2186,85 @@ impl EngineCore {
                     self.touched[t] = true;
                     self.dirty.push(t as u16);
                 }
+            }
+        }
+    }
+
+    /// Starts a note on the hosted instrument of the note's track.
+    fn hosted_note_on(&mut self, n: NoteEvent, live: bool) {
+        let Some(slot) = self.hosted_notes.iter().position(|note| !note.active) else {
+            return;
+        };
+        let track = n.track.min(MAX_TRACKS as u16 - 1);
+        if let Some(Some(instrument)) = self.track_instrument.get_mut(track as usize) {
+            instrument.note_on(0, n.pitch, n.vel);
+        }
+        self.hosted_notes[slot] = HostedNote {
+            active: true,
+            track,
+            channel: 0,
+            pitch: n.pitch,
+            end_beat: n.end_beat,
+            live,
+            live_left: (4.0 * self.sr) as u32,
+            released: false,
+        };
+    }
+
+    /// Ends hosted-instrument notes that are due: a timeline note at its end beat (or when the
+    /// transport stops), a live note on its `NoteOff` (or after the safety time).
+    fn hosted_release_due(&mut self) {
+        for note in self.hosted_notes.iter_mut().filter(|note| note.active) {
+            let due = if note.live {
+                note.live_left = note.live_left.saturating_sub(1);
+                note.live_left == 0 || note.released
+            } else {
+                note.released || !self.playing || self.beat >= note.end_beat
+            };
+            if due {
+                note.active = false;
+                if let Some(Some(instrument)) = self.track_instrument.get_mut(note.track as usize) {
+                    instrument.note_off(note.channel, note.pitch);
+                }
+            }
+        }
+    }
+
+    /// Ends every hosted-instrument note now (a transport jump or a project replace).
+    fn hosted_all_notes_off(&mut self) {
+        for note in self.hosted_notes.iter_mut() {
+            note.active = false;
+        }
+        for instrument in self.track_instrument.iter_mut().flatten() {
+            instrument.all_notes_off();
+        }
+    }
+
+    /// Adds one frame of every hosted instrument to its track's strip.
+    fn hosted_render(&mut self) {
+        for k in 0..self.hosted_tracks.len() {
+            let t = self.hosted_tracks[k] as usize;
+            let Some(instrument) = self.track_instrument.get_mut(t).and_then(Option::as_mut) else {
+                continue;
+            };
+            let (x, y) = instrument.process();
+            if self.track_audible[t] {
+                self.in_l[t] += finite_or_zero(x) as f64;
+                self.in_r[t] += finite_or_zero(y) as f64;
+                if !self.touched[t] {
+                    self.touched[t] = true;
+                    self.dirty.push(t as u16);
+                }
+            }
+        }
+    }
+
+    /// Rebuilds the list of tracks whose instrument is rendered each sample.
+    fn rebuild_hosted_tracks(&mut self) {
+        self.hosted_tracks.clear();
+        for (track, slot) in self.track_instrument.iter().enumerate() {
+            if slot.is_some() {
+                self.hosted_tracks.push(track as u16);
             }
         }
     }
@@ -2161,6 +2352,9 @@ impl EngineCore {
             }
             if !self.sf_tracks.is_empty() {
                 self.sf_release_due();
+            }
+            if !self.hosted_tracks.is_empty() {
+                self.hosted_release_due();
             }
             for v in self.voices.iter_mut().filter(|v| v.active) {
                 if v.live {
@@ -2261,6 +2455,7 @@ impl EngineCore {
                 }
             }
             self.sf_render();
+            self.hosted_render();
             let (ml, mr) = self.mix_strips();
             l += ml;
             r += mr;
@@ -4259,5 +4454,141 @@ mod tests {
             .is_ok());
         render(&mut e, 0.01);
         assert_eq!(e.pdc[3].as_ref().map(|p| p.lengths()), Some((2, 2)));
+    }
+
+    #[derive(Default)]
+    struct FakeInstrumentState {
+        ons: std::sync::atomic::AtomicUsize,
+        offs: std::sync::atomic::AtomicUsize,
+        all_offs: std::sync::atomic::AtomicUsize,
+        last_on: std::sync::atomic::AtomicU8,
+        last_off: std::sync::atomic::AtomicU8,
+    }
+
+    struct FakeInstrument {
+        state: std::sync::Arc<FakeInstrumentState>,
+        sample: f32,
+    }
+
+    impl crate::hosted::HostedInstrument for FakeInstrument {
+        fn process(&mut self) -> (f32, f32) {
+            (self.sample, self.sample)
+        }
+
+        fn note_on(&mut self, _channel: u8, key: u8, _velocity: u8) {
+            use std::sync::atomic::Ordering;
+            self.state.ons.fetch_add(1, Ordering::Relaxed);
+            self.state.last_on.store(key, Ordering::Relaxed);
+        }
+
+        fn note_off(&mut self, _channel: u8, key: u8) {
+            use std::sync::atomic::Ordering;
+            self.state.offs.fetch_add(1, Ordering::Relaxed);
+            self.state.last_off.store(key, Ordering::Relaxed);
+        }
+
+        fn all_notes_off(&mut self) {
+            use std::sync::atomic::Ordering;
+            self.state.all_offs.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn latency_samples(&self) -> usize {
+            0
+        }
+
+        fn set_param_norm(&mut self, _param: usize, _value: f32) {}
+
+        fn set_bypass(&mut self, _bypass: bool) {}
+    }
+
+    fn fake_instrument(sample: f32) -> (Box<FakeInstrument>, std::sync::Arc<FakeInstrumentState>) {
+        let state = std::sync::Arc::new(FakeInstrumentState::default());
+        (
+            Box::new(FakeInstrument {
+                state: std::sync::Arc::clone(&state),
+                sample,
+            }),
+            state,
+        )
+    }
+
+    #[test]
+    fn a_hosted_instrument_plays_live_notes_and_replaces_the_synth() {
+        use std::sync::atomic::Ordering;
+        let (mut e, mut tx, _s) = rig();
+        let (instrument, state) = fake_instrument(0.25);
+        assert!(tx
+            .push(Command::SetSong(Box::new(Song::new(
+                vec![],
+                vec![TrackMix::default()]
+            ))))
+            .is_ok());
+        assert!(tx
+            .push(Command::SetTrackHostedInstrument {
+                track: 0,
+                instrument: Some(instrument)
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 60,
+                vel: 100,
+                track: 0
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 2 * 480];
+        assert_no_alloc::assert_no_alloc(|| e.process(&mut buf));
+        assert_eq!(state.ons.load(Ordering::Relaxed), 1);
+        assert_eq!(state.last_on.load(Ordering::Relaxed), 60);
+        let peak = buf.iter().fold(0f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.05, "the instrument's output is in the mix: {peak}");
+
+        assert!(tx.push(Command::NoteOff { pitch: 60 }).is_ok());
+        assert_no_alloc::assert_no_alloc(|| e.process(&mut buf));
+        assert_eq!(state.offs.load(Ordering::Relaxed), 1);
+        assert_eq!(state.last_off.load(Ordering::Relaxed), 60);
+    }
+
+    #[test]
+    fn a_timeline_note_ends_its_instrument_note_at_its_end_beat() {
+        use std::sync::atomic::Ordering;
+        let (mut e, mut tx, _s) = rig();
+        let (instrument, state) = fake_instrument(0.1);
+        let song = Song::new(vec![note(0.0, 0.1)], vec![TrackMix::default()]);
+        assert!(tx.push(Command::SetSong(Box::new(song))).is_ok());
+        assert!(tx
+            .push(Command::SetTrackHostedInstrument {
+                track: 0,
+                instrument: Some(instrument)
+            })
+            .is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 2 * 9_600];
+        e.process(&mut buf);
+        assert_eq!(state.ons.load(Ordering::Relaxed), 1);
+        assert!(state.offs.load(Ordering::Relaxed) >= 1);
+        assert_eq!(state.last_off.load(Ordering::Relaxed), 69);
+    }
+
+    #[test]
+    fn a_seek_and_a_project_replace_end_hosted_instrument_notes() {
+        use std::sync::atomic::Ordering;
+        let (mut e, mut tx, _s) = rig();
+        let (instrument, state) = fake_instrument(0.1);
+        assert!(tx
+            .push(Command::SetTrackHostedInstrument {
+                track: 0,
+                instrument: Some(instrument)
+            })
+            .is_ok());
+        assert!(tx.push(Command::SetPosition { beat: 4.0 }).is_ok());
+        assert_no_alloc::assert_no_alloc(|| e.process(&mut []));
+        assert_eq!(state.all_offs.load(Ordering::Relaxed), 1);
+
+        assert!(tx.push(Command::ClearHostedInstruments).is_ok());
+        assert_no_alloc::assert_no_alloc(|| e.process(&mut []));
+        assert_eq!(state.all_offs.load(Ordering::Relaxed), 2);
+        assert!(e.track_instrument[0].is_none());
+        assert!(e.hosted_tracks.is_empty());
     }
 }

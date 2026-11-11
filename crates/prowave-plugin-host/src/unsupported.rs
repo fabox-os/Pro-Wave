@@ -15,6 +15,14 @@ pub struct Hosted {
     pub parameters: Vec<Parameter>,
 }
 
+/// No instrument can be loaded on this platform.
+pub struct HostedInstrument {
+    pub control: Control,
+    pub instrument: Box<dyn prowave_engine::HostedInstrument>,
+    pub latency: u32,
+    pub parameters: Vec<Parameter>,
+}
+
 /// No control side exists on this platform.
 pub struct Control;
 
@@ -42,6 +50,16 @@ impl Catalog {
         _quantum: usize,
         _state: Option<&[u8]>,
     ) -> Result<Hosted, Error> {
+        Err(Error::unsupported())
+    }
+
+    pub fn instantiate_instrument(
+        &self,
+        _key: &str,
+        _sample_rate: f64,
+        _quantum: usize,
+        _state: Option<&[u8]>,
+    ) -> Result<HostedInstrument, Error> {
         Err(Error::unsupported())
     }
 }
