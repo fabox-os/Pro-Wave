@@ -3517,6 +3517,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-vamp"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.8.9",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"

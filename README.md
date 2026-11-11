@@ -138,6 +138,7 @@ cargo xtask check                      # fmt, clippy -D warnings, tests, no-allo
 | [`crates/prowave-project`](crates/prowave-project) | The `.prowave` project file format |
 | [`crates/prowave-logicx-import`](crates/prowave-logicx-import) | Logic Pro `.logicx` bundles: save shapes, active alternative, metadata plists and the ProjectData envelope |
 | [`crates/prowave-dssi`](crates/prowave-dssi) | In-process DSSI synth plug-in hosting: MIDI rendering, programs and configuration |
+| [`crates/prowave-vamp`](crates/prowave-vamp) | In-process Vamp analysis plug-in hosting: outputs, parameters and features |
 | [`xtask`](xtask) | `cargo xtask check`, `wasm-check` and `rt-check` |
 | [`dist/linux`](dist/linux) | Linux desktop entry, icon, MIME type, `install.sh` and the .deb, .rpm and Flatpak recipes |
 
