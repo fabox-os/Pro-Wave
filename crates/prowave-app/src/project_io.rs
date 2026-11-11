@@ -301,7 +301,7 @@ fn automation_from_doc(t: &prowave_project::TrackDoc) -> crate::model::Automatio
     a
 }
 
-/// Most effect lanes of one track a file may have (8 effects, 16 parameters each).
+/// Most effect lanes of one track a file may have (15 effects, 16 parameters each).
 const MAX_FX_LANES: usize = prowave_engine::MAX_INSERTS * prowave_engine::MAX_FX_PARAMS;
 
 /// Points as the file keeps them: [beat, value, curve].
