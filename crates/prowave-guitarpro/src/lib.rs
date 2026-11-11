@@ -6,13 +6,15 @@
 //! with every bar in song order and every beat positioned in quarter notes, so the notes can be
 //! placed on a Pro Wave score or piano roll.
 //!
-//! Logic Pro parity: Logic imports Guitar Pro scores through its Score editor (MusicXML is the
-//! other route); this supplies the Guitar Pro half of issue #71's notation request. Guitar Pro 6
-//! `.gpx` files use a BCFZ container rather than a ZIP and are refused with a message asking for
-//! a `.gp` export; `.gp3`/`.gp4`/`.gp5` (binary formats) are not read either.
+//! Logic Pro parity: Logic's Score editor reads MusicXML, not Guitar Pro files, so this crate is
+//! not a Logic import path. It supplies the Guitar Pro half of issue #71's notation request for
+//! Pro Wave's own notation window. Guitar Pro 6 `.gpx` files use a BCFZ container rather than a
+//! ZIP and are refused with a message asking for a `.gp` export; `.gp3`/`.gp4`/`.gp5` (binary
+//! formats) are not read either.
 //!
-//! Files are untrusted input: the reader caps the archive entry size and the number of XML
-//! events and objects, and never panics on malformed XML.
+//! Files are untrusted input: the reader caps the archive size, the decompressed score, the XML
+//! events, the objects, the (track, master bar) cells, and the beats and note references built
+//! from them, and never panics on malformed XML.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
@@ -26,8 +28,19 @@ use quick_xml::{Reader, XmlVersion};
 const SCORE_ENTRY: &str = "Content/score.gpif";
 /// The largest `score.gpif` the reader accepts.
 const MAX_GPIF_BYTES: u64 = 64 * 1024 * 1024;
+/// The largest `.gp` archive `read_path` loads into memory.
+const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_EVENTS: usize = 20_000_000;
 const MAX_OBJECTS: usize = 500_000;
+/// The most (track, master bar) cells a score may have. The reader builds one bar per cell,
+/// so this bounds the output size however the file's objects are arranged.
+const MAX_BAR_CELLS: usize = 1_000_000;
+/// The most beats the built score may hold. A voice's beat list can name the same beat many
+/// times, and every reference becomes a beat in each bar that uses that voice, so the output is
+/// bounded here rather than by the file's object counts.
+const MAX_TAB_BEATS: usize = 2_000_000;
+/// The most note references the built score may hold, counted the same way as beats.
+const MAX_TAB_NOTES: usize = 4_000_000;
 
 /// A Guitar Pro score.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -194,6 +207,12 @@ impl std::error::Error for Error {}
 /// Reads a `.gp` file from disk.
 pub fn read_path(path: impl AsRef<Path>) -> Result<Score, Error> {
     let path = path.as_ref();
+    let size = std::fs::metadata(path)
+        .map_err(|error| Error::Io(format!("{}: {error}", path.display())))?
+        .len();
+    if size > MAX_ARCHIVE_BYTES {
+        return Err(Error::TooLarge);
+    }
     let bytes =
         std::fs::read(path).map_err(|error| Error::Io(format!("{}: {error}", path.display())))?;
     read(&bytes)
@@ -208,13 +227,20 @@ pub fn read(bytes: &[u8]) -> Result<Score, Error> {
     let mut entry = archive
         .by_name(SCORE_ENTRY)
         .map_err(|_| Error::MissingScore)?;
+    // The declared size is checked first, but the archive can lie about it, so the decompressed
+    // output is also read through a limit of one byte past the cap and checked afterwards.
     if entry.size() > MAX_GPIF_BYTES {
         return Err(Error::TooLarge);
     }
     let mut xml = String::new();
     entry
+        .by_ref()
+        .take(MAX_GPIF_BYTES + 1)
         .read_to_string(&mut xml)
         .map_err(|error| Error::Io(error.to_string()))?;
+    if xml.len() as u64 > MAX_GPIF_BYTES {
+        return Err(Error::TooLarge);
+    }
     parse(&xml)
 }
 
@@ -275,7 +301,11 @@ pub fn parse(xml: &str) -> Result<Score, Error> {
             "the document ends before its elements close".to_string(),
         ));
     }
-    Ok(state.into_score())
+    // `into_score` builds one bar per track and master bar, so refuse the score before that.
+    if state.tracks.len().saturating_mul(state.master_bars.len()) > MAX_BAR_CELLS {
+        return Err(Error::TooLarge);
+    }
+    state.into_score()
 }
 
 #[derive(Default)]
@@ -568,6 +598,9 @@ impl State {
             "MasterTrack" => self.in_master_track = false,
             "MasterBar" if self.in_master_bar => {
                 self.in_master_bar = false;
+                if self.master_bars.len() >= MAX_OBJECTS {
+                    return Err(Error::TooLarge);
+                }
                 self.master_bars.push(std::mem::take(&mut self.master_bar));
             }
             "Automation" if self.in_automation => {
@@ -630,7 +663,7 @@ impl State {
         Ok(())
     }
 
-    fn into_score(self) -> Score {
+    fn into_score(self) -> Result<Score, Error> {
         let by_id: HashMap<u32, usize> = self
             .tracks
             .iter()
@@ -653,6 +686,8 @@ impl State {
         );
 
         let mut tracks = Vec::with_capacity(order.len());
+        let mut beat_count = 0usize;
+        let mut note_count = 0usize;
         for (slot, &track_index) in order.iter().enumerate() {
             let Some(raw) = self.tracks.get(track_index) else {
                 continue;
@@ -680,6 +715,15 @@ impl State {
                         let Some(Some(raw_beat)) = self.beats.get(beat_id as usize) else {
                             continue;
                         };
+                        // Check before allocating: the note count is the reference count, which
+                        // is an upper bound on the notes this beat yields.
+                        if beat_count >= MAX_TAB_BEATS
+                            || note_count.saturating_add(raw_beat.notes.len()) > MAX_TAB_NOTES
+                        {
+                            return Err(Error::TooLarge);
+                        }
+                        beat_count += 1;
+                        note_count += raw_beat.notes.len();
                         let duration = raw_beat
                             .rhythm
                             .and_then(|id| self.rhythms.get(id as usize))
@@ -718,7 +762,7 @@ impl State {
             });
         }
 
-        Score {
+        Ok(Score {
             gp_version: self.gp_version,
             title: self.title,
             subtitle: self.subtitle,
@@ -739,7 +783,7 @@ impl State {
                 })
                 .collect(),
             tracks,
-        }
+        })
     }
 }
 

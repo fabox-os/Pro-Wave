@@ -201,3 +201,120 @@ fn refuses_other_files_and_broken_documents() {
     let bytes = writer.finish().expect("finish zip").into_inner();
     assert!(matches!(read(&bytes), Err(Error::MissingScore)));
 }
+
+#[test]
+fn refuses_more_master_bars_than_the_object_cap() {
+    // One more master bar than `MAX_OBJECTS` (500 000) allows.
+    let mut xml = String::from("<GPIF><MasterBars>");
+    for _ in 0..=500_000 {
+        xml.push_str("<MasterBar></MasterBar>");
+    }
+    xml.push_str("</MasterBars></GPIF>");
+    assert!(matches!(
+        prowave_guitarpro::parse(&xml),
+        Err(Error::TooLarge)
+    ));
+}
+
+#[test]
+fn refuses_scores_whose_bar_cells_exceed_the_cap() {
+    // 1 001 tracks × 1 000 master bars is 1 001 000 cells, over the 1 000 000 cap, although
+    // each count is well inside the object cap.
+    let mut xml = String::from("<GPIF><Tracks>");
+    for id in 0..1_001 {
+        xml.push_str(&format!("<Track id=\"{id}\"></Track>"));
+    }
+    xml.push_str("</Tracks><MasterBars>");
+    for _ in 0..1_000 {
+        xml.push_str("<MasterBar></MasterBar>");
+    }
+    xml.push_str("</MasterBars></GPIF>");
+    assert!(matches!(
+        prowave_guitarpro::parse(&xml),
+        Err(Error::TooLarge)
+    ));
+}
+
+#[test]
+fn refuses_an_archive_whose_score_is_too_large() {
+    // 65 MiB of whitespace after the root: it compresses to almost nothing, but the
+    // decompressed score is over the 64 MiB cap.
+    let mut score = b"<GPIF>".to_vec();
+    score.resize(65 * 1024 * 1024, b' ');
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .start_file("Content/score.gpif", SimpleFileOptions::default())
+        .expect("start entry");
+    writer.write_all(&score).expect("write entry");
+    let bytes = writer.finish().expect("finish zip").into_inner();
+    assert!(matches!(read(&bytes), Err(Error::TooLarge)));
+}
+
+#[test]
+fn bounds_the_decompressed_score_when_the_archive_lies_about_its_size() {
+    // Same oversized score, but the central directory declares 100 bytes. The reader must not
+    // trust the declared size: the decompressed output is capped as it is read.
+    let mut score = b"<GPIF>".to_vec();
+    score.resize(65 * 1024 * 1024, b' ');
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    writer
+        .start_file("Content/score.gpif", SimpleFileOptions::default())
+        .expect("start entry");
+    writer.write_all(&score).expect("write entry");
+    let mut bytes = writer.finish().expect("finish zip").into_inner();
+    // Patch the central directory header's uncompressed size (offset 24, little-endian u32).
+    let central = bytes
+        .windows(4)
+        .rposition(|window| window == b"PK\x01\x02")
+        .expect("a central directory header");
+    bytes[central + 24..central + 28].copy_from_slice(&100u32.to_le_bytes());
+    // The `zip` crate rejects output longer than the declared size, so the read fails before
+    // the reader's own cap; either way no score comes back.
+    assert!(read(&bytes).is_err());
+}
+
+/// One track, one bar, one voice. `voice_beats` is the voice's beat list and `beat_notes` the
+/// notes of beat 0. Both can name the same object many times, which is what the budgets bound.
+fn amplified_score(voice_beats: &str, beat_notes: &str) -> String {
+    format!(
+        "<GPIF>\
+<Tracks><Track id=\"0\"><Name>T</Name></Track></Tracks>\
+<MasterBars><MasterBar><Bars>0</Bars></MasterBar></MasterBars>\
+<Bars><Bar id=\"0\"><Voices>0 -1 -1 -1</Voices></Bar></Bars>\
+<Voices><Voice id=\"0\"><Beats>{voice_beats}</Beats></Voice></Voices>\
+<Beats><Beat id=\"0\"><Rhythm ref=\"0\" /><Notes>{beat_notes}</Notes></Beat></Beats>\
+<Notes><Note id=\"0\"><Properties><Property name=\"Midi\"><Number>60</Number></Property></Properties></Note></Notes>\
+<Rhythms><Rhythm id=\"0\"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>\
+</GPIF>"
+    )
+}
+
+#[test]
+fn refuses_a_voice_that_repeats_a_beat_past_the_beat_budget() {
+    // 2 000 001 references to one beat: one more than `MAX_TAB_BEATS` allows.
+    let voice_beats = "0 ".repeat(2_000_001);
+    let xml = amplified_score(&voice_beats, "");
+    assert!(matches!(
+        prowave_guitarpro::parse(&xml),
+        Err(Error::TooLarge)
+    ));
+}
+
+#[test]
+fn refuses_a_beat_that_repeats_a_note_past_the_note_budget() {
+    // 4 000 001 references to one note: one more than `MAX_TAB_NOTES` allows.
+    let beat_notes = "0 ".repeat(4_000_001);
+    let xml = amplified_score("0", &beat_notes);
+    assert!(matches!(
+        prowave_guitarpro::parse(&xml),
+        Err(Error::TooLarge)
+    ));
+}
+
+#[test]
+fn reads_a_score_inside_the_budgets() {
+    // A single reference each is far inside both budgets and must still read.
+    let song = prowave_guitarpro::parse(&amplified_score("0", "0")).expect("the score parses");
+    assert_eq!(song.note_count(), 1);
+    assert_eq!(song.tracks[0].bars[0].beats.len(), 1);
+}
