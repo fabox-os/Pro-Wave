@@ -598,9 +598,17 @@ impl HostedEffect for RealtimeEffect {
                     }
                     self.resync.store(true, Ordering::Relaxed);
                 } else {
-                    // `plughost` 0.2.3 (pinned in Cargo.toml), `src/realtime/endpoint.rs`: the
-                    // callback "allocates nothing, takes no lock and waits for nothing"; a
-                    // hung helper plays the fallback instead of blocking the audio thread.
+                    // `plughost` 0.2.3 (pinned in Cargo.toml), `src/realtime.rs` lines 1-6
+                    // ("The callback never waits for the helper") and
+                    // `src/realtime/endpoint.rs` lines 1-4 ("allocates nothing, takes no lock
+                    // and waits for nothing"). A helper that misses the one-quantum latency
+                    // window never blocks this thread: the call returns
+                    // `RealtimeOutput::Fallback(FallbackReason::Missed)` and fills the output
+                    // with the configured `Fallback` (silence here, from
+                    // `RealtimeConfig::new`, ramped over one quantum). Every later callback
+                    // keeps playing that fallback until a completed quantum arrives (plughost
+                    // tracks the misses in its realtime status); an error from the call fills
+                    // silence and requests a resync below.
                     let result = self.endpoint.process_audio_f32(
                         &BlockContext::new(self.quantum),
                         ins.as_slice(),
