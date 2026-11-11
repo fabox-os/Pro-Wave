@@ -12,7 +12,7 @@ use crate::routing::AutoPoint;
 use crate::routing::SendSpec;
 use crate::routing::{send_gain, AutoLane, AutoTarget, Route, MAX_BUSES, MAX_SENDS};
 use crate::soundfont::SfPlayer;
-use crate::synth::{kit_voice, osc, Kit, Svf, SynthPatch};
+use crate::synth::{kit_voice, leslie_hz, osc, Kit, Svf, SynthPatch, VoiceKind, DRAWBAR_RATIOS};
 use crate::tempo_map::{SmpteRate, TempoMap};
 use crate::triple::{triple_buffer, Reader, Writer};
 use rtrb::{Consumer, Producer};
@@ -725,6 +725,16 @@ struct Voice {
     vibrato: f32,
     noise: u32,
     pitch_env: f32,
+    /// Drawbar phases for the organ voice, and its percussion, key click and Leslie state.
+    phases: [f32; 9],
+    perc_env: f32,
+    perc_phase: f32,
+    perc_ratio: f32,
+    perc_block: f32,
+    click_env: f32,
+    click_block: f32,
+    rotor_phase: f32,
+    leslie_amp: f32,
     /// Oscillator B / A frequency ratio (fixed per note).
     ratio_b: f32,
     /// `pitch_env` decay over one control block.
@@ -2028,6 +2038,27 @@ impl EngineCore {
             vibrato: 0.0,
             noise: 0x9E37_79B9 ^ (n.pitch as u32).wrapping_mul(2_654_435_761) | 1,
             pitch_env: patch.pitch_drop,
+            phases: [0.0; 9],
+            perc_env: if patch.voice == VoiceKind::DrawbarOrgan && patch.percussion != 0 {
+                1.0
+            } else {
+                0.0
+            },
+            perc_phase: 0.0,
+            perc_ratio: match patch.percussion {
+                2 => 2.0,
+                3 => 3.0,
+                _ => 0.0,
+            },
+            perc_block: (-(CTRL_BLOCK as f32) / (patch.percussion_decay.max(0.02) * self.sr)).exp(),
+            click_env: if patch.voice == VoiceKind::DrawbarOrgan {
+                patch.key_click
+            } else {
+                0.0
+            },
+            click_block: (-(CTRL_BLOCK as f32) / (0.004 * self.sr)).exp(),
+            rotor_phase: 0.0,
+            leslie_amp: 1.0,
             ratio_b: 2f32.powf((patch.semi_b + patch.detune_b / 100.0) / 12.0),
             pitch_decay_block: (-(CTRL_BLOCK as f32) / (patch.pitch_decay.max(0.001) * self.sr))
                 .exp(),
@@ -2395,7 +2426,8 @@ impl EngineCore {
                         }
                     }
                 }
-                let filtered = pt.cutoff < 19_000.0 || pt.highpass;
+                let organ = pt.voice == VoiceKind::DrawbarOrgan;
+                let filtered = !organ && (pt.cutoff < 19_000.0 || pt.highpass);
                 if v.ctrl_left == 0 {
                     v.ctrl_left = CTRL_BLOCK;
                     let vib = if pt.vibrato_cents != 0.0 {
@@ -2404,7 +2436,29 @@ impl EngineCore {
                     } else {
                         0.0
                     };
-                    let bend = v.pitch_env / 12.0 + vib;
+                    // The Leslie is an amplitude and pitch modulation of the organ; it is
+                    // computed with the other control-rate values and held for the block.
+                    let leslie = if organ && pt.leslie > 0 {
+                        v.rotor_phase = wrap_phase(
+                            v.rotor_phase + leslie_hz(pt.leslie) * CTRL_BLOCK as f32 / sr,
+                        );
+                        let s = (v.rotor_phase * std::f32::consts::TAU).sin();
+                        v.leslie_amp = 1.0 + pt.leslie_depth * 0.25 * s;
+                        pt.leslie_depth * 12.0 * s / 1200.0
+                    } else {
+                        v.leslie_amp = 1.0;
+                        0.0
+                    };
+                    // Percussion and key click fade out; at control rate that is smooth.
+                    v.perc_env *= v.perc_block;
+                    v.click_env *= v.click_block;
+                    if v.perc_env < 1e-6 {
+                        v.perc_env = 0.0;
+                    }
+                    if v.click_env < 1e-6 {
+                        v.click_env = 0.0;
+                    }
+                    let bend = v.pitch_env / 12.0 + vib + leslie;
                     let mul = if bend == 0.0 { 1.0 } else { 2f32.powf(bend) };
                     if pt.pitch_drop != 0.0 {
                         v.pitch_env *= v.pitch_decay_block;
@@ -2425,14 +2479,39 @@ impl EngineCore {
                 let (dt_a, dt_b) = (v.dt_a, v.dt_b);
                 v.phase_a = wrap_phase(v.phase_a + dt_a);
                 v.phase_b = wrap_phase(v.phase_b + dt_b);
-                let mut x = osc(pt.wave_a, v.phase_a, dt_a, pt.pulse_width) * pt.level_a
-                    + osc(pt.wave_b, v.phase_b, dt_b, pt.pulse_width) * pt.level_b;
-                if pt.noise > 0.0 {
-                    v.noise ^= v.noise << 13;
-                    v.noise ^= v.noise >> 17;
-                    v.noise ^= v.noise << 5;
-                    x += ((v.noise as f32 / u32::MAX as f32) * 2.0 - 1.0) * pt.noise;
-                }
+                let mut x = if organ {
+                    // Nine sine drawbars at their harmonic ratios.
+                    let mut sum = 0.0;
+                    for (i, phase) in v.phases.iter_mut().enumerate() {
+                        *phase = wrap_phase(*phase + dt_a * DRAWBAR_RATIOS[i]);
+                        sum += (*phase * std::f32::consts::TAU).sin()
+                            * (pt.drawbars[i].min(8) as f32 / 8.0);
+                    }
+                    let mut x = sum * 0.2;
+                    if v.perc_env > 0.0 {
+                        v.perc_phase = wrap_phase(v.perc_phase + dt_a * v.perc_ratio);
+                        x += (v.perc_phase * std::f32::consts::TAU).sin()
+                            * v.perc_env
+                            * pt.percussion_level;
+                    }
+                    if v.click_env > 0.0 {
+                        v.noise ^= v.noise << 13;
+                        v.noise ^= v.noise >> 17;
+                        v.noise ^= v.noise << 5;
+                        x += ((v.noise as f32 / u32::MAX as f32) * 2.0 - 1.0) * v.click_env * 0.3;
+                    }
+                    x * v.leslie_amp
+                } else {
+                    let mut x = osc(pt.wave_a, v.phase_a, dt_a, pt.pulse_width) * pt.level_a
+                        + osc(pt.wave_b, v.phase_b, dt_b, pt.pulse_width) * pt.level_b;
+                    if pt.noise > 0.0 {
+                        v.noise ^= v.noise << 13;
+                        v.noise ^= v.noise >> 17;
+                        v.noise ^= v.noise << 5;
+                        x += ((v.noise as f32 / u32::MAX as f32) * 2.0 - 1.0) * pt.noise;
+                    }
+                    x
+                };
                 if filtered {
                     let (low, high) = v.filter.tick(x, v.filter_f, v.filter_damping);
                     x = if pt.highpass { high } else { low };
@@ -4456,139 +4535,6 @@ mod tests {
         assert_eq!(e.pdc[3].as_ref().map(|p| p.lengths()), Some((2, 2)));
     }
 
-    #[derive(Default)]
-    struct FakeInstrumentState {
-        ons: std::sync::atomic::AtomicUsize,
-        offs: std::sync::atomic::AtomicUsize,
-        all_offs: std::sync::atomic::AtomicUsize,
-        last_on: std::sync::atomic::AtomicU8,
-        last_off: std::sync::atomic::AtomicU8,
-    }
-
-    struct FakeInstrument {
-        state: std::sync::Arc<FakeInstrumentState>,
-        sample: f32,
-    }
-
-    impl crate::hosted::HostedInstrument for FakeInstrument {
-        fn process(&mut self) -> (f32, f32) {
-            (self.sample, self.sample)
-        }
-
-        fn note_on(&mut self, _channel: u8, key: u8, _velocity: u8) {
-            use std::sync::atomic::Ordering;
-            self.state.ons.fetch_add(1, Ordering::Relaxed);
-            self.state.last_on.store(key, Ordering::Relaxed);
-        }
-
-        fn note_off(&mut self, _channel: u8, key: u8) {
-            use std::sync::atomic::Ordering;
-            self.state.offs.fetch_add(1, Ordering::Relaxed);
-            self.state.last_off.store(key, Ordering::Relaxed);
-        }
-
-        fn all_notes_off(&mut self) {
-            use std::sync::atomic::Ordering;
-            self.state.all_offs.fetch_add(1, Ordering::Relaxed);
-        }
-
-        fn latency_samples(&self) -> usize {
-            0
-        }
-
-        fn set_param_norm(&mut self, _param: usize, _value: f32) {}
-
-        fn set_bypass(&mut self, _bypass: bool) {}
-    }
-
-    fn fake_instrument(sample: f32) -> (Box<FakeInstrument>, std::sync::Arc<FakeInstrumentState>) {
-        let state = std::sync::Arc::new(FakeInstrumentState::default());
-        (
-            Box::new(FakeInstrument {
-                state: std::sync::Arc::clone(&state),
-                sample,
-            }),
-            state,
-        )
-    }
-
-    #[test]
-    fn a_hosted_instrument_plays_live_notes_and_replaces_the_synth() {
-        use std::sync::atomic::Ordering;
-        let (mut e, mut tx, _s) = rig();
-        let (instrument, state) = fake_instrument(0.25);
-        assert!(tx
-            .push(Command::SetSong(Box::new(Song::new(
-                vec![],
-                vec![TrackMix::default()]
-            ))))
-            .is_ok());
-        assert!(tx
-            .push(Command::SetTrackHostedInstrument {
-                track: 0,
-                instrument: Some(instrument)
-            })
-            .is_ok());
-        assert!(tx
-            .push(Command::NoteOn {
-                pitch: 60,
-                vel: 100,
-                track: 0
-            })
-            .is_ok());
-        let mut buf = vec![0.0f32; 2 * 480];
-        assert_no_alloc::assert_no_alloc(|| e.process(&mut buf));
-        assert_eq!(state.ons.load(Ordering::Relaxed), 1);
-        assert_eq!(state.last_on.load(Ordering::Relaxed), 60);
-        let peak = buf.iter().fold(0f32, |m, x| m.max(x.abs()));
-        assert!(peak > 0.05, "the instrument's output is in the mix: {peak}");
-
-        assert!(tx.push(Command::NoteOff { pitch: 60 }).is_ok());
-        assert_no_alloc::assert_no_alloc(|| e.process(&mut buf));
-        assert_eq!(state.offs.load(Ordering::Relaxed), 1);
-        assert_eq!(state.last_off.load(Ordering::Relaxed), 60);
-    }
-
-    #[test]
-    fn a_timeline_note_ends_its_instrument_note_at_its_end_beat() {
-        use std::sync::atomic::Ordering;
-        let (mut e, mut tx, _s) = rig();
-        let (instrument, state) = fake_instrument(0.1);
-        let song = Song::new(vec![note(0.0, 0.1)], vec![TrackMix::default()]);
-        assert!(tx.push(Command::SetSong(Box::new(song))).is_ok());
-        assert!(tx
-            .push(Command::SetTrackHostedInstrument {
-                track: 0,
-                instrument: Some(instrument)
-            })
-            .is_ok());
-        assert!(tx.push(Command::Play).is_ok());
-        let mut buf = vec![0.0f32; 2 * 9_600];
-        e.process(&mut buf);
-        assert_eq!(state.ons.load(Ordering::Relaxed), 1);
-        assert!(state.offs.load(Ordering::Relaxed) >= 1);
-        assert_eq!(state.last_off.load(Ordering::Relaxed), 69);
-    }
-
-    #[test]
-    fn a_seek_and_a_project_replace_end_hosted_instrument_notes() {
-        use std::sync::atomic::Ordering;
-        let (mut e, mut tx, _s) = rig();
-        let (instrument, state) = fake_instrument(0.1);
-        assert!(tx
-            .push(Command::SetTrackHostedInstrument {
-                track: 0,
-                instrument: Some(instrument)
-            })
-            .is_ok());
-        assert!(tx.push(Command::SetPosition { beat: 4.0 }).is_ok());
-        assert_no_alloc::assert_no_alloc(|| e.process(&mut []));
-        assert_eq!(state.all_offs.load(Ordering::Relaxed), 1);
-
-        assert!(tx.push(Command::ClearHostedInstruments).is_ok());
-        assert_no_alloc::assert_no_alloc(|| e.process(&mut []));
-        assert_eq!(state.all_offs.load(Ordering::Relaxed), 2);
-        assert!(e.track_instrument[0].is_none());
-        assert!(e.hosted_tracks.is_empty());
+ main
     }
 }

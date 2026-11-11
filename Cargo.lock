@@ -3836,6 +3836,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
+ "winit",
  "winresource",
  "zip",
 ]
@@ -3861,6 +3862,14 @@ version = "0.1.0"
 dependencies = [
  "plist",
  "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "prowave-guitarpro"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.42.0",
  "zip",
 ]
 
