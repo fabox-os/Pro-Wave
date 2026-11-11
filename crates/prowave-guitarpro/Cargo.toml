@@ -1,0 +1,13 @@
+[package]
+name = "prowave-guitarpro"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: Guitar Pro 7/8 (.gp) tablature reading"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+quick-xml = "0.42.0"
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
