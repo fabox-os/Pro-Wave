@@ -402,6 +402,9 @@ Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
   `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
   with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
   regions, plug-ins, Session Players) is the next step.
+- **SFZ sampler instruments:** the `prowave-sfz` crate reads regions, key and velocity ranges, root
+  keys, tuning, loops and amplitude envelopes, including `<global>`/`<master>`/`<group>` inheritance,
+  with limits and sample-path checks for untrusted files. The Sampler in the app does not use it yet.
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.
