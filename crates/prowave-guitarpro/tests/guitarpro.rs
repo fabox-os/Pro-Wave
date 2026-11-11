@@ -318,3 +318,70 @@ fn reads_a_score_inside_the_budgets() {
     assert_eq!(song.note_count(), 1);
     assert_eq!(song.tracks[0].bars[0].beats.len(), 1);
 }
+
+#[test]
+fn entity_references_do_not_truncate_text() {
+    // quick-xml reports `&amp;` and `&lt;` as separate events between the text fragments;
+    // each element's text must be put back together before it is applied.
+    let xml = GPIF
+        .replace(
+            "<Title><![CDATA[A Title]]></Title>",
+            "<Title>Rock &amp; Roll &lt;live&gt;</Title>",
+        )
+        .replace(
+            "<Tabber><![CDATA[T]]></Tabber>",
+            "<Tabber>Tabber &amp; Co</Tabber>",
+        )
+        .replace(
+            "<Name><![CDATA[Guitar]]></Name>",
+            "<Name>Acoustic &amp; Steel</Name>",
+        )
+        .replace(
+            "<Name><![CDATA[Electric Guitar]]></Name>",
+            "<Name>Electric &lt;Set&gt;</Name>",
+        )
+        // CDATA and text next to each other, and a numeric character reference.
+        .replace(
+            "<Artist><![CDATA[An Artist]]></Artist>",
+            "<Artist><![CDATA[An]]> &amp; <![CDATA[Artist]]></Artist>",
+        )
+        .replace(
+            "<Album><![CDATA[An Album]]></Album>",
+            "<Album>Vol &#49;</Album>",
+        );
+    let score = prowave_guitarpro::parse(&xml).expect("the escaped score parses");
+    assert_eq!(score.title, "Rock & Roll <live>");
+    assert_eq!(score.tabber, "Tabber & Co");
+    assert_eq!(score.artist, "An & Artist");
+    assert_eq!(score.album, "Vol 1");
+    assert_eq!(score.tracks[0].name, "Acoustic & Steel");
+    assert_eq!(score.tracks[0].instrument, "Electric <Set>");
+    assert!(score.warnings.is_empty());
+}
+
+#[test]
+fn an_unknown_note_value_is_an_error() {
+    let xml = GPIF.replace(
+        "<NoteValue>Quarter</NoteValue>",
+        "<NoteValue>Sixteenth</NoteValue>",
+    );
+    assert!(matches!(prowave_guitarpro::parse(&xml), Err(Error::Xml(_))));
+}
+
+#[test]
+fn a_beat_without_a_rhythm_is_reported_and_read_as_a_quarter() {
+    let xml = GPIF.replace(
+        "<Beat id=\"1\"><Rhythm ref=\"2\" /></Beat>",
+        "<Beat id=\"1\"></Beat>",
+    );
+    let score = prowave_guitarpro::parse(&xml).expect("the beat is still readable");
+    assert!(
+        score
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no rhythm")),
+        "{:?}",
+        score.warnings
+    );
+    assert_eq!(score.tracks[0].bars[0].beats[1].duration, 1.0);
+}

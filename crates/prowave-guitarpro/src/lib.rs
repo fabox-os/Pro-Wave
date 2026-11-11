@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::events::{BytesRef, BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 
 /// The XML score inside a `.gp` archive.
@@ -60,6 +60,9 @@ pub struct Score {
     pub tempo: f64,
     pub master_bars: Vec<MasterBar>,
     pub tracks: Vec<Track>,
+    /// Problems the reader worked around, such as a beat with no rhythm. Empty for a
+    /// well-formed score.
+    pub warnings: Vec<String>,
 }
 
 impl Score {
@@ -244,10 +247,35 @@ pub fn read(bytes: &[u8]) -> Result<Score, Error> {
     parse(&xml)
 }
 
+/// The text of a `&name;` or `&#number;` entity reference.
+fn entity_text(reference: &BytesRef<'_>) -> Result<String, Error> {
+    if reference.is_char_ref() {
+        return match reference.resolve_char_ref() {
+            Ok(Some(character)) => Ok(character.to_string()),
+            Ok(None) => Err(Error::Xml(format!(
+                "bad character reference `&{};`",
+                reference.as_ref()
+            ))),
+            Err(error) => Err(Error::Xml(error.to_string())),
+        };
+    }
+    match reference.as_ref() {
+        "amp" => Ok("&".to_string()),
+        "lt" => Ok("<".to_string()),
+        "gt" => Ok(">".to_string()),
+        "quot" => Ok("\"".to_string()),
+        "apos" => Ok("'".to_string()),
+        other => Err(Error::Xml(format!("unknown entity `&{other};`"))),
+    }
+}
+
 /// Reads the `score.gpif` XML.
 pub fn parse(xml: &str) -> Result<Score, Error> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
+    // Text is not trimmed per event: `Rock &amp; Roll` arrives as three events, and trimming
+    // each one would join the fragments without their spaces. The whole element is trimmed
+    // when it ends (`State::flush_text`).
+    reader.config_mut().trim_text(false);
     let mut state = State::default();
     let mut events = 0usize;
     let mut saw_root = false;
@@ -270,6 +298,7 @@ pub fn parse(xml: &str) -> Result<Score, Error> {
                     }
                     saw_root = true;
                 }
+                state.pending.clear();
                 state.start(name, &element)?;
                 state.stack.push(name.to_string());
             }
@@ -279,13 +308,17 @@ pub fn parse(xml: &str) -> Result<Score, Error> {
                 if !saw_root && name == "GPIF" {
                     saw_root = true;
                 }
+                state.pending.clear();
                 state.empty(name, &element);
             }
-            Event::Text(text) => state.text(&text.xml10_content()),
-            Event::CData(text) => state.text(&text.xml10_content()),
+            Event::Text(text) => state.pending.push_str(&text.xml10_content()),
+            Event::CData(text) => state.pending.push_str(&text.xml10_content()),
+            Event::GeneralRef(reference) => state.pending.push_str(&entity_text(&reference)?),
             Event::End(element) => {
                 let qname = element.name();
                 let name = local_name(qname.as_ref());
+                // The element's whole text is applied while it is still on the stack.
+                state.flush_text();
                 state.end(name)?;
                 state.stack.pop();
             }
@@ -380,6 +413,8 @@ impl Default for KeySignature {
 #[derive(Default)]
 struct State {
     stack: Vec<String>,
+    /// Text of the element being read, in the order its events arrived: entities split it.
+    pending: String,
     gp_version: String,
     title: String,
     subtitle: String,
@@ -493,11 +528,17 @@ impl State {
         }
     }
 
-    fn text(&mut self, raw: &str) {
-        let text = raw.trim();
-        if text.is_empty() {
-            return;
+    /// Applies the text of the element on top of the stack, once all its fragments have
+    /// arrived, and clears it.
+    fn flush_text(&mut self) {
+        let pending = std::mem::take(&mut self.pending);
+        let text = pending.trim();
+        if !text.is_empty() {
+            self.apply_text(text);
         }
+    }
+
+    fn apply_text(&mut self, text: &str) {
         let name = self.stack.last().map(String::as_str).unwrap_or("");
         // The top of the stack is the element the text belongs to; its parent is one below.
         let parent = self
@@ -664,6 +705,7 @@ impl State {
     }
 
     fn into_score(self) -> Result<Score, Error> {
+        let mut warnings: Vec<String> = Vec::new();
         let by_id: HashMap<u32, usize> = self
             .tracks
             .iter()
@@ -724,12 +766,19 @@ impl State {
                         }
                         beat_count += 1;
                         note_count += raw_beat.notes.len();
-                        let duration = raw_beat
+                        let duration = match raw_beat
                             .rhythm
                             .and_then(|id| self.rhythms.get(id as usize))
                             .and_then(Option::as_ref)
-                            .map(quarter_notes)
-                            .unwrap_or(1.0);
+                        {
+                            Some(rhythm) => quarter_notes(rhythm)?,
+                            None => {
+                                warnings.push(format!(
+                                    "beat {beat_id} has no rhythm; a quarter note is used"
+                                ));
+                                1.0
+                            }
+                        };
                         let notes = raw_beat
                             .notes
                             .iter()
@@ -783,12 +832,13 @@ impl State {
                 })
                 .collect(),
             tracks,
+            warnings,
         })
     }
 }
 
 /// The length of a rhythm in quarter notes.
-fn quarter_notes(rhythm: &RawRhythm) -> f64 {
+fn quarter_notes(rhythm: &RawRhythm) -> Result<f64, Error> {
     let mut beats = match rhythm.note_value.as_str() {
         "Whole" => 4.0,
         "Half" => 2.0,
@@ -798,7 +848,9 @@ fn quarter_notes(rhythm: &RawRhythm) -> f64 {
         "32nd" => 0.125,
         "64th" => 0.0625,
         "128th" => 0.03125,
-        _ => 1.0,
+        other => {
+            return Err(Error::Xml(format!("unknown note value `{other}`")));
+        }
     };
     if rhythm.dots > 0 {
         let divisor = f64::from(1u32 << u32::from(rhythm.dots.min(4)));
@@ -807,7 +859,7 @@ fn quarter_notes(rhythm: &RawRhythm) -> f64 {
     if rhythm.tuplet_num > 0 && rhythm.tuplet_den > 0 {
         beats *= f64::from(rhythm.tuplet_den) / f64::from(rhythm.tuplet_num);
     }
-    beats.max(0.0)
+    Ok(beats.max(0.0))
 }
 
 /// The MIDI note of a note without a `<Midi>` property, from its concert pitch.
