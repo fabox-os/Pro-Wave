@@ -72,7 +72,7 @@ pub use crate::routing::{
     MAX_AUTO_POINTS, MAX_BUSES, MAX_SENDS,
 };
 pub use crate::soundfont::{PresetInfo, SfPlayer, SoundFontBank, MAX_SOUNDFONT_BYTES};
-pub use crate::synth::{Kit, SynthPatch, Wave};
+pub use crate::synth::{Kit, SynthPatch, VoiceKind, Wave};
 pub use crate::tempo_map::{
     MusicalPosition, SignatureEvent, Smpte, SmpteRate, TempoCurve, TempoEvent, TempoMap, MAX_BPM,
     MIN_BPM,
