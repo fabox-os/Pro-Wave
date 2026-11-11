@@ -3499,6 +3499,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-mxl"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.42.0",
+ "zip",
+]
+
+[[package]]
 name = "prowave-project"
 version = "0.1.0"
 dependencies = [
