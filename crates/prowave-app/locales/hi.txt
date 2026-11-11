@@ -799,3 +799,4 @@ Redo {} = फिर से करें {}
 Nothing to undo yet = अभी पूर्ववत करने के लिए कुछ नहीं
 Send {} = सेंड {}
 Disk streaming load: {}% = डिस्क स्ट्रीमिंग लोड: {}%
+No plug-ins match = कोई प्लग-इन मेल नहीं खाता

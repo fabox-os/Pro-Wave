@@ -88,6 +88,8 @@ pub struct MixerView {
     pub copied: Option<CopiedStrip>,
     /// The audio input device that the Input slots choose from.
     pub inputs: crate::audio_rec::InputChoice,
+    /// The text in the Audio FX plug-in picker's search field (see `plugin_picker`).
+    pub picker_search: String,
 }
 
 /// A channel strip's effects, sends, level and pan, as Copy Channel Strip keeps them.
@@ -112,6 +114,7 @@ impl Default for MixerView {
             sends_on_faders: None,
             copied: None,
             inputs: crate::audio_rec::InputChoice::default(),
+            picker_search: String::new(),
         }
     }
 }
@@ -806,9 +809,6 @@ fn send_slot(
     keep
 }
 
-/// The effects an Audio FX slot can hold, in the order of its menu.
-const FX_MENU: &[prowave_engine::FxKind] = &prowave_engine::FxKind::ALL;
-
 /// What the user chose in an Audio FX slot's menu.
 enum InsertAct {
     Add(prowave_engine::FxKind),
@@ -894,28 +894,29 @@ fn insert_slot(
             });
             ui.separator();
             ui.menu_button(tr("Replace With"), |ui| {
-                for &kind in FX_MENU {
-                    if ui.selectable_label(kind == fx.kind, kind.name()).clicked() {
-                        act = Some(InsertAct::Replace(kind));
-                        ui.close();
-                    }
+                if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
+                    act = Some(InsertAct::Replace(pick_kind(pick)));
+                    ui.close();
                 }
             });
             if ui.button(tr("Remove")).clicked() {
                 act = Some(InsertAct::Remove);
                 ui.close();
             }
-        } else {
-            for &kind in FX_MENU {
-                if ui.button(kind.name()).clicked() {
-                    act = Some(InsertAct::Add(kind));
-                    ui.close();
-                }
-            }
+        } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
+            act = Some(InsertAct::Add(pick_kind(pick)));
+            ui.close();
         }
     });
     if let Some(act) = act {
         apply_insert(p, v, i, k, act);
+    }
+}
+
+/// The effect a picker choice names (hosted plug-ins will join the picker later).
+fn pick_kind(pick: crate::plugin_picker::Pick) -> prowave_engine::FxKind {
+    match pick {
+        crate::plugin_picker::Pick::Effect(kind) => kind,
     }
 }
 
