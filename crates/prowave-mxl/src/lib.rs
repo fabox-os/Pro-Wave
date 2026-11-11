@@ -22,6 +22,8 @@ const MAX_ENTRIES: usize = 4096;
 const MAX_CONTAINER: u64 = 1 << 20;
 /// The most bytes the score XML may hold (32 MiB).
 const MAX_XML: u64 = 32 << 20;
+/// The most bytes an `.mxl` file on disk may hold (64 MiB), checked before it is read.
+const MAX_FILE: u64 = 64 << 20;
 
 /// Why a bundle could not be opened.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +33,8 @@ pub enum Error {
     TooLarge,
     NoRoot,
     NotUtf8,
+    /// `META-INF/container.xml` is not a readable container document.
+    Container(String),
 }
 
 impl std::fmt::Display for Error {
@@ -41,6 +45,9 @@ impl std::fmt::Display for Error {
             Error::TooLarge => f.write_str("the .mxl archive is larger than the reader accepts"),
             Error::NoRoot => f.write_str("the .mxl archive names no MusicXML score"),
             Error::NotUtf8 => f.write_str("the MusicXML score is not UTF-8 text"),
+            Error::Container(message) => {
+                write!(f, "the .mxl container is malformed: {message}")
+            }
         }
     }
 }
@@ -83,7 +90,18 @@ pub fn read(bytes: &[u8]) -> Result<String, Error> {
 
 /// Reads the MusicXML score from an `.mxl` file on disk.
 pub fn read_path(path: impl AsRef<Path>) -> Result<String, Error> {
-    read(&std::fs::read(path).map_err(|error| Error::Io(error.to_string()))?)
+    let path = path.as_ref();
+    // The size is checked before the file is read, so an oversized one is refused without
+    // being loaded into memory.
+    let len = std::fs::metadata(path)
+        .map_err(|error| Error::Io(format!("{}: {error}", path.display())))?
+        .len();
+    if len > MAX_FILE {
+        return Err(Error::TooLarge);
+    }
+    let bytes =
+        std::fs::read(path).map_err(|error| Error::Io(format!("{}: {error}", path.display())))?;
+    read(&bytes)
 }
 
 /// The `rootfile full-path` in `META-INF/container.xml`, if the container exists.
@@ -107,11 +125,12 @@ fn container_root(archive: &mut ZipArchive<Cursor<&[u8]>>) -> Result<Option<Stri
                 Error::Io(error.to_string())
             }
         })?;
-    Ok(rootfile(&text))
+    rootfile(&text)
 }
 
-/// The first `rootfile full-path` attribute in a container document.
-fn rootfile(xml: &str) -> Option<String> {
+/// The first `rootfile full-path` attribute in a container document: `None` for a readable
+/// container that names no rootfile, and an error for one that is not readable.
+fn rootfile(xml: &str) -> Result<Option<String>, Error> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     loop {
@@ -129,31 +148,34 @@ fn rootfile(xml: &str) -> Option<String> {
                 }
                 for attribute in element.attributes().flatten() {
                     if attribute.key.as_ref() == "full-path" {
-                        return attribute
+                        return Ok(attribute
                             .normalized_value(XmlVersion::Implicit1_0)
                             .ok()
-                            .map(|value| value.into_owned());
+                            .map(|value| value.into_owned()));
                     }
                 }
             }
-            Ok(quick_xml::events::Event::Eof) | Err(_) => return None,
+            Ok(quick_xml::events::Event::Eof) => return Ok(None),
+            Err(error) => return Err(Error::Container(error.to_string())),
             _ => {}
         }
     }
 }
 
-/// The first XML entry outside `META-INF`, for archives without a container.
+/// The first XML entry outside `META-INF`, for archives without a container. Entries are
+/// considered in sorted order, so the same archive always gives the same score, and
+/// `META-INF` is matched in any case.
 fn first_xml(archive: &mut ZipArchive<Cursor<&[u8]>>) -> Result<String, Error> {
-    let names: Vec<String> = archive
+    let mut names: Vec<String> = archive
         .file_names()
         .filter_map(Result::ok)
         .filter(|name| {
-            !name.starts_with("META-INF/")
-                && !name.ends_with('/')
-                && name.to_ascii_lowercase().ends_with(".xml")
+            let lower = name.to_ascii_lowercase();
+            !lower.starts_with("meta-inf/") && !name.ends_with('/') && lower.ends_with(".xml")
         })
         .map(|name| name.into_owned())
         .collect();
+    names.sort();
     names.into_iter().next().ok_or(Error::NoRoot)
 }
 
@@ -171,10 +193,17 @@ mod tests {
 
     #[test]
     fn finds_the_rootfile_in_the_container() {
-        assert_eq!(rootfile(CONTAINER).as_deref(), Some("score.xml"));
+        assert_eq!(rootfile(CONTAINER).unwrap().as_deref(), Some("score.xml"));
         assert_eq!(
-            rootfile("<m:container xmlns:m=\"urn:test\"><m:rootfiles><m:rootfile full-path=\"music/etude.xml\"/></m:rootfiles></m:container>").as_deref(),
+            rootfile("<m:container xmlns:m=\"urn:test\"><m:rootfiles><m:rootfile full-path=\"music/etude.xml\"/></m:rootfiles></m:container>").unwrap().as_deref(),
             Some("music/etude.xml")
         );
+        // A readable container that names no rootfile: the reader falls back to the first XML.
+        assert_eq!(rootfile("<container/>").unwrap(), None);
+        // One that is not readable is an error rather than a silent fallback.
+        assert!(matches!(
+            rootfile("<container><rootfiles></wrong>"),
+            Err(Error::Container(_))
+        ));
     }
 }
