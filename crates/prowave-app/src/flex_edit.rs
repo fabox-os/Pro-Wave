@@ -76,6 +76,16 @@ impl FlexEdit {
         h.max(1)
     }
 
+    /// The length of the sound the edit makes, in seconds: the rendered result has this length.
+    /// The region's end and the Flex markers on screen are both placed by it.
+    pub fn length(&self) -> f64 {
+        let duration = self.original.duration_secs().max(0.0);
+        match self.markers.last() {
+            Some(m) => m.dst + (duration - m.src).max(0.0),
+            None => duration,
+        }
+    }
+
     /// Nothing is moved: the region plays the recording itself.
     pub fn is_neutral(&self) -> bool {
         self.markers.is_empty() && self.pitch.is_empty()
@@ -1020,6 +1030,21 @@ mod tests {
                 "src {src} at {dst}"
             );
         }
+    }
+
+    #[test]
+    fn the_result_is_as_long_as_the_markers_say() {
+        let file = AudioFile {
+            path: "x.wav".into(),
+            sample_rate: 44_100,
+            frames: 88_200,
+            channels: 2,
+        };
+        let mut edit = FlexEdit::new(file, FlexMode::Rhythmic);
+        assert_eq!(edit.length(), 2.0, "no markers: the recording's length");
+        edit.markers = markers_from([(0.5, 1.0), (1.5, 3.0)]);
+        // The last marker plays at 3.0 s; the half second of recording after it follows.
+        assert!((edit.length() - 3.5).abs() < 1e-9, "{}", edit.length());
     }
 
     #[test]

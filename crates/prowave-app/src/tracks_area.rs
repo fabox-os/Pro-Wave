@@ -144,8 +144,10 @@ pub struct TracksView {
     pub tool: TrackTool,
     /// A Fade tool drag in progress: `true` for a fade in, `false` for a fade out.
     fade_drag: Option<bool>,
-    /// A Flex Time marker being dragged: (track, region, marker).
-    flex_drag: Option<(usize, usize, usize)>,
+    /// A Flex Time marker being dragged: (track, region, marker, the result's length in
+    /// seconds when it was grabbed). The length stays fixed for the whole drag: scaling by a
+    /// length that the drag itself changes would make the marker run away from the pointer.
+    flex_drag: Option<(usize, usize, usize, f64)>,
     pub catch: bool,
     /// Global Tempo track above the tracks (Track > Show Tempo Track).
     pub show_tempo: bool,
@@ -421,7 +423,9 @@ const FLEX_GRAB_W: f32 = 6.0;
 fn flex_marker_under(p: &Project, t: usize, r: usize, full: Rect, x: f32) -> Option<(usize, f64)> {
     let a = p.tracks.get(t)?.regions.get(r)?.audio.as_ref()?;
     let f = a.flex.as_ref()?;
-    let secs = a.file.duration_secs().max(1e-3);
+    // The scale is the length of the Flex result, not of the file it replaces: after a drag
+    // the sound is longer (or shorter) than the original.
+    let secs = f.length().max(1e-3);
     let per_sec = f64::from(full.width()) / secs;
     if per_sec <= 0.0 {
         return None;
@@ -443,7 +447,7 @@ fn flex_double_click(
 ) -> Option<&'static str> {
     let a = p.tracks.get_mut(t)?.regions.get_mut(r)?.audio.as_mut()?;
     let f = a.flex.as_mut()?;
-    let secs = a.file.duration_secs().max(1e-3);
+    let secs = f.length().max(1e-3);
     let per_sec = f64::from(full.width()) / secs;
     if per_sec <= 0.0 {
         return None;
@@ -2033,11 +2037,7 @@ fn draw_region(
         rr.max - vec2(0.0, 2.0),
     );
     // A Flex edit: its mode in the corner of the name bar and its markers over the waveform.
-    if let Some((a, f)) = region
-        .audio
-        .as_ref()
-        .and_then(|a| a.flex.as_ref().map(|f| (a, f)))
-    {
+    if let Some(f) = region.audio.as_ref().and_then(|a| a.flex.as_ref()) {
         if head.width() > 90.0 {
             let mark = if f.pitch.is_empty() {
                 crate::flex_edit::mode_label(f.mode).to_string()
@@ -2052,7 +2052,8 @@ fn draw_region(
                 name_color,
             );
         }
-        let secs = a.file.duration_secs().max(1e-3);
+        // Markers are placed on the result's length, as the pointer is mapped to it.
+        let secs = f.length().max(1e-3);
         for m in &f.markers {
             let x = full.left() + (m.dst / secs) as f32 * full.width();
             if x > inner.left() && x < inner.right() {
@@ -2870,22 +2871,25 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
                     .or_else(|| resp.interact_pointer_pos())
                     .and_then(|pt| flex_marker_under(p, ti, ri, full, pt.x))
             };
-            if let (Some((marker, _)), true) = (flex_hit, resp.drag_started()) {
-                v.flex_drag = Some((ti, ri, marker));
+            if let (Some((marker, secs)), true) = (flex_hit, resp.drag_started()) {
+                v.flex_drag = Some((ti, ri, marker, secs));
                 s.flex.dragging = true;
             }
-            let flex_own = v.flex_drag.is_some_and(|(dt, dr, _)| (dt, dr) == (ti, ri));
+            let flex_own = v
+                .flex_drag
+                .is_some_and(|(dt, dr, _, _)| (dt, dr) == (ti, ri));
             if flex_own {
                 // The dragged marker follows the pointer; the sound is made on release.
-                if let (true, Some((_, _, marker)), Some(pt)) =
+                if let (true, Some((_, _, marker, secs)), Some(pt)) =
                     (resp.dragged(), v.flex_drag, resp.interact_pointer_pos())
                 {
-                    if let Some(a) = p.tracks[ti].regions[ri].audio.as_mut() {
-                        let secs = a.file.duration_secs().max(1e-3);
+                    if let Some(f) = p.tracks[ti].regions[ri]
+                        .audio
+                        .as_mut()
+                        .and_then(|a| a.flex.as_mut())
+                    {
                         let dst = f64::from((pt.x - full.left()) / full.width()) * secs;
-                        if let Some(f) = a.flex.as_mut() {
-                            crate::flex_edit::move_marker(&mut f.markers, marker, dst);
-                        }
+                        crate::flex_edit::move_marker(&mut f.markers, marker, dst);
                     }
                 }
                 if resp.drag_stopped() {
@@ -3873,6 +3877,80 @@ mod flex_marker_tests {
         let dst = flex.markers[0].dst;
         assert!((dst - 1.484).abs() < 0.02, "moved to {dst} seconds");
         assert_eq!(region.start_bar, 1.0, "the region itself does not move");
+    }
+
+    #[test]
+    fn a_second_drag_and_a_double_click_use_the_result_length() {
+        let mut p = project_with_marker();
+        let mut s = UiState::new();
+        let mut h = Harness::new(1200.0, 600.0);
+        let meters = crate::mixer::Meters::default();
+        for _ in 0..2 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        // The region runs from x 340 to 464 (two bars at the default zoom).
+        let (left, width) = (340.0, 124.0);
+        let marker = pos2(left + width / 2.0, 84.0);
+        h.drag(
+            &[marker, marker + vec2(10.0, 0.0)],
+            PointerButton::Primary,
+            |ui| show(ui, &mut p, &mut s, &meters),
+        );
+        let (first, length) = {
+            let f = p.tracks[0].regions[0]
+                .audio
+                .as_ref()
+                .unwrap()
+                .flex
+                .as_ref()
+                .unwrap();
+            (f.markers[0].dst, f.length())
+        };
+        assert!((first - 1.161).abs() < 0.02, "moved to {first}");
+        assert!((length - 2.161).abs() < 0.02, "result is {length} s long");
+
+        // The marker is drawn on the result's scale now. Grabbing it there and dragging
+        // again must move it, not the region.
+        let at = pos2(left + (first / length) as f32 * width, 84.0);
+        for _ in 0..2 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        h.drag(&[at, at + vec2(10.0, 0.0)], PointerButton::Primary, |ui| {
+            show(ui, &mut p, &mut s, &meters)
+        });
+        let (second, length) = {
+            let f = p.tracks[0].regions[0]
+                .audio
+                .as_ref()
+                .unwrap()
+                .flex
+                .as_ref()
+                .unwrap();
+            (f.markers[0].dst, f.length())
+        };
+        assert!(second > first + 0.1, "{second} after {first}");
+        assert_eq!(p.tracks[0].regions[0].start_bar, 1.0);
+
+        // A double-click maps by the new length: half a second into the result.
+        let spot = pos2(left + (0.5 / length) as f32 * width, 84.0);
+        for _ in 0..30 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        for _ in 0..2 {
+            h.click(spot, |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        let f = p.tracks[0].regions[0]
+            .audio
+            .as_ref()
+            .unwrap()
+            .flex
+            .as_ref()
+            .unwrap();
+        assert!(
+            f.markers.iter().any(|m| (m.dst - 0.5).abs() < 0.02),
+            "no marker at half a second: {:?}",
+            f.markers.iter().map(|m| m.dst).collect::<Vec<_>>()
+        );
     }
 
     #[test]
