@@ -45,6 +45,7 @@ const HINT_SAMPLE_RATE: c_int = 0x8;
 const HINT_LOGARITHMIC: c_int = 0x10;
 const HINT_INTEGER: c_int = 0x20;
 const HINT_DEFAULT_MASK: c_int = 0x3c0;
+const HINT_DEFAULT_0: c_int = 0x200;
 const HINT_DEFAULT_MINIMUM: c_int = 0x40;
 const HINT_DEFAULT_LOW: c_int = 0x80;
 const HINT_DEFAULT_MIDDLE: c_int = 0xc0;
@@ -485,6 +486,7 @@ fn hint_values(hint: &RawRangeHint, rate: f32) -> HintValues {
         HINT_DEFAULT_MIDDLE => fraction(0.5).or(min).unwrap_or(0.0),
         HINT_DEFAULT_HIGH => fraction(0.75).or(min).unwrap_or(0.0),
         HINT_DEFAULT_MAXIMUM => max.or(min).unwrap_or(0.0),
+        HINT_DEFAULT_0 => 0.0,
         HINT_DEFAULT_1 => 1.0,
         HINT_DEFAULT_100 => 100.0,
         HINT_DEFAULT_440 => 440.0,
@@ -582,5 +584,26 @@ mod layout_tests {
             44_100.0,
         );
         assert_eq!(middle.default, 0.5);
+
+        // A port that names zero as its default gets zero, not the lower bound, and the
+        // default is still clamped to the declared bounds.
+        let zero = hint_values(
+            &hint(
+                HINT_BOUNDED_BELOW | HINT_BOUNDED_ABOVE | HINT_DEFAULT_0,
+                -1.0,
+                1.0,
+            ),
+            44_100.0,
+        );
+        assert_eq!(zero.default, 0.0);
+        let below_zero = hint_values(
+            &hint(
+                HINT_BOUNDED_BELOW | HINT_BOUNDED_ABOVE | HINT_DEFAULT_0,
+                1.0,
+                2.0,
+            ),
+            44_100.0,
+        );
+        assert_eq!(below_zero.default, 1.0);
     }
 }
