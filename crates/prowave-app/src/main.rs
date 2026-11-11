@@ -38,6 +38,7 @@ mod mixer;
 mod model;
 mod mtc_in;
 mod native_menu;
+mod new_track_dialog;
 mod note_edit;
 mod patches;
 mod pattern;
@@ -128,6 +129,8 @@ pub struct UiState {
     pub settings_tab: Option<project_settings::SettingsTab>,
     /// A Track menu window (rename, colour, icon, header), when one is open.
     pub track_dialog: Option<track_dialogs::TrackDialog>,
+    /// Logic's Create New Track dialog (the + above the track headers).
+    pub new_track: new_track_dialog::NewTrackDialog,
     /// The audio output the engine plays on (name, sample rate), for Project Settings > Audio.
     pub audio_info: Option<(String, u32)>,
     /// Project Settings > MIDI: send MIDI panic on the next frame.
@@ -238,6 +241,7 @@ impl UiState {
             show_midi_fx: false,
             settings_tab: None,
             track_dialog: None,
+            new_track: Default::default(),
             audio_info: None,
             midi_panic: false,
             sysex_entry: None,
@@ -1282,6 +1286,7 @@ impl eframe::App for App {
         }
         project_settings::show(&ctx, &mut self.project, &mut self.ui);
         track_dialogs::show(&ctx, &mut self.project, &mut self.ui);
+        new_track_dialog::show(&ctx, &mut self.project, &mut self.ui);
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
