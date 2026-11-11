@@ -332,10 +332,14 @@ impl HostedEffect for RealtimeEffect {
                     self.automation
                         .push(AutomationEvent::new(0, ParameterChange::new(id, 0, value)));
                 }
-                // `plughost`'s realtime endpoint "allocates nothing, takes no lock and waits
-                // for nothing" (its endpoint docs): it submits this quantum and plays the output
-                // from `latency` quanta ago, or a fallback when the helper has not finished. A
-                // stalled helper costs audio, never a blocked audio thread.
+                // `plughost` 0.2.3 (pinned in Cargo.toml), `src/realtime/endpoint.rs`: the
+                // module docs say the callback "allocates nothing, takes no lock and waits for
+                // nothing"; it submits this quantum and plays the output from `latency` quanta
+                // ago, or a fallback when the helper has not finished. A hung helper plays the
+                // fallback (silence, ramped from the last sample) on every callback after the
+                // latency window; nothing waits for it, and the missed events are delivered if
+                // it ever completes. A stalled helper costs audio, never a blocked audio
+                // thread.
                 let result = self.endpoint.process_audio_f32(
                     &BlockContext::new(self.quantum),
                     &[&self.input_l[..], &self.input_r[..]],
