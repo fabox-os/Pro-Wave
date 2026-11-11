@@ -373,16 +373,35 @@ pub struct Screenshot {
     outcome: std::sync::Arc<std::sync::Mutex<Option<ShotOutcome>>>,
     requested: bool,
     started: std::time::Instant,
+    /// Set once the run is over. A watchdog thread reads it: if the event loop stops calling
+    /// back altogether (a deadlock, a hung driver), the frame deadline never runs, and the
+    /// watchdog ends the process so a script does not hang. It holds an `Arc` rather than a
+    /// borrow, so it outlives this struct safely for the whole process.
+    finished: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Screenshot {
     pub fn new(file: PathBuf) -> Self {
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watchdog = finished.clone();
+        // The frame deadline cannot fire if frames stop; this can. A failure to spawn leaves
+        // the in-frame deadline as the only guard, which is still correct for a live loop.
+        let _ = std::thread::Builder::new()
+            .name("prowave-screenshot-watchdog".into())
+            .spawn(move || {
+                std::thread::sleep(SCREENSHOT_TIMEOUT);
+                if !watchdog.load(std::sync::atomic::Ordering::Acquire) {
+                    eprintln!("the window stopped drawing before the picture; giving up");
+                    std::process::exit(1);
+                }
+            });
         Self {
             file,
             frames: 0,
             outcome: Default::default(),
             requested: false,
             started: std::time::Instant::now(),
+            finished,
         }
     }
 
@@ -410,10 +429,14 @@ impl Screenshot {
             Ok(mut slot) => slot.take(),
             Err(poisoned) => poisoned.into_inner().take(),
         };
-        if done.is_some() {
-            return done;
+        if let Some(outcome) = done {
+            self.finished
+                .store(true, std::sync::atomic::Ordering::Release);
+            return Some(outcome);
         }
         if self.started.elapsed() > SCREENSHOT_TIMEOUT {
+            self.finished
+                .store(true, std::sync::atomic::Ordering::Release);
             return Some(ShotOutcome::TimedOut);
         }
         None
