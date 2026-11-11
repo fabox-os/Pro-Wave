@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pro Wave — an open-source DAW in Rust</title>
+<meta name="description" content="Pro Wave is a Logic Pro–style music production app written in pure Rust. No Electron, no JUCE. Linux, Windows and macOS. Free and open source, GPL-3.0.">
+<style>
+:root{--bg:#0e0e10;--panel:#16161a;--line:#26262c;--text:#ececf0;--dim:#9a9aa5;--accent:#ff7a2f;--accent2:#ff9a5c;--green:#4fd1a5}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+nav{position:sticky;top:0;z-index:10;background:rgba(14,14,16,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:22px;height:58px}
+.logo{font-weight:700;display:flex;gap:8px;align-items:center;margin-right:auto}
+.logo i{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--accent),#c2410c);display:inline-block}
+nav a.l{color:var(--dim);font-size:14px}nav a.l:hover{color:var(--text)}
+.btn{display:inline-flex;gap:8px;align-items:center;padding:10px 18px;border-radius:9px;font-weight:600;font-size:15px;border:1px solid var(--line);background:var(--panel)}
+.btn.p{background:var(--accent);border-color:var(--accent);color:#170a02}.btn.p:hover{background:var(--accent2)}
+.btn:hover{border-color:#3a3a42}
+.hero{text-align:center;padding:84px 0 40px;background:radial-gradient(ellipse at 50% 0,#2a1608 0,transparent 60%)}
+.badge{display:inline-flex;gap:10px;align-items:center;font-size:13px;color:var(--dim);border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 14px}
+.badge b{background:#3a2210;color:var(--accent);padding:1px 8px;border-radius:5px;font-size:11px;letter-spacing:.06em}
+h1{font-size:clamp(44px,8vw,84px);line-height:1.02;margin:26px 0 20px;letter-spacing:-.03em}
+h1 span{color:var(--accent);display:block}
+.lead{max-width:640px;margin:0 auto 30px;color:var(--dim);font-size:18px}.lead b{color:var(--text)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.chips{display:flex;gap:22px;justify-content:center;flex-wrap:wrap;margin:26px 0 0;color:var(--dim);font-size:13px}
+.chips span:before{content:"• ";color:var(--green)}
+.shot{margin:48px auto 0;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 30px 80px rgba(255,122,47,.08)}
+.shot img{display:block;width:100%;height:auto}
+section{padding:80px 0;border-top:1px solid var(--line)}
+h2{font-size:clamp(28px,4vw,40px);margin:0 0 10px;letter-spacing:-.02em}
+.sub{color:var(--dim);max-width:640px;margin:0 0 36px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px}
+.card h3{margin:0 0 6px;font-size:17px}.card p{margin:0;color:var(--dim);font-size:15px}
+.card em{font-style:normal;color:var(--accent);font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.two img{width:100%;border-radius:12px;border:1px solid var(--line);display:block}
+.cap{color:var(--dim);font-size:14px;margin:8px 0 0;text-align:center}
+.dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+.dl .card{text-align:center}.dl .card b{display:block;margin-bottom:4px}
+code{background:#1d1d23;border:1px solid var(--line);border-radius:6px;padding:2px 7px;font-size:14px}
+pre{background:#121216;border:1px solid var(--line);border-radius:10px;padding:16px;overflow:auto;font-size:14px}
+footer{border-top:1px solid var(--line);padding:34px 0;color:var(--dim);font-size:13px}
+footer p{margin:6px 0;max-width:780px}
+@media(max-width:700px){nav a.l{display:none}}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="logo" href="#top"><i></i>Pro Wave</a>
+  <a class="l" href="#features">Features</a><a class="l" href="#screens">Screenshots</a>
+  <a class="l" href="#performance">Performance</a><a class="l" href="#status">Status</a>
+  <a class="l" href="https://github.com/fabox-os/Pro-Wave">GitHub</a>
+  <a class="btn p" href="#download">Download</a>
+</div></nav>
+
+<header class="hero" id="top"><div class="wrap">
+  <div class="badge"><b>ALPHA</b> v0.2.2 is out · Open source · GPL-3.0</div>
+  <h1>Make music.<span>Not excuses.</span></h1>
+  <p class="lead">Pro Wave is a <b>Logic Pro–style DAW</b> written in pure Rust. Tracks, MIDI, audio, a Mixer with real effects and automation — drawn with egui and played through cpal. No Electron. No JUCE.</p>
+  <div class="cta">
+    <a class="btn p" href="https://github.com/fabox-os/Pro-Wave/releases/latest">⬇ Download Pro Wave</a>
+    <a class="btn" href="https://github.com/fabox-os/Pro-Wave">★ View on GitHub</a>
+  </div>
+  <div class="chips"><span>Windows, macOS &amp; Linux</span><span>Pure Rust</span><span>Lock-free audio thread</span><span>Free &amp; open source</span></div>
+  <div class="shot"><img src="screenshots/tracks-and-mixer.webp" alt="Pro Wave: Tracks area with MIDI and audio regions, the Library, inspector and Mixer"></div>
+</div></header>
+
+<section id="features"><div class="wrap">
+  <h2>What you can do today</h2>
+  <p class="sub">An early but working studio. The full plan is in the roadmap; this is what already runs.</p>
+  <div class="grid">
+    <div class="card"><em>Arrange</em><h3>Tracks &amp; regions</h3><p>MIDI, audio, Drummer and Pattern regions; cut, copy, paste, split, join, bounce and Bounce in Place.</p></div>
+    <div class="card"><em>Record</em><h3>MIDI &amp; audio</h3><p>Record from your keyboard or interface, with count-in, cycle, MIDI clock and time code sync.</p></div>
+    <div class="card"><em>Edit</em><h3>Piano Roll &amp; Score</h3><p>Quantize, velocity lane, Event List, Step Sequencer and a Score view with MusicXML export.</p></div>
+    <div class="card"><em>Mix</em><h3>Mixer &amp; automation</h3><p>Channel strips, sends, buses, VCA, groups, delay compensation and automation for faders, effects and sends.</p></div>
+    <div class="card"><em>Effects</em><h3>Real DSP</h3><p>Channel EQ, Compressor, Multi-Band Compressor, Space Designer convolution reverb, Amp Designer, delays, modulation and more — on any strip, even the Stereo Out.</p></div>
+    <div class="card"><em>Sound</em><h3>Instruments</h3><p>Built-in synth, SoundFont (.sf2) instruments and Hydrogen drum kits, plus the Library of patches.</p></div>
+    <div class="card"><em>Flex</em><h3>Flex &amp; Smart Tempo</h3><p>Flex Time and Pitch on audio, tempo detection and warping.</p></div>
+    <div class="card"><em>Import</em><h3>Your projects</h3><p>MIDI files (SMPTE and markers too), audio files, and GarageBand project audio.</p></div>
+  </div>
+</div></section>
+
+<section id="screens"><div class="wrap">
+  <h2>See it</h2>
+  <p class="sub">The look and workflow follow Logic Pro: dark panels, Library, Inspector, Tracks area and Mixer.</p>
+  <div class="two">
+    <div><img src="screenshots/piano-roll.webp" alt="Piano Roll with Time Quantize, Scale Quantize and the velocity lane"><p class="cap">Piano Roll with quantize and velocity lane</p></div>
+    <div><img src="screenshots/playback.webp" alt="Playback with moving playhead and live meters"><p class="cap">Playback with live channel meters</p></div>
+  </div>
+</div></section>
+
+<section id="performance"><div class="wrap">
+  <h2>Light and real-time</h2>
+  <p class="sub">The audio thread never locks, allocates or touches the disk. The UI talks to the engine only through a lock-free command queue.</p>
+  <div class="grid">
+    <div class="card"><h3>~15 MB program</h3><p>Starts in a few hundred milliseconds and idles around 120 MB of memory.</p></div>
+    <div class="card"><h3>Sample-accurate</h3><p>Transport, tempo map and automation run on the audio clock, with plug-in delay compensation.</p></div>
+    <div class="card"><h3>64-bit summing</h3><p>Tracks are summed in double precision before the master fader.</p></div>
+  </div>
+</div></section>
+
+<section id="status"><div class="wrap">
+  <h2>Honest status</h2>
+  <p class="sub">Pro Wave is alpha software. Plug-in hosting, Live Loops and much of Logic's instrument list are still to come. Every release lists what was tested and what was not.</p>
+  <a class="btn" href="https://github.com/fabox-os/Pro-Wave/blob/main/ROADMAP.md">Read the roadmap</a>
+  <a class="btn" href="https://github.com/fabox-os/Pro-Wave/blob/main/CHANGELOG.md">Changelog</a>
+</div></section>
+
+<section id="download"><div class="wrap">
+  <h2>Download</h2>
+  <p class="sub">Grab the build for your system from the latest release.</p>
+  <div class="dl">
+    <a class="card" href="https://github.com/fabox-os/Pro-Wave/releases/latest"><b>Windows</b><span class="cap">x86-64</span></a>
+    <a class="card" href="https://github.com/fabox-os/Pro-Wave/releases/latest"><b>macOS</b><span class="cap">Intel &amp; Apple Silicon</span></a>
+    <a class="card" href="https://github.com/fabox-os/Pro-Wave/releases/latest"><b>Linux</b><span class="cap">x86-64</span></a>
+  </div>
+  <p class="sub" style="margin-top:28px">Or build it yourself:</p>
+<pre>git clone https://github.com/fabox-os/Pro-Wave
+cd Pro-Wave
+cargo run --release -p prowave-app</pre>
+</div></section>
+
+<footer><div class="wrap">
+  <p>Pro Wave is free software under the GPL-3.0-or-later licence.</p>
+  <p>Pro Wave is an independent project. It is not affiliated with, sponsored by or endorsed by Apple Inc. Logic Pro is a trademark of Apple Inc., used only to describe the workflow Pro Wave follows. Pro Wave contains no Apple code, artwork or sounds.</p>
+</div></footer>
+</body>
+</html>
