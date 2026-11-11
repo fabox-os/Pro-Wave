@@ -34,7 +34,9 @@ fn info(active: u32, version: &str) -> String {
 
 /// A temporary `.logicx` package (or folder project) with a default alternative 0.
 struct Fixture {
-    dir: tempfile::TempDir,
+    /// Keeps the temporary directory alive; the name is prefixed because only the Unix symlink
+    /// test reads it, and Windows builds would otherwise see a dead field.
+    _dir: tempfile::TempDir,
     bundle: PathBuf,
 }
 
@@ -50,7 +52,7 @@ impl Fixture {
     fn under(relative: &str) -> Self {
         let dir = tempfile::tempdir().expect("a temporary directory");
         let bundle = dir.path().join(relative);
-        let fixture = Self { dir, bundle };
+        let fixture = Self { _dir: dir, bundle };
         fixture.write_metadata(0, &metadata("96", "C Major", "4/4", "44100", "2"));
         fixture.write_info(&info(0, "11.0"));
         fixture.write_project_data(0, &[MAGIC, [0; 4]].concat());
@@ -61,8 +63,9 @@ impl Fixture {
         &self.bundle
     }
 
+    #[cfg(unix)]
     fn dir(&self) -> &Path {
-        self.dir.path()
+        self._dir.path()
     }
 
     fn alternative(&self, index: u32) -> PathBuf {
