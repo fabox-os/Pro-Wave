@@ -405,6 +405,10 @@ Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
   `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
   with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
   regions, plug-ins, Session Players) is the next step.
+- **Vintage B3 organ voice:** the Library's Vintage B3 Organ patches play an additive drawbar
+  voice (nine drawbars, percussion, key click and a Leslie rotor) in `prowave-engine` instead of
+  the subtractive approximation. Not done: a dedicated B3 panel, separate horn and rotor speeds,
+  distortion, and drawbar automation.
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.
