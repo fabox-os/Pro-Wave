@@ -6,10 +6,10 @@
 //! of issue #81, the session: which instruments exist, what every pattern plays, and the song
 //! sequence.
 //!
-//! Logic Pro parity: Logic's Drummer and Ultrabeat keep patterns that can be arranged into a
-//! song; importing a Hydrogen session turns its patterns into MIDI notes (one instrument per
-//! note, as Hydrogen does) for the drum track, so a song made in Hydrogen can be arranged in
-//! Pro Wave.
+//! Logic Pro parity: Logic does not import `.h2song` files. The reader serves Pro Wave's own
+//! drum track: it turns a Hydrogen session's patterns into MIDI notes (one instrument per note,
+//! as Hydrogen does), so a song made in Hydrogen can be arranged here. Logic's Drummer and
+//! Ultrabeat are only the arrangement reference.
 //!
 //! The reader accepts the newer `1.2` layout (`<patternList>`/`<patternSequence>` with patterns
 //! named by the sequence) and the older layout (`<pattern id="…">` with numeric `<patternID>`).
@@ -187,6 +187,14 @@ impl std::error::Error for Error {}
 /// Reads a `.h2song` file from disk.
 pub fn read_path(path: impl AsRef<Path>) -> Result<Song, Error> {
     let path = path.as_ref();
+    // The size is checked before the file is read, so an oversized one is refused without
+    // being loaded into memory.
+    let len = std::fs::metadata(path)
+        .map_err(|error| Error::Io(format!("{}: {error}", path.display())))?
+        .len();
+    if len > MAX_BYTES as u64 {
+        return Err(Error::TooLarge);
+    }
     let bytes =
         std::fs::read(path).map_err(|error| Error::Io(format!("{}: {error}", path.display())))?;
     read(&bytes)
@@ -483,5 +491,22 @@ mod tests {
         );
         assert_eq!(resolved, vec![0, 1, 0]);
         assert!(resolve_sequence(&patterns, &ids, &["nope".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn an_oversized_file_is_refused_without_being_read() {
+        let path = std::env::temp_dir().join(format!(
+            "prowave-hydrogen-too-big-{}.h2song",
+            std::process::id()
+        ));
+        let Ok(file) = std::fs::File::create(&path) else {
+            panic!("cannot make {}", path.display());
+        };
+        // A sparse file: longer than the reader accepts, with nothing written.
+        assert!(file.set_len(MAX_BYTES as u64 + 1).is_ok());
+        drop(file);
+        let result = read_path(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(result, Err(Error::TooLarge)));
     }
 }
