@@ -896,6 +896,7 @@ fn insert_slot(
             ui.menu_button(tr("Replace With"), |ui| {
                 if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
                     act = Some(InsertAct::Replace(pick_kind(pick)));
+                    v.picker_search.clear();
                     ui.close();
                 }
             });
@@ -905,6 +906,7 @@ fn insert_slot(
             }
         } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
             act = Some(InsertAct::Add(pick_kind(pick)));
+            v.picker_search.clear();
             ui.close();
         }
     });

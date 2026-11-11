@@ -4,7 +4,7 @@
 //! The categories are Logic's, in its order, so the menu reads the same as a Logic channel
 //! strip's. Categories with no effect yet are shown disabled rather than hidden, which keeps
 //! the list stable as effects are added. Third-party plug-ins will join the same picker when
-//! hosting lands (`plugins.rs`).
+//! hosting lands (`prowave-plugin-host`).
 use crate::i18n::tr;
 use egui::Ui;
 use prowave_engine::FxKind;
