@@ -312,6 +312,8 @@ struct App {
     shots: Option<bench::LayoutShots>,
     /// `--screenshot <file>`: one picture of the window, then closing.
     shot: Option<bench::Screenshot>,
+    /// The exit code a failed `--screenshot` leaves for `main` (0 while it is fine).
+    shot_exit: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// Edit > Undo / Redo.
     history: undo::History,
     /// Frames since the history last looked for an edit.
@@ -1059,8 +1061,21 @@ impl eframe::App for App {
             }
         }
         if let Some(shot) = self.shot.as_mut() {
-            if shot.frame(&ctx) {
+            if let Some(outcome) = shot.frame(&ctx) {
                 self.shot = None;
+                match outcome {
+                    bench::ShotOutcome::Saved => {}
+                    bench::ShotOutcome::Failed(message) => {
+                        eprintln!("cannot save the picture: {message}");
+                        self.shot_exit
+                            .store(1, std::sync::atomic::Ordering::Release);
+                    }
+                    bench::ShotOutcome::TimedOut => {
+                        eprintln!("the window did not hand out a picture in time");
+                        self.shot_exit
+                            .store(1, std::sync::atomic::Ordering::Release);
+                    }
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
@@ -1596,6 +1611,13 @@ fn main() -> eframe::Result {
     let bench_out = bench::requested(&all_args);
     let shots_dir = bench::shots_requested(&all_args);
     let shot_out = bench::screenshot_requested(&all_args);
+    // A `--screenshot` without a file is an error before the window opens: the session it
+    // would otherwise start is not a measuring run and may change the user's settings.
+    if shot_out.is_none() && all_args.iter().any(|a| a == bench::SCREENSHOT_ARG) {
+        eprintln!("--screenshot needs a file name, for example: prowave --screenshot shot.png");
+        std::process::exit(2);
+    }
+    let shot_exit = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
     if bench_out.is_none() && shots_dir.is_none() && shot_out.is_none() {
         updater::clean_up_after_update();
     }
@@ -1638,11 +1660,6 @@ fn main() -> eframe::Result {
     // working in their own window while the app draws.
     if shot_out.is_some() {
         viewport = viewport.with_active(false);
-        // Windows would raise the new window above the one in use; keep it at the back.
-        #[cfg(target_os = "windows")]
-        {
-            viewport = viewport.with_window_level(egui::WindowLevel::AlwaysOnBottom);
-        }
     }
     let wgpu_options = graphics::config();
     let started_backends = graphics::started_backends(&wgpu_options);
@@ -1712,6 +1729,7 @@ fn main() -> eframe::Result {
                 bench: bench_out.clone().map(bench::Probe::new),
                 shots: shots_dir.clone().map(bench::LayoutShots::new),
                 shot: shot_out.clone().map(bench::Screenshot::new),
+                shot_exit: shot_exit.clone(),
                 frames_since_record: 0,
                 midi: (!measuring).then(midi_in::MidiIn::new),
                 midi_out,
@@ -1930,6 +1948,11 @@ fn main() -> eframe::Result {
     if let (Some(out), Err(e)) = (&bench_out, &result) {
         bench::report_without_window(out, &e.to_string());
         return Ok(());
+    }
+    // A `--screenshot` that failed to save or timed out is an error for the script that ran it.
+    let shot_code = shot_exit.load(std::sync::atomic::Ordering::Acquire);
+    if shot_code != 0 {
+        std::process::exit(shot_code);
     }
     result
 }

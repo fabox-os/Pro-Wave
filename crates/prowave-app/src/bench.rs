@@ -31,6 +31,9 @@ pub const SCREENSHOT_ARG: &str = "--screenshot";
 /// Frames to draw before `--screenshot` takes its picture: long enough for the layout, the
 /// fonts and the first audio device to settle.
 const SCREENSHOT_FRAMES: u32 = 120;
+/// How long `--screenshot` waits for a picture before giving up: a script must not hang if the
+/// window never draws.
+const SCREENSHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Window sizes (inner, in points) for `--layout-shots`: a large display, a 13-inch MacBook
 /// Air, a common laptop, and a small window.
@@ -352,13 +355,24 @@ impl LayoutShots {
     }
 }
 
+/// How a `--screenshot` run ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ShotOutcome {
+    Saved,
+    /// The picture could not be written; the message says why.
+    Failed(String),
+    /// The window never handed out a picture before the deadline.
+    TimedOut,
+}
+
 /// One picture of the whole window at its current size (see the module docs).
 pub struct Screenshot {
     file: PathBuf,
     frames: u32,
-    /// Set by the screenshot callback once the picture is saved.
-    saved: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set by the screenshot callback once it has an outcome.
+    outcome: std::sync::Arc<std::sync::Mutex<Option<ShotOutcome>>>,
     requested: bool,
+    started: std::time::Instant,
 }
 
 impl Screenshot {
@@ -366,14 +380,15 @@ impl Screenshot {
         Self {
             file,
             frames: 0,
-            saved: Default::default(),
+            outcome: Default::default(),
             requested: false,
+            started: std::time::Instant::now(),
         }
     }
 
-    /// Call once per frame. Returns true when the picture is saved and the app should close.
-    pub fn frame(&mut self, ctx: &egui::Context) -> bool {
-        use std::sync::atomic::Ordering;
+    /// Call once per frame. `Some` when the run is over: the picture is saved, the save
+    /// failed, or the deadline passed, and the app should close.
+    pub fn frame(&mut self, ctx: &egui::Context) -> Option<ShotOutcome> {
         ctx.request_repaint();
         if self.frames == 0 {
             // The picture should be the same size on every screen (see `with_inner_size`).
@@ -383,17 +398,30 @@ impl Screenshot {
         if self.frames == SCREENSHOT_FRAMES && !self.requested {
             self.requested = true;
             let file = self.file.clone();
-            let saved = self.saved.clone();
+            let outcome = self.outcome.clone();
             ctx.request_screenshot(move |image| {
-                save_png(&file, &image);
-                saved.store(true, Ordering::Release);
+                let result = save_png(&file, &image);
+                if let Ok(mut slot) = outcome.lock() {
+                    *slot = Some(result);
+                }
             });
         }
-        self.saved.swap(false, Ordering::Acquire)
+        let done = match self.outcome.lock() {
+            Ok(mut slot) => slot.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if done.is_some() {
+            return done;
+        }
+        if self.started.elapsed() > SCREENSHOT_TIMEOUT {
+            return Some(ShotOutcome::TimedOut);
+        }
+        None
     }
 }
 
-fn save_png(file: &std::path::Path, image: &egui::ColorImage) {
+/// Writes `image` to `file` as PNG, or says why it could not.
+fn save_png(file: &std::path::Path, image: &egui::ColorImage) -> ShotOutcome {
     let [w, h] = image.size;
     let bytes: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
     let result = std::fs::create_dir_all(file.parent().unwrap_or(std::path::Path::new(".")))
@@ -403,8 +431,14 @@ fn save_png(file: &std::path::Path, image: &egui::ColorImage) {
                 .map_err(|e| e.to_string())
         });
     match result {
-        Ok(()) => tracing::info!("picture saved: {}", file.display()),
-        Err(e) => tracing::error!("cannot save {}: {e}", file.display()),
+        Ok(()) => {
+            tracing::info!("picture saved: {}", file.display());
+            ShotOutcome::Saved
+        }
+        Err(e) => {
+            tracing::error!("cannot save {}: {e}", file.display());
+            ShotOutcome::Failed(e)
+        }
     }
 }
 
@@ -428,6 +462,14 @@ mod tests {
         let args: Vec<std::ffi::OsString> = vec![SHOTS_ARG.into(), "shots".into()];
         assert_eq!(shots_requested(&args), Some(PathBuf::from("shots")));
         assert_eq!(requested(&args), None);
+        let args: Vec<std::ffi::OsString> = vec![SCREENSHOT_ARG.into(), "shot.png".into()];
+        assert_eq!(screenshot_requested(&args), Some(PathBuf::from("shot.png")));
+        assert_eq!(
+            screenshot_requested(&[SCREENSHOT_ARG.into()]),
+            None,
+            "no file, no picture"
+        );
+        assert_eq!(screenshot_requested(&[]), None);
     }
 
     #[test]
