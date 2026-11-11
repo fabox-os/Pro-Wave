@@ -8,3 +8,7 @@ codegen-units = 1
 strip = true
 panic = "abort"
 opt-level = 3
+
+# Local diagnostics/fix for CLAP bus negotiation (see vendor/plughost-formats).
+[patch.crates-io]
+plughost-formats = { path = "vendor/plughost-formats" }

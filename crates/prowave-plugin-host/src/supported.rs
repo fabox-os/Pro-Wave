@@ -4,10 +4,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use arrayvec::ArrayVec;
 use plughost::{
-    AutomationEvent, BlockContext, Chain, ChainSlot, Event, Events, Layout, ParameterChange,
-    PluginId, PluginInfo, PluginKind, PluginRef, PluginState, ProcessMode, RealtimeConfig,
-    RealtimeEndpoint, Scanner, SpawnOptions,
+    AudioBusConfig, AudioBusRole, AudioDirection, AudioInputRoute, AudioSource, AutomationEvent,
+    BlockContext, Chain, ChainSlot, Event, EventInputRoute, EventSource, Events, Layout,
+    ParameterChange, PluginId, PluginInfo, PluginKind, PluginRef, PluginState, ProcessMode,
+    RealtimeConfig, RealtimeEndpoint, RoutedChainConfig, SampleFormat, Scanner, SlotAudioConfig,
+    SlotEventConfig, SpawnOptions,
 };
 use prowave_engine::HostedEffect;
 
@@ -35,6 +38,113 @@ pub struct Hosted {
     pub latency: u32,
     /// The parameters as they were when the plug-in loaded.
     pub parameters: Vec<Parameter>,
+}
+
+/// How the helper's native channels map onto the engine's stereo pair.
+struct Routing {
+    input_channels: usize,
+    output_channels: usize,
+    /// The channel of the main input's left side (effects only).
+    main_in: Option<usize>,
+    /// The channel of the main output's left side.
+    main_out: usize,
+}
+
+impl Routing {
+    /// The channel map of a main-bus configuration: one main input and one main output.
+    fn from_main(config: &RoutedChainConfig, instrument: bool) -> Routing {
+        let input_channels: usize = config.inputs.iter().map(|layout| layout.channels()).sum();
+        let output_channels = config.slots.first().map_or(0, |slot| {
+            slot.outputs.iter().map(|bus| bus.layout.channels()).sum()
+        });
+        Routing {
+            input_channels,
+            output_channels,
+            main_in: (!instrument && input_channels >= 2).then_some(0),
+            main_out: 0,
+        }
+    }
+}
+
+/// Configures every active native bus (main and auxiliary). Some CLAP plugins refuse the
+/// per-port activation a main-bus configuration performs, but accept the buses as they already
+/// are; the main input is fed from the caller and auxiliary inputs from silence.
+fn all_buses_config(
+    chain: &mut Chain,
+    sample_rate: f64,
+    quantum: usize,
+) -> Result<(RoutedChainConfig, Routing), Error> {
+    let buses = chain.audio_buses(0).map_err(describe)?;
+    let mut chain_inputs = Vec::new();
+    let mut input_routes = Vec::new();
+    let mut input_channels = 0usize;
+    let mut main_in = None;
+    let mut external = 0usize;
+    for bus in &buses {
+        if bus.direction == AudioDirection::Input && bus.active != Some(false) {
+            let layout = bus.layout.unwrap_or(Layout::Stereo);
+            if bus.role == AudioBusRole::Main {
+                main_in = Some(input_channels);
+            }
+            input_routes.push(AudioInputRoute::new(
+                AudioBusConfig::new(bus.id, layout, true),
+                AudioSource::External { bus: external },
+            ));
+            external += 1;
+            input_channels += layout.channels();
+            chain_inputs.push(layout);
+        }
+    }
+    let mut outputs = Vec::new();
+    let mut output_channels = 0usize;
+    let mut main_out = 0usize;
+    let mut seen_main = false;
+    for bus in &buses {
+        if bus.direction == AudioDirection::Output && bus.active != Some(false) {
+            let layout = bus.layout.unwrap_or(Layout::Stereo);
+            if bus.role == AudioBusRole::Main && !seen_main {
+                main_out = output_channels;
+                seen_main = true;
+            }
+            outputs.push(AudioBusConfig::new(bus.id, layout, true));
+            output_channels += layout.channels();
+        }
+    }
+    let ports = chain.event_ports(0).map_err(describe)?;
+    let event_in = ports
+        .iter()
+        .find(|port| port.direction == AudioDirection::Input)
+        .map(|port| port.id);
+    let event_out = ports
+        .iter()
+        .find(|port| port.direction == AudioDirection::Output)
+        .map(|port| port.id);
+    let events = SlotEventConfig::new(
+        event_in
+            .zip(Some(EventSource::External { port: 0 }))
+            .map(|(port, source)| EventInputRoute::new(port, source))
+            .into_iter()
+            .collect(),
+        event_out.into_iter().collect(),
+    );
+    let config = RoutedChainConfig::new(
+        sample_rate,
+        quantum,
+        SampleFormat::F32,
+        chain_inputs,
+        vec![SlotAudioConfig::new(input_routes, outputs).with_events(events)],
+    )
+    .with_mode(ProcessMode::Realtime)
+    .with_event_inputs(1);
+    Ok((
+        config,
+        Routing {
+            input_channels,
+            output_channels,
+            main_in,
+            main_out,
+        },
+    ))
 }
 
 /// A live hosted instrument: its control side and the realtime instrument for the audio graph.
@@ -136,19 +246,38 @@ impl Catalog {
             .find(|entry| entry.key == key)
             .ok_or_else(|| Error::new(format!("plug-in `{key}` is not installed")))?;
         let quantum = quantum.max(1);
-        let mut slot = ChainSlot::new(entry.reference.clone());
-        if let Some(bytes) = state {
-            if let Ok(parsed) = PluginState::from_bytes(bytes) {
-                slot = slot.with_state(parsed);
+        let make_slot = || {
+            let mut slot = ChainSlot::new(entry.reference.clone());
+            if let Some(bytes) = state {
+                if let Ok(parsed) = PluginState::from_bytes(bytes) {
+                    slot = slot.with_state(parsed);
+                }
+            }
+            slot
+        };
+        let spawn = || {
+            Chain::spawn(&self.helper, &[make_slot()], &SpawnOptions::default()).map_err(describe)
+        };
+        let mut chain = spawn()?;
+        let mut routing = None;
+        if let Ok(mut config) =
+            chain.main_bus_config(sample_rate, quantum, Layout::Stereo, &[Layout::Stereo])
+        {
+            config.mode = ProcessMode::Realtime;
+            if chain.prepare_audio(&config).is_ok() {
+                routing = Some(Routing::from_main(&config, false));
             }
         }
-        let mut chain =
-            Chain::spawn(&self.helper, &[slot], &SpawnOptions::default()).map_err(describe)?;
-        let mut config = chain
-            .main_bus_config(sample_rate, quantum, Layout::Stereo, &[Layout::Stereo])
-            .map_err(describe)?;
-        config.mode = ProcessMode::Realtime;
-        chain.prepare_audio(&config).map_err(describe)?;
+        let routing = match routing {
+            Some(routing) => routing,
+            None => {
+                drop(chain);
+                chain = spawn()?;
+                let (config, routing) = all_buses_config(&mut chain, sample_rate, quantum)?;
+                chain.prepare_audio(&config).map_err(describe)?;
+                routing
+            }
+        };
         let parameters = read_parameters(&mut chain)?;
         let ids: Vec<u64> = parameters.iter().map(|parameter| parameter.id).collect();
         let endpoint = chain
@@ -162,9 +291,11 @@ impl Catalog {
             quantum,
             ids,
             Arc::clone(&resync),
+            routing.input_channels,
+            routing.main_in,
+            routing.output_channels,
+            routing.main_out,
         ));
-        // `RealtimeEffect` collects one quantum before it can submit it, so the strip is late
-        // by the endpoint latency plus that quantum; delay compensation must know both.
         let latency = latency.saturating_add(u32::try_from(quantum).unwrap_or(u32::MAX));
         Ok(Hosted {
             control: Control { chain, resync },
@@ -193,19 +324,40 @@ impl Catalog {
             .find(|entry| entry.key == key)
             .ok_or_else(|| Error::new(format!("plug-in `{key}` is not installed")))?;
         let quantum = quantum.max(1);
-        let mut slot = ChainSlot::new(entry.reference.clone());
-        if let Some(bytes) = state {
-            if let Ok(parsed) = PluginState::from_bytes(bytes) {
-                slot = slot.with_state(parsed);
+        let make_slot = || {
+            let mut slot = ChainSlot::new(entry.reference.clone());
+            if let Some(bytes) = state {
+                if let Ok(parsed) = PluginState::from_bytes(bytes) {
+                    slot = slot.with_state(parsed);
+                }
+            }
+            slot
+        };
+        let spawn = || {
+            Chain::spawn(&self.helper, &[make_slot()], &SpawnOptions::default()).map_err(describe)
+        };
+        let mut chain = spawn()?;
+        let mut routing = None;
+        if let Ok(mut config) =
+            chain.main_bus_config(sample_rate, quantum, Layout::None, &[Layout::Stereo])
+        {
+            config.mode = ProcessMode::Realtime;
+            if chain.prepare_audio(&config).is_ok() {
+                routing = Some(Routing::from_main(&config, true));
             }
         }
-        let mut chain =
-            Chain::spawn(&self.helper, &[slot], &SpawnOptions::default()).map_err(describe)?;
-        let mut config = chain
-            .main_bus_config(sample_rate, quantum, Layout::None, &[Layout::Stereo])
-            .map_err(describe)?;
-        config.mode = ProcessMode::Realtime;
-        chain.prepare_audio(&config).map_err(describe)?;
+        let routing = match routing {
+            Some(routing) => routing,
+            None => {
+                drop(chain);
+                chain = spawn()?;
+                let (config, mut routing) = all_buses_config(&mut chain, sample_rate, quantum)?;
+                // An instrument has no audio input to play, whatever auxiliary buses exist.
+                routing.main_in = None;
+                chain.prepare_audio(&config).map_err(describe)?;
+                routing
+            }
+        };
         let parameters = read_parameters(&mut chain)?;
         let ids: Vec<u64> = parameters.iter().map(|parameter| parameter.id).collect();
         let endpoint = chain
@@ -219,9 +371,10 @@ impl Catalog {
             quantum,
             ids,
             Arc::clone(&resync),
+            routing.input_channels,
+            routing.output_channels,
+            routing.main_out,
         ));
-        // `RealtimeInstrument` collects one quantum before it can submit it, so the strip is
-        // late by the helper latency plus that quantum; delay compensation must know both.
         let latency = latency.saturating_add(u32::try_from(quantum).unwrap_or(u32::MAX));
         Ok(HostedInstrument {
             control: Control { chain, resync },
@@ -231,6 +384,8 @@ impl Catalog {
         })
     }
 }
+
+impl Control {}
 
 impl Control {
     /// Moves a parameter; `value` is normalized to 0..=1.
@@ -337,13 +492,19 @@ fn descriptor_of(reference: &PluginRef, info: &PluginInfo) -> Option<(String, Pl
 
 /// The per-sample adapter the engine runs. It batches the engine's samples into the helper's
 /// quanta; all of its buffers are reserved when it is created on the UI thread.
+/// The per-sample adapter the engine runs. It batches the engine's samples into the helper's
+/// quanta; all of its buffers are reserved when it is created on the UI thread.
 pub struct RealtimeEffect {
     endpoint: RealtimeEndpoint,
     quantum: usize,
-    input_l: Vec<f32>,
-    input_r: Vec<f32>,
-    output_l: Vec<f32>,
-    output_r: Vec<f32>,
+    /// One buffer per chain input channel. The main input carries the strip's audio; auxiliary
+    /// inputs (some CLAP plug-ins have one) stay silent.
+    inputs: Vec<Vec<f32>>,
+    /// One buffer per chain output channel. The main output pair is what the strip plays;
+    /// auxiliary outputs are discarded.
+    outputs: Vec<Vec<f32>>,
+    main_in: Option<usize>,
+    main_out: usize,
     filled: usize,
     played: usize,
     events: Events,
@@ -362,20 +523,31 @@ pub struct RealtimeEffect {
 }
 
 impl RealtimeEffect {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         endpoint: RealtimeEndpoint,
         latency: u32,
         quantum: usize,
         ids: Vec<u64>,
         resync: Arc<AtomicBool>,
+        input_channels: usize,
+        main_in: Option<usize>,
+        output_channels: usize,
+        main_out: usize,
     ) -> Self {
+        let main_in = main_in.filter(|main| main + 1 < input_channels);
+        let main_out = if main_out + 1 < output_channels {
+            main_out
+        } else {
+            0
+        };
         Self {
             endpoint,
             quantum,
-            input_l: vec![0.0; quantum],
-            input_r: vec![0.0; quantum],
-            output_l: vec![0.0; quantum],
-            output_r: vec![0.0; quantum],
+            inputs: (0..input_channels).map(|_| vec![0.0; quantum]).collect(),
+            outputs: (0..output_channels).map(|_| vec![0.0; quantum]).collect(),
+            main_in,
+            main_out,
             filled: 0,
             played: quantum,
             events: Events::for_block(),
@@ -401,46 +573,91 @@ impl HostedEffect for RealtimeEffect {
                     self.automation
                         .push(AutomationEvent::new(0, ParameterChange::new(id, 0, value)));
                 }
-                // `plughost` 0.2.3 (pinned in Cargo.toml), `src/realtime/endpoint.rs`: the
-                // module docs say the callback "allocates nothing, takes no lock and waits for
-                // nothing"; it submits this quantum and plays the output from `latency` quanta
-                // ago, or a fallback when the helper has not finished. A hung helper plays the
-                // fallback (silence, ramped from the last sample) on every callback after the
-                // latency window; nothing waits for it, and the missed events are delivered if
-                // it ever completes. A stalled helper costs audio, never a blocked audio
-                // thread.
-                let result = self.endpoint.process_audio_f32(
-                    &BlockContext::new(self.quantum),
-                    &[&self.input_l[..], &self.input_r[..]],
-                    &mut [&mut self.output_l[..], &mut self.output_r[..]],
-                    &self.automation,
-                    &self.events,
-                    &mut self.produced,
-                );
-                if result.is_err() {
-                    self.output_l.fill(0.0);
-                    self.output_r.fill(0.0);
+                let mut ins: ArrayVec<&[f32], 16> = ArrayVec::new();
+                let mut too_many = false;
+                for channel in &self.inputs {
+                    if ins.try_push(channel.as_slice()).is_err() {
+                        too_many = true;
+                        break;
+                    }
+                }
+                let mut outs: ArrayVec<&mut [f32], 16> = ArrayVec::new();
+                if !too_many {
+                    for channel in &mut self.outputs {
+                        if outs.try_push(channel.as_mut_slice()).is_err() {
+                            too_many = true;
+                            break;
+                        }
+                    }
+                }
+                if too_many {
+                    drop(outs);
+                    drop(ins);
+                    for channel in &mut self.outputs {
+                        channel.fill(0.0);
+                    }
                     self.resync.store(true, Ordering::Relaxed);
+                } else {
+                    // `plughost` 0.2.3 (pinned in Cargo.toml), `src/realtime/endpoint.rs`: the
+                    // callback "allocates nothing, takes no lock and waits for nothing"; a
+                    // hung helper plays the fallback instead of blocking the audio thread.
+                    let result = self.endpoint.process_audio_f32(
+                        &BlockContext::new(self.quantum),
+                        ins.as_slice(),
+                        outs.as_mut_slice(),
+                        &self.automation,
+                        &self.events,
+                        &mut self.produced,
+                    );
+                    if result.is_err() {
+                        drop(outs);
+                        drop(ins);
+                        for channel in &mut self.outputs {
+                            channel.fill(0.0);
+                        }
+                        self.resync.store(true, Ordering::Relaxed);
+                    }
                 }
                 self.events.clear();
                 self.produced.clear();
                 self.filled = 0;
             } else {
                 // The first quantum has no input yet.
-                self.output_l.fill(0.0);
-                self.output_r.fill(0.0);
+                for channel in &mut self.outputs {
+                    channel.fill(0.0);
+                }
             }
             self.played = 0;
         }
         let out = if self.bypass {
             (left, right)
         } else {
-            (self.output_l[self.played], self.output_r[self.played])
+            let l = self
+                .outputs
+                .get(self.main_out)
+                .map_or(0.0, |c| c[self.played]);
+            let r = self
+                .outputs
+                .get(self.main_out + 1)
+                .map_or(0.0, |c| c[self.played]);
+            (l, r)
         };
         self.played += 1;
-        self.input_l[self.filled] = left;
-        self.input_r[self.filled] = right;
-        self.filled += 1;
+        if self.filled < self.quantum {
+            if let Some(main) = self.main_in {
+                if main + 1 < self.inputs.len() {
+                    self.inputs[main][self.filled] = left;
+                    self.inputs[main + 1][self.filled] = right;
+                }
+            }
+            for (index, channel) in self.inputs.iter_mut().enumerate() {
+                if self.main_in != Some(index) && self.main_in.is_none_or(|main| index != main + 1)
+                {
+                    channel[self.filled] = 0.0;
+                }
+            }
+            self.filled += 1;
+        }
         out
     }
 
@@ -469,12 +686,17 @@ impl HostedEffect for RealtimeEffect {
 }
 
 /// The adapter that turns the engine's per-sample calls into the helper's quanta for an
-/// instrument: no audio input, stereo output, and MIDI events at the sample they start.
+/// instrument: no audio input, stereo from the main output, and MIDI events at the sample they
+/// start.
 pub struct RealtimeInstrument {
     endpoint: RealtimeEndpoint,
     quantum: usize,
-    output_l: Vec<f32>,
-    output_r: Vec<f32>,
+    /// One buffer per chain input channel; an instrument's inputs (auxiliary ones included)
+    /// receive silence.
+    inputs: Vec<Vec<f32>>,
+    /// One buffer per chain output channel; the main output pair is played.
+    outputs: Vec<Vec<f32>>,
+    main_out: usize,
     /// Samples collected in the quantum being prepared, and the output sample being played.
     filled: usize,
     played: usize,
@@ -496,18 +718,28 @@ pub struct RealtimeInstrument {
 }
 
 impl RealtimeInstrument {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         endpoint: RealtimeEndpoint,
         latency: u32,
         quantum: usize,
         ids: Vec<u64>,
         resync: Arc<AtomicBool>,
+        input_channels: usize,
+        output_channels: usize,
+        main_out: usize,
     ) -> Self {
+        let main_out = if main_out + 1 < output_channels {
+            main_out
+        } else {
+            0
+        };
         Self {
             endpoint,
             quantum,
-            output_l: vec![0.0; quantum],
-            output_r: vec![0.0; quantum],
+            inputs: (0..input_channels).map(|_| vec![0.0; quantum]).collect(),
+            outputs: (0..output_channels).map(|_| vec![0.0; quantum]).collect(),
+            main_out,
             filled: 0,
             played: quantum,
             events: Events::for_block(),
@@ -536,8 +768,6 @@ impl RealtimeInstrument {
 
 impl prowave_engine::HostedInstrument for RealtimeInstrument {
     fn process(&mut self) -> (f32, f32) {
-        // Start of an adapter quantum: exchange the events (and the silence the instrument
-        // needs as input) for the helper's output block, then play it sample by sample.
         if self.played >= self.quantum {
             if self.filled == self.quantum {
                 self.automation.clear();
@@ -545,18 +775,47 @@ impl prowave_engine::HostedInstrument for RealtimeInstrument {
                     self.automation
                         .push(AutomationEvent::new(0, ParameterChange::new(id, 0, value)));
                 }
-                let result = self.endpoint.process_audio_f32(
-                    &BlockContext::new(self.quantum),
-                    &[],
-                    &mut [&mut self.output_l[..], &mut self.output_r[..]],
-                    &self.automation,
-                    &self.events,
-                    &mut self.produced,
-                );
-                if result.is_err() {
-                    self.output_l.fill(0.0);
-                    self.output_r.fill(0.0);
+                let mut ins: ArrayVec<&[f32], 16> = ArrayVec::new();
+                let mut too_many = false;
+                for channel in &self.inputs {
+                    if ins.try_push(channel.as_slice()).is_err() {
+                        too_many = true;
+                        break;
+                    }
+                }
+                let mut outs: ArrayVec<&mut [f32], 16> = ArrayVec::new();
+                if !too_many {
+                    for channel in &mut self.outputs {
+                        if outs.try_push(channel.as_mut_slice()).is_err() {
+                            too_many = true;
+                            break;
+                        }
+                    }
+                }
+                if too_many {
+                    drop(outs);
+                    drop(ins);
+                    for channel in &mut self.outputs {
+                        channel.fill(0.0);
+                    }
                     self.resync.store(true, Ordering::Relaxed);
+                } else {
+                    let result = self.endpoint.process_audio_f32(
+                        &BlockContext::new(self.quantum),
+                        ins.as_slice(),
+                        outs.as_mut_slice(),
+                        &self.automation,
+                        &self.events,
+                        &mut self.produced,
+                    );
+                    if result.is_err() {
+                        drop(outs);
+                        drop(ins);
+                        for channel in &mut self.outputs {
+                            channel.fill(0.0);
+                        }
+                        self.resync.store(true, Ordering::Relaxed);
+                    }
                 }
                 self.events.clear();
                 std::mem::swap(&mut self.events, &mut self.next_events);
@@ -565,8 +824,9 @@ impl prowave_engine::HostedInstrument for RealtimeInstrument {
                 self.filled = 0;
             } else {
                 // The first quantum has no output from the helper yet.
-                self.output_l.fill(0.0);
-                self.output_r.fill(0.0);
+                for channel in &mut self.outputs {
+                    channel.fill(0.0);
+                }
             }
             self.played = 0;
         }
@@ -574,7 +834,15 @@ impl prowave_engine::HostedInstrument for RealtimeInstrument {
             // An instrument has no audio to pass through, so bypass is silence.
             (0.0, 0.0)
         } else {
-            (self.output_l[self.played], self.output_r[self.played])
+            let l = self
+                .outputs
+                .get(self.main_out)
+                .map_or(0.0, |c| c[self.played]);
+            let r = self
+                .outputs
+                .get(self.main_out + 1)
+                .map_or(0.0, |c| c[self.played]);
+            (l, r)
         };
         self.played += 1;
         self.filled += 1;

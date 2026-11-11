@@ -6,6 +6,7 @@ description = "Pro Wave: sandboxed VST3, Audio Unit and CLAP plug-in hosting"
 license = "GPL-3.0-or-later"
 
 [dependencies]
+arrayvec = "0.7"
 prowave-engine = { version = "0.1.0", path = "../prowave-engine" }
 
 # plughost runs plug-ins in a helper process and supports macOS on Apple Silicon and Windows
