@@ -129,6 +129,20 @@ cargo build --release -p prowave-app   # the program is target/release/prowave
 cargo xtask check                      # fmt, clippy -D warnings, tests, no-alloc check, cargo-deny, wasm check
 ```
 
+### Wayland without X11
+
+The app normally builds with winit's X11 and Wayland backends. For a Wayland-only desktop (and
+as the starting point for issue #79's OpenBSD request), leave both X11 and the screen-reader
+feature out — `accesskit_winit`'s defaults pull the X11 backend in on Linux:
+
+```sh
+cargo build --release -p prowave-app --no-default-features
+```
+
+That build has no X11 dependency (`cargo tree --no-default-features -e features | grep x11`
+finds none) and uses the Wayland backend. It has not been tested on OpenBSD itself, which is
+not a Rust tier-1 target; a report from a build there is welcome.
+
 ## Workspace
 
 | Crate | What it is |
@@ -137,7 +151,6 @@ cargo xtask check                      # fmt, clippy -D warnings, tests, no-allo
 | [`crates/prowave-app`](crates/prowave-app) | The desktop app (egui): every view and editor |
 | [`crates/prowave-project`](crates/prowave-project) | The `.prowave` project file format |
 | [`crates/prowave-logicx-import`](crates/prowave-logicx-import) | Logic Pro `.logicx` bundles: save shapes, active alternative, metadata plists and the ProjectData envelope |
-| [`crates/prowave-vamp`](crates/prowave-vamp) | In-process Vamp analysis plug-in hosting: outputs, parameters and features |
 | [`xtask`](xtask) | `cargo xtask check`, `wasm-check` and `rt-check` |
 | [`dist/linux`](dist/linux) | Linux desktop entry, icon, MIME type, `install.sh` and the .deb, .rpm and Flatpak recipes |
 

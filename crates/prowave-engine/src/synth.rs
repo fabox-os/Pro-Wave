@@ -14,6 +14,30 @@ pub enum Wave {
     Triangle,
 }
 
+/// Which voice model a patch plays.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VoiceKind {
+    /// The original two-oscillator subtractive voice.
+    #[default]
+    Subtractive,
+    /// The additive drawbar organ (Logic's Vintage B3): nine sine drawbars, percussion, key
+    /// click and a Leslie rotor.
+    DrawbarOrgan,
+}
+
+/// The nine drawbar harmonic ratios, in drawbar order: 16', 5⅓', 8', 4', 2⅔', 2', 1⅗', 1⅓',
+/// 1'. The 8' drawbar is the note's fundamental.
+pub const DRAWBAR_RATIOS: [f32; 9] = [0.5, 1.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0];
+
+/// Leslie rotor speed in Hz for a patch's `leslie` value: 1 = chorale, 2 = tremolo.
+pub fn leslie_hz(speed: u8) -> f32 {
+    match speed {
+        1 => 0.8,
+        2 => 6.8,
+        _ => 0.0,
+    }
+}
+
 /// Drum-kit mode: the track's notes select a drum (kick, snare, toms, hats) instead of a pitch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kit {
@@ -53,6 +77,22 @@ pub struct SynthPatch {
     pub pitch_decay: f32,
     pub gain: f32,
     pub kit: Kit,
+    /// The voice model this patch plays.
+    pub voice: VoiceKind,
+    /// Drawbar levels 0..8, in [`DRAWBAR_RATIOS`] order (drawbar organ only).
+    pub drawbars: [u8; 9],
+    /// Percussion harmonic: 0 off, 2 (second) or 3 (third) (drawbar organ only).
+    pub percussion: u8,
+    /// Percussion decay in seconds (drawbar organ only).
+    pub percussion_decay: f32,
+    /// Percussion level 0..1 (drawbar organ only).
+    pub percussion_level: f32,
+    /// Key-click level 0..1 (drawbar organ only).
+    pub key_click: f32,
+    /// Leslie speed: 0 off, 1 chorale, 2 tremolo (drawbar organ only).
+    pub leslie: u8,
+    /// Leslie depth 0..1 (amplitude and pitch modulation; drawbar organ only).
+    pub leslie_depth: f32,
 }
 
 impl Default for SynthPatch {
@@ -81,6 +121,14 @@ impl Default for SynthPatch {
             pitch_decay: 0.05,
             gain: 1.0,
             kit: Kit::None,
+            voice: VoiceKind::Subtractive,
+            drawbars: [0, 0, 8, 0, 0, 0, 0, 0, 0],
+            percussion: 0,
+            percussion_decay: 0.4,
+            percussion_level: 0.5,
+            key_click: 0.0,
+            leslie: 0,
+            leslie_depth: 0.0,
         }
     }
 }
@@ -115,6 +163,18 @@ impl SynthPatch {
             pitch_drop: finite(self.pitch_drop, d.pitch_drop, -48.0, 48.0),
             pitch_decay: finite(self.pitch_decay, d.pitch_decay, 0.001, 60.0),
             gain: finite(self.gain, d.gain, 0.0, 4.0),
+            voice: self.voice,
+            drawbars: self.drawbars.map(|level| level.min(8)),
+            percussion: if matches!(self.percussion, 2 | 3) {
+                self.percussion
+            } else {
+                0
+            },
+            percussion_decay: finite(self.percussion_decay, d.percussion_decay, 0.02, 10.0),
+            percussion_level: finite(self.percussion_level, d.percussion_level, 0.0, 1.0),
+            key_click: finite(self.key_click, d.key_click, 0.0, 1.0),
+            leslie: self.leslie.min(2),
+            leslie_depth: finite(self.leslie_depth, d.leslie_depth, 0.0, 1.0),
             ..self
         }
     }
