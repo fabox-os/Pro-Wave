@@ -402,6 +402,10 @@ Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
   `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
   with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
   regions, plug-ins, Session Players) is the next step.
+- **EXS24 sampler instruments:** the `prowave-exs` crate reads `.exs` zones, groups and sample
+  references (key and velocity ranges, tuning, pan, loops, round robin) from little- and
+  big-endian files, with block and count limits for untrusted instruments. The Sampler in the app
+  does not use it yet.
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.
