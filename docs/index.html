@@ -6,7 +6,7 @@
 <title>Pro Wave — an open-source DAW in Rust</title>
 <meta name="description" content="Pro Wave is a Logic Pro–style music production app written in pure Rust. No Electron, no JUCE. Linux, Windows and macOS. Free and open source, GPL-3.0.">
 <style>
-:root{--bg:#0e0e10;--panel:#16161a;--line:#26262c;--text:#ececf0;--dim:#9a9aa5;--accent:#ff7a2f;--accent2:#ff9a5c;--green:#4fd1a5}
+:root{--bg:#0e0e10;--panel:#16161a;--line:#26262c;--text:#ececf0;--dim:#9a9aa5;--accent:#3b82f6;--accent2:#6aa3f8;--green:#4fd1a5}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
 a{color:inherit;text-decoration:none}
@@ -14,21 +14,21 @@ a{color:inherit;text-decoration:none}
 nav{position:sticky;top:0;z-index:10;background:rgba(14,14,16,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 nav .wrap{display:flex;align-items:center;gap:22px;height:58px}
 .logo{font-weight:700;display:flex;gap:8px;align-items:center;margin-right:auto}
-.logo i{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--accent),#c2410c);display:inline-block}
+.logo i{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--accent),#1d4ed8);display:inline-block}
 nav a.l{color:var(--dim);font-size:14px}nav a.l:hover{color:var(--text)}
 .btn{display:inline-flex;gap:8px;align-items:center;padding:10px 18px;border-radius:9px;font-weight:600;font-size:15px;border:1px solid var(--line);background:var(--panel)}
-.btn.p{background:var(--accent);border-color:var(--accent);color:#170a02}.btn.p:hover{background:var(--accent2)}
+.btn.p{background:var(--accent);border-color:var(--accent);color:#04122b}.btn.p:hover{background:var(--accent2)}
 .btn:hover{border-color:#3a3a42}
-.hero{text-align:center;padding:84px 0 40px;background:radial-gradient(ellipse at 50% 0,#2a1608 0,transparent 60%)}
+.hero{text-align:center;padding:84px 0 40px;background:radial-gradient(ellipse at 50% 0,#0c1a33 0,transparent 60%)}
 .badge{display:inline-flex;gap:10px;align-items:center;font-size:13px;color:var(--dim);border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 14px}
-.badge b{background:#3a2210;color:var(--accent);padding:1px 8px;border-radius:5px;font-size:11px;letter-spacing:.06em}
+.badge b{background:#14264a;color:var(--accent);padding:1px 8px;border-radius:5px;font-size:11px;letter-spacing:.06em}
 h1{font-size:clamp(44px,8vw,84px);line-height:1.02;margin:26px 0 20px;letter-spacing:-.03em}
 h1 span{color:var(--accent);display:block}
 .lead{max-width:640px;margin:0 auto 30px;color:var(--dim);font-size:18px}.lead b{color:var(--text)}
 .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
 .chips{display:flex;gap:22px;justify-content:center;flex-wrap:wrap;margin:26px 0 0;color:var(--dim);font-size:13px}
 .chips span:before{content:"• ";color:var(--green)}
-.shot{margin:48px auto 0;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 30px 80px rgba(255,122,47,.08)}
+.shot{margin:48px auto 0;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 30px 80px rgba(59,130,246,.12)}
 .shot img{display:block;width:100%;height:auto}
 section{padding:80px 0;border-top:1px solid var(--line)}
 h2{font-size:clamp(28px,4vw,40px);margin:0 0 10px;letter-spacing:-.02em}
