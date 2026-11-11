@@ -1062,6 +1062,7 @@ fn instrument_slot(
                 )
             {
                 v.pending_hosted_instrument = Some((i, key));
+                v.picker_search.clear();
                 ui.close();
             }
         });
@@ -1150,6 +1151,7 @@ fn insert_slot(
                         )
                     {
                         v.pending_hosted = Some((i, key));
+                        v.picker_search.clear();
                         ui.close();
                     }
                     ui.separator();
@@ -1228,6 +1230,7 @@ fn insert_slot(
                                     v.pending_hosted = Some((i, key));
                                 }
                             }
+                            v.picker_search.clear();
                             ui.close();
                         }
                     });
@@ -1249,6 +1252,7 @@ fn insert_slot(
                             v.pending_hosted = Some((i, key))
                         }
                     }
+                    v.picker_search.clear();
                     ui.close();
                 }
             });
