@@ -144,6 +144,10 @@ pub struct TracksView {
     pub tool: TrackTool,
     /// A Fade tool drag in progress: `true` for a fade in, `false` for a fade out.
     fade_drag: Option<bool>,
+    /// A Flex Time marker being dragged: (track, region, marker, the result's length in
+    /// seconds when it was grabbed). The length stays fixed for the whole drag: scaling by a
+    /// length that the drag itself changes would make the marker run away from the pointer.
+    flex_drag: Option<(usize, usize, usize, f64)>,
     pub catch: bool,
     /// Global Tempo track above the tracks (Track > Show Tempo Track).
     pub show_tempo: bool,
@@ -292,6 +296,7 @@ impl Default for TracksView {
             drag_mode: DragMode::NoOverlap,
             tool: TrackTool::Pointer,
             fade_drag: None,
+            flex_drag: None,
             catch: true,
             show_tempo: false,
             show_markers: false,
@@ -408,6 +413,56 @@ fn fade_for_drag(at: f64, start: f64, len: f64, fade_in: bool) -> f32 {
         start + len - at
     };
     ((raw * FADE_STEPS_PER_BEAT).round().max(0.0) / FADE_STEPS_PER_BEAT).min(len) as f32
+}
+
+/// How near (in points) the pointer must be to a Flex marker to take it.
+const FLEX_GRAB_W: f32 = 6.0;
+
+/// The Flex marker of region `r` of track `t` under screen x `x` (within [`FLEX_GRAB_W`]), and
+/// the length of the sound it plays, in seconds. `full` is where the region is.
+fn flex_marker_under(p: &Project, t: usize, r: usize, full: Rect, x: f32) -> Option<(usize, f64)> {
+    let a = p.tracks.get(t)?.regions.get(r)?.audio.as_ref()?;
+    let f = a.flex.as_ref()?;
+    // The scale is the length of the Flex result, not of the file it replaces: after a drag
+    // the sound is longer (or shorter) than the original.
+    let secs = f.length().max(1e-3);
+    let per_sec = f64::from(full.width()) / secs;
+    if per_sec <= 0.0 {
+        return None;
+    }
+    let dst = f64::from(x - full.left()) / per_sec;
+    crate::flex_edit::marker_near(&f.markers, dst, f64::from(FLEX_GRAB_W) / per_sec)
+        .map(|i| (i, secs))
+}
+
+/// A double-click on region `r` of track `t` with Flex Time: on a marker it removes it,
+/// elsewhere it adds one where the pointer is (Logic: click to add a Flex marker,
+/// double-click it to remove it). The message to show when the edit changed.
+fn flex_double_click(
+    p: &mut Project,
+    t: usize,
+    r: usize,
+    full: Rect,
+    x: f32,
+) -> Option<&'static str> {
+    let a = p.tracks.get_mut(t)?.regions.get_mut(r)?.audio.as_mut()?;
+    let f = a.flex.as_mut()?;
+    let secs = f.length().max(1e-3);
+    let per_sec = f64::from(full.width()) / secs;
+    if per_sec <= 0.0 {
+        return None;
+    }
+    let dst = (f64::from(x - full.left()) / per_sec).clamp(0.0, secs);
+    if let Some(i) =
+        crate::flex_edit::marker_near(&f.markers, dst, f64::from(FLEX_GRAB_W) / per_sec)
+    {
+        return crate::flex_edit::remove_marker(&mut f.markers, i)
+            .then_some("Flex: marker removed");
+    }
+    let src = crate::flex_edit::source_at(&f.markers, dst);
+    crate::flex_edit::add_marker(&mut f.markers, src, dst)
+        .is_some()
+        .then_some("Flex: marker added")
 }
 
 /// Whether region `ri` of track `ti` overlaps another region of the track.
@@ -1982,11 +2037,7 @@ fn draw_region(
         rr.max - vec2(0.0, 2.0),
     );
     // A Flex edit: its mode in the corner of the name bar and its markers over the waveform.
-    if let Some((a, f)) = region
-        .audio
-        .as_ref()
-        .and_then(|a| a.flex.as_ref().map(|f| (a, f)))
-    {
+    if let Some(f) = region.audio.as_ref().and_then(|a| a.flex.as_ref()) {
         if head.width() > 90.0 {
             let mark = if f.pitch.is_empty() {
                 crate::flex_edit::mode_label(f.mode).to_string()
@@ -2001,7 +2052,8 @@ fn draw_region(
                 name_color,
             );
         }
-        let secs = a.file.duration_secs().max(1e-3);
+        // Markers are placed on the result's length, as the pointer is mapped to it.
+        let secs = f.length().max(1e-3);
         for m in &f.markers {
             let x = full.left() + (m.dst / secs) as f32 * full.width();
             if x > inner.left() && x < inner.right() {
@@ -2788,14 +2840,64 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
                 }
                 p.selected_track = ti;
             }
-            if resp.double_clicked() && p.tracks[ti].kind != TrackKind::Audio {
-                s.bottom = Bottom::PianoRoll;
+            if resp.double_clicked() {
+                if p.tracks[ti].kind != TrackKind::Audio {
+                    s.bottom = Bottom::PianoRoll;
+                } else if v.tool != TrackTool::Fade {
+                    if let Some(pt) = resp.interact_pointer_pos() {
+                        if let Some(message) = flex_double_click(p, ti, ri, full, pt.x) {
+                            s.status = Some(tr(message).into());
+                            moved = true;
+                        }
+                    }
+                }
             }
             let fade_tool = v.tool == TrackTool::Fade && p.tracks[ti].kind == TrackKind::Audio;
-            if fade_tool && resp.hovered() {
+            // A Flex marker under the pointer: grabbing it stretches the sound; it does not
+            // move the region (Logic's Flex Time).
+            let flex_hover = if fade_tool {
+                None
+            } else {
+                ui.input(|i| i.pointer.hover_pos())
+                    .and_then(|pt| flex_marker_under(p, ti, ri, full, pt.x))
+            };
+            if flex_hover.is_some() && resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
-            if fade_tool {
+            let flex_hit = if fade_tool {
+                None
+            } else {
+                ui.input(|i| i.pointer.press_origin())
+                    .or_else(|| resp.interact_pointer_pos())
+                    .and_then(|pt| flex_marker_under(p, ti, ri, full, pt.x))
+            };
+            if let (Some((marker, secs)), true) = (flex_hit, resp.drag_started()) {
+                v.flex_drag = Some((ti, ri, marker, secs));
+                s.flex.dragging = true;
+            }
+            let flex_own = v
+                .flex_drag
+                .is_some_and(|(dt, dr, _, _)| (dt, dr) == (ti, ri));
+            if flex_own {
+                // The dragged marker follows the pointer; the sound is made on release.
+                if let (true, Some((_, _, marker, secs)), Some(pt)) =
+                    (resp.dragged(), v.flex_drag, resp.interact_pointer_pos())
+                {
+                    if let Some(f) = p.tracks[ti].regions[ri]
+                        .audio
+                        .as_mut()
+                        .and_then(|a| a.flex.as_mut())
+                    {
+                        let dst = f64::from((pt.x - full.left()) / full.width()) * secs;
+                        crate::flex_edit::move_marker(&mut f.markers, marker, dst);
+                    }
+                }
+                if resp.drag_stopped() {
+                    v.flex_drag = None;
+                    s.flex.dragging = false;
+                    moved = true;
+                }
+            } else if fade_tool {
                 // The Fade tool: the left half of the region gets a fade in, the right half a
                 // fade out, as long as the pointer is dragged (in 1/16 notes, as the Inspector).
                 if resp.drag_started() {
@@ -3706,5 +3808,194 @@ mod selection_tests {
         v.select_many(&[(0, 1), (2, 0)]);
         assert!(v.is_selected(0, 1) && v.is_selected(2, 0));
         assert!(!v.is_selected(0, 0));
+    }
+}
+
+#[cfg(test)]
+mod flex_marker_tests {
+    use super::*;
+    use crate::model::{AudioRegion, RegionParams};
+    use crate::ui_test::Harness;
+    use egui::PointerButton;
+    use prowave_engine::{AudioFile, FlexMode, WarpPoint};
+    use std::sync::{Arc, OnceLock};
+
+    /// A project with one audio track: a two-second sound on a two-bar region at bar 1, with
+    /// Flex Time on and one marker halfway (one second in).
+    fn project_with_marker() -> Project {
+        let mut p = Project::empty();
+        p.tracks.clear();
+        let mut track = Track::new("Audio 1", TrackKind::Audio);
+        let file = AudioFile {
+            path: "drums.wav".into(),
+            sample_rate: 44_100,
+            frames: 88_200,
+            channels: 2,
+        };
+        let mut flex = crate::flex_edit::FlexEdit::new(file.clone(), FlexMode::Rhythmic);
+        flex.markers = vec![WarpPoint { src: 1.0, dst: 1.0 }];
+        track.regions.push(Region {
+            name: "drums".into(),
+            start_bar: 1.0,
+            len_bars: 2.0,
+            notes: Vec::new(),
+            controls: Vec::new(),
+            folder: None,
+            audio: Some(AudioRegion {
+                file,
+                peaks: Arc::new(OnceLock::new()),
+                flex: Some(flex),
+            }),
+            params: RegionParams::default(),
+            generated: None,
+        });
+        p.tracks.push(track);
+        p
+    }
+
+    #[test]
+    fn a_flex_marker_follows_the_pointer_and_leaves_the_region_alone() {
+        let mut p = project_with_marker();
+        let mut s = UiState::new();
+        let mut h = Harness::new(1200.0, 600.0);
+        let meters = crate::mixer::Meters::default();
+        for _ in 0..2 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        // The lanes start at x 340 (the track headers); at the default zoom a bar is 62
+        // points wide, so the two-bar region runs to x 464 and the marker is halfway, at 402.
+        let marker = pos2(402.0, 84.0);
+        h.drag(
+            &[marker, marker + vec2(15.0, 0.0), marker + vec2(30.0, 0.0)],
+            PointerButton::Primary,
+            |ui| show(ui, &mut p, &mut s, &meters),
+        );
+        let region = &p.tracks[0].regions[0];
+        let flex = region.audio.as_ref().unwrap().flex.as_ref().unwrap();
+        assert_eq!(flex.markers.len(), 1);
+        assert_eq!(flex.markers[0].src, 1.0, "the recording moment stays put");
+        let dst = flex.markers[0].dst;
+        assert!((dst - 1.484).abs() < 0.02, "moved to {dst} seconds");
+        assert_eq!(region.start_bar, 1.0, "the region itself does not move");
+    }
+
+    #[test]
+    fn a_second_drag_and_a_double_click_use_the_result_length() {
+        let mut p = project_with_marker();
+        let mut s = UiState::new();
+        let mut h = Harness::new(1200.0, 600.0);
+        let meters = crate::mixer::Meters::default();
+        for _ in 0..2 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        // The region runs from x 340 to 464 (two bars at the default zoom).
+        let (left, width) = (340.0, 124.0);
+        let marker = pos2(left + width / 2.0, 84.0);
+        h.drag(
+            &[marker, marker + vec2(10.0, 0.0)],
+            PointerButton::Primary,
+            |ui| show(ui, &mut p, &mut s, &meters),
+        );
+        let (first, length) = {
+            let f = p.tracks[0].regions[0]
+                .audio
+                .as_ref()
+                .unwrap()
+                .flex
+                .as_ref()
+                .unwrap();
+            (f.markers[0].dst, f.length())
+        };
+        assert!((first - 1.161).abs() < 0.02, "moved to {first}");
+        assert!((length - 2.161).abs() < 0.02, "result is {length} s long");
+
+        // The marker is drawn on the result's scale now. Grabbing it there and dragging
+        // again must move it, not the region.
+        let at = pos2(left + (first / length) as f32 * width, 84.0);
+        for _ in 0..2 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        h.drag(&[at, at + vec2(10.0, 0.0)], PointerButton::Primary, |ui| {
+            show(ui, &mut p, &mut s, &meters)
+        });
+        let (second, length) = {
+            let f = p.tracks[0].regions[0]
+                .audio
+                .as_ref()
+                .unwrap()
+                .flex
+                .as_ref()
+                .unwrap();
+            (f.markers[0].dst, f.length())
+        };
+        assert!(second > first + 0.1, "{second} after {first}");
+        assert_eq!(p.tracks[0].regions[0].start_bar, 1.0);
+
+        // A double-click maps by the new length: half a second into the result.
+        let spot = pos2(left + (0.5 / length) as f32 * width, 84.0);
+        for _ in 0..30 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        for _ in 0..2 {
+            h.click(spot, |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        let f = p.tracks[0].regions[0]
+            .audio
+            .as_ref()
+            .unwrap()
+            .flex
+            .as_ref()
+            .unwrap();
+        assert!(
+            f.markers.iter().any(|m| (m.dst - 0.5).abs() < 0.02),
+            "no marker at half a second: {:?}",
+            f.markers.iter().map(|m| m.dst).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_double_click_adds_a_flex_marker_and_another_removes_it() {
+        let mut p = project_with_marker();
+        let mut s = UiState::new();
+        let mut h = Harness::new(1200.0, 600.0);
+        let meters = crate::mixer::Meters::default();
+        for _ in 0..2 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        // A quarter into the region (half a second), away from the marker at one second.
+        let empty = pos2(371.0, 84.0);
+        for _ in 0..2 {
+            h.click(empty, |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        let flex = p.tracks[0].regions[0]
+            .audio
+            .as_ref()
+            .unwrap()
+            .flex
+            .as_ref()
+            .unwrap();
+        assert_eq!(flex.markers.len(), 2, "a marker was added");
+        let added = flex
+            .markers
+            .iter()
+            .find(|m| (m.dst - 0.5).abs() < 0.02)
+            .expect("the new marker at half a second");
+        assert_eq!(added.src, added.dst, "nothing is moved by adding it");
+        // Long enough that the next two clicks are a new double-click.
+        for _ in 0..30 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        // The same double-click on the marker takes it out.
+        for _ in 0..2 {
+            h.click(empty, |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        let flex = p.tracks[0].regions[0]
+            .audio
+            .as_ref()
+            .unwrap()
+            .flex
+            .as_ref()
+            .unwrap();
+        assert_eq!(flex.markers.len(), 1, "the marker was removed");
     }
 }
