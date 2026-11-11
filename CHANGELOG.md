@@ -9,6 +9,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
 
+✅ **Time stretching and pitch shifting:** the new `prowave-stretch` crate changes a region's duration without changing its pitch (WSOLA with a waveform-similarity search and Hann overlap-add) and shifts pitch without changing duration (stretch by the pitch ratio, then resample back). It works on interleaved audio with any channel count, using one alignment for all channels so stereo stays in step. Tests cover length and pitch on sine tones, stereo channels, and bounded output. It is an offline algorithm for now; Flex Time and the app are not wired to it yet.
 
 ✅ **Vintage B3 organ:** the Library's Vintage B3 Organ patches now play an additive drawbar organ — nine drawbars (16' to 1'), percussion on the second or third harmonic, a key click and a Leslie rotor with chorale and tremolo speeds — instead of the two-oscillator approximation. Not done yet: a dedicated B3 panel, separate horn and rotor speeds, distortion, and drawbar automation.
 ✅ **Rename Project…:** **File > Project Management > Rename Project…** now opens Project Settings on its General tab, where the project's name is edited — the name the window title and a Save As default to. The entry used to be greyed out.
