@@ -800,3 +800,4 @@ Nothing to undo yet = Inget att ångra ännu
 Send {} = Sändning {}
 Disk streaming load: {}% = Diskströmmande belastning: {}%
 Plug-in Manager… = Plugin-hanteraren…
+No plug-ins match = Inga plug-in matchar

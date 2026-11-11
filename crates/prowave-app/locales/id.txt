@@ -800,3 +800,4 @@ Nothing to undo yet = Belum ada yang bisa diurungkan
 Send {} = Kirim {}
 Disk streaming load: {}% = Beban streaming disk: {}%
 Plug-in Manager… = Manajer plug-in…
+No plug-ins match = Tidak ada plug-in yang cocok

@@ -800,3 +800,4 @@ Nothing to undo yet = Rien à annuler pour le moment
 Send {} = Départ {}
 Disk streaming load: {}% = Charge du streaming disque : {}%
 Plug-in Manager… = Gestionnaire de plug-ins…
+No plug-ins match = Aucun plug-in ne correspond

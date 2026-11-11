@@ -42,6 +42,7 @@ mod note_edit;
 mod patches;
 mod pattern;
 mod piano_roll;
+mod plugin_picker;
 mod plugins;
 mod project_io;
 mod project_settings;

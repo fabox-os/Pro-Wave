@@ -800,3 +800,4 @@ Nothing to undo yet = अभी पूर्ववत करने के लि
 Send {} = सेंड {}
 Disk streaming load: {}% = डिस्क स्ट्रीमिंग लोड: {}%
 Plug-in Manager… = प्लग-इन प्रबंधक…
+No plug-ins match = कोई प्लग-इन मेल नहीं खाता

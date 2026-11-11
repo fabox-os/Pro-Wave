@@ -800,3 +800,4 @@ Nothing to undo yet = Ingenting å angre ennå
 Send {} = Send {}
 Disk streaming load: {}% = Belastning på diskstrømming: {}%
 Plug-in Manager… = Programtilleggsbehandler…
+No plug-ins match = Ingen plug-in samsvarer

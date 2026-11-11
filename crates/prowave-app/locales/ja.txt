@@ -800,3 +800,4 @@ Nothing to undo yet = まだ元に戻す操作はありません
 Send {} = センド {}
 Disk streaming load: {}% = ディスクストリーミング負荷: {}%
 Plug-in Manager… = プラグインマネージャー…
+No plug-ins match = 一致するプラグインがありません
