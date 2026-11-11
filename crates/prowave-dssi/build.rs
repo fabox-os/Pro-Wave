@@ -10,6 +10,11 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=tests/fixture.c");
+    if std::env::var_os("CARGO_FEATURE_IN_PROCESS").is_none() {
+        // Without the feature the crate compiles to nothing and runs no plug-in code, so the
+        // ABI fixture (and the C compiler it needs) is not built.
+        return;
+    }
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let host = std::env::var("HOST").unwrap_or_default();
     let target = std::env::var("TARGET").unwrap_or_default();

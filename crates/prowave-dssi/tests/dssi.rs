@@ -1,4 +1,5 @@
 //! The compiled C fixture: the metadata the loader reads, and bad libraries.
+#![cfg(feature = "in-process")]
 
 use prowave_dssi::{Library, PortKind};
 

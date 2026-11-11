@@ -14,6 +14,11 @@
 //! DSSI is unsafe by nature: the library is native code running inside Pro Wave. The unsafe
 //! blocks here are limited to loading the library and reading its immutable descriptor tables;
 //! each has a SAFETY comment.
+//!
+//! The whole reader is behind the non-default `in-process` feature: AGENTS.md keeps plug-in
+//! hosting out of process by default, so a build that does not opt in compiles this crate to
+//! nothing and links neither `libc` nor `libloading`.
+#![cfg(feature = "in-process")]
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use std::ffi::CStr;
