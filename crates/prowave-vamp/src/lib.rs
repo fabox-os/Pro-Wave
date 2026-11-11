@@ -67,6 +67,7 @@ pub enum Error {
     Initialize,
     NotInitialized,
     AlreadyInitialized(&'static str),
+    Reinitialize,
     ChannelCount { expected: usize, got: usize },
     ChannelRange { min: usize, max: usize, got: usize },
     BadProgram(usize),
@@ -89,6 +90,7 @@ impl std::fmt::Display for Error {
             Error::AlreadyInitialized(what) => {
                 write!(f, "{what} must be set before the plug-in is initialised")
             }
+            Error::Reinitialize => f.write_str("the plug-in is already initialised"),
             Error::ChannelCount { expected, got } => {
                 write!(f, "expected {expected} input channels, got {got}")
             }
@@ -631,7 +633,7 @@ impl Instance {
         block_size: u32,
     ) -> Result<(), Error> {
         if self.initialized {
-            return Err(Error::AlreadyInitialized("the analyser"));
+            return Err(Error::Reinitialize);
         }
         if channels < self.min_channels || channels > self.max_channels {
             return Err(Error::ChannelRange {
