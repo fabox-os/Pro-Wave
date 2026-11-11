@@ -630,6 +630,9 @@ impl Instance {
         step_size: u32,
         block_size: u32,
     ) -> Result<(), Error> {
+        if self.initialized {
+            return Err(Error::AlreadyInitialized("the analyser"));
+        }
         if channels < self.min_channels || channels > self.max_channels {
             return Err(Error::ChannelRange {
                 min: self.min_channels,
@@ -775,8 +778,10 @@ unsafe fn copy_feature_list(
     let mut features = Vec::with_capacity(count);
     if !(*list).features.is_null() {
         for index in 0..count {
-            // API version 2 lists hold the version 1 features first, then one union per
-            // feature that may carry a duration.
+            // The Vamp Plugin SDK's `vamp-sdk.h` (`VampFeatureList` and `VampFeatureUnion`)
+            // defines a version 2 list as `featureCount` version 1 features followed by
+            // `featureCount` version 2 entries, so the duration of feature `i` is at
+            // `featureCount + i`.
             let feature = &(*(*list).features.add(index)).v1;
             let timestamp = if feature.has_timestamp != 0 {
                 Some(f64::from(feature.sec) + f64::from(feature.nsec) / 1e9)
@@ -798,8 +803,9 @@ unsafe fn copy_feature_list(
             } else {
                 Some(CStr::from_ptr(feature.label).to_string_lossy().into_owned())
             };
-            // The version 2 half starts after the *declared* count. When that count was capped
-            // the second half is past the trusted range, so it is not read.
+            // The version 2 half starts after the *declared* count (see `vamp-sdk.h`, cited
+            // above). When that count was capped the second half is past the trusted range, so
+            // it is not read.
             let duration = if api_version >= 2 && declared <= MAX_FEATURES {
                 let v2 = &(*(*list).features.add(declared + index)).v2;
                 (v2.has_duration != 0)
@@ -851,8 +857,10 @@ unsafe fn read_info(raw: *const RawDescriptor) -> Result<PluginInfo, Error> {
         }
         let table = std::slice::from_raw_parts(descriptor.parameters, parameter_count);
         for pointer in table {
+            // A null entry cannot be skipped: the remaining parameters would shift down and
+            // `set_parameter(i)` would reach the wrong plug-in parameter.
             if pointer.is_null() {
-                continue;
+                return Err(Error::Malformed("parameter entry"));
             }
             let parameter = &**pointer;
             let mut value_names = Vec::new();
@@ -1066,6 +1074,21 @@ mod memory_tests {
         assert_eq!(
             unsafe { read_info(&raw) },
             Err(Error::Malformed("program table"))
+        );
+    }
+
+    #[test]
+    fn a_null_parameter_entry_is_refused_instead_of_shifting_the_indices() {
+        let parameters = [std::ptr::null::<RawParameterDescriptor>()];
+        let raw = RawDescriptor {
+            parameter_count: 1,
+            parameters: parameters.as_ptr(),
+            ..descriptor()
+        };
+        // SAFETY: the table holds one null entry and its count matches.
+        assert_eq!(
+            unsafe { read_info(&raw) },
+            Err(Error::Malformed("parameter entry"))
         );
     }
 

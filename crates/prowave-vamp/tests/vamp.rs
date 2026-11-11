@@ -101,6 +101,10 @@ fn controls_parameters_and_programs() {
     );
 
     assert!(matches!(
+        instance.initialize(1, 512, 1024),
+        Err(Error::AlreadyInitialized(_))
+    ));
+    assert!(matches!(
         instance.set_parameter(0, 1.0),
         Err(Error::AlreadyInitialized(_))
     ));
