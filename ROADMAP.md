@@ -254,11 +254,13 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
    there with a name-resolution error).
    ⚠️ CI: `xtask check` fails on Ubuntu and macOS since the 0.1.9 commit (Windows passes); cause
    not found yet, the job logs need a GitHub login to read.
-4. Flex / Smart Tempo (Phases 2-3), real effects, buses and automation (Phase 4), all started or done; next: Flex markers by mouse, per-note Flex Pitch, the Sampler (Phase 5).
+4. Flex / Smart Tempo (Phases 2-3), real effects, buses and automation (Phase 4), all started or done; next: per-note Flex Pitch editing, the Sampler (Phase 5).
    ✅ 2026-10-24 (second part): Smart Tempo Editor, tempo changes inside a recording (beat tracking
    by dynamic programming), multitrack analysis, Flex Time (6 modes, WSOLA, quantize audio,
    follow the project tempo), Flex Pitch (YIN, correct to key, MIDI from audio) and Groove Track
-   (MIDI followers). Not done: Flex markers by mouse, per-note Flex Pitch editing, audio followers.
+   (MIDI followers). Flex markers by mouse (dragged to stretch the sound, added with a
+   double-click, removed with another) done 2026-11-11. Not done: per-note Flex Pitch editing,
+   audio followers.
    ✅ Hardening of that work (2026-10-24): the Flex sounds live in the user's config folder, are
    cleared after 14 days and keyed by the recording's size and date; a project file cannot ask
    for more than 4096 Flex markers or pitch moves; at most 4 Flex sounds are made at once; a file
@@ -292,7 +294,8 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
    (`analysis.rs`: log energy of the first difference in 2.5 ms blocks, peaks over a moving
    threshold; tempo from the onset strength's autocorrelation, 60-200 BPM, with a check for
    the double tempo), and Detect Tempo / Adapt Project Tempo to Region on audio regions.
-   Done since: Smart Tempo Editor, tempo maps from audio. Next: Flex markers by mouse.
+   Done since: Smart Tempo Editor, tempo maps from audio, Flex markers by mouse. Next:
+   per-note Flex Pitch editing.
 
 Engine items already done by ChatGPT 6 and reviewed on 2026-10-20: region gain, fades and
 reverse (`ClipEdit`), `peak_of`, tempo ramps, SMPTE, optional `asio` feature, the 24-track
@@ -402,10 +405,7 @@ Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
   `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
   with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
   regions, plug-ins, Session Players) is the next step.
-- **EXS24 sampler instruments:** the `prowave-exs` crate reads `.exs` zones, groups and sample
-  references (key and velocity ranges, tuning, pan, loops, round robin) from little- and
-  big-endian files, with block and count limits for untrusted instruments. The Sampler in the app
-  does not use it yet.
+
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.
