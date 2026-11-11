@@ -2,11 +2,11 @@
 //! electric piano, strings, pad, organ, drum kit...), and every patch name adds a small, stable
 //! variation (brightness, detune, attack, release) so patches in one category sound different.
 //!
-//! The built-in engine is a two-oscillator subtractive synth, so these are approximations of
-//! the instrument families, not sampled instruments.
+//! The built-in engine has a two-oscillator subtractive voice and an additive drawbar organ,
+//! so these are approximations of the instrument families, not sampled instruments.
 use crate::model::Track;
 use crate::track_icons::{icon_kind, IconKind};
-use prowave_engine::{Kit, SynthPatch, Wave};
+use prowave_engine::{Kit, SynthPatch, VoiceKind, Wave};
 
 fn hash(s: &str) -> u32 {
     s.bytes().fold(0x811C_9DC5u32, |h, b| {
@@ -21,7 +21,7 @@ fn jitter(h: u32, salt: u32) -> f32 {
 }
 
 fn vary(mut p: SynthPatch, h: u32) -> SynthPatch {
-    if p.kit != Kit::None {
+    if p.kit != Kit::None || p.voice == VoiceKind::DrawbarOrgan {
         return p;
     }
     if p.cutoff < 19_000.0 {
@@ -242,18 +242,19 @@ fn arp_pluck() -> SynthPatch {
 
 fn organ() -> SynthPatch {
     SynthPatch {
-        wave_a: Wave::Sine,
-        level_a: 1.0,
-        wave_b: Wave::Sine,
-        level_b: 0.5,
-        semi_b: 19.0,
-        cutoff: 6000.0,
-        attack: 0.006,
+        voice: VoiceKind::DrawbarOrgan,
+        // 888 000 000: the lower three drawbars, a full but clear B3 registration.
+        drawbars: [8, 8, 8, 0, 0, 0, 0, 0, 0],
+        percussion: 3,
+        percussion_decay: 0.5,
+        percussion_level: 0.4,
+        key_click: 0.25,
+        leslie: 1,
+        leslie_depth: 0.5,
+        attack: 0.004,
         decay: 0.0,
         sustain: 1.0,
-        release: 0.04,
-        vibrato_hz: 6.2,
-        vibrato_cents: 6.0,
+        release: 0.06,
         ..base()
     }
 }
@@ -501,5 +502,12 @@ mod tests {
             by_name("Steinway Grand Piano").map(|x| x.wave_b),
             Some(Wave::Triangle)
         );
+    }
+
+    #[test]
+    fn the_vintage_b3_category_plays_the_drawbar_organ_voice() {
+        let patch = synth_patch(&track_with("Vintage B3 Organ", "Drawbar Organ"));
+        assert_eq!(patch.voice, VoiceKind::DrawbarOrgan);
+        assert!(patch.drawbars.iter().any(|&level| level > 0));
     }
 }
