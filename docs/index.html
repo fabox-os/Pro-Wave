@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pro Wave — an open-source DAW in Rust</title>
+<meta name="description" content="Pro Wave is a Logic Pro–style music production app written in pure Rust. No Electron, no JUCE. Linux, Windows and macOS. Free and open source, GPL-3.0.">
+<style>
+:root{--bg:#0e0e10;--panel:#16161a;--line:#26262c;--text:#ececf0;--dim:#9a9aa5;--accent:#3b82f6;--accent2:#6aa3f8;--green:#4fd1a5}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+nav{position:sticky;top:0;z-index:10;background:rgba(14,14,16,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:22px;height:58px}
+.logo{font-weight:700;display:flex;gap:8px;align-items:center;margin-right:auto}
+.logo img{border-radius:6px}.hero-logo{width:128px;height:128px;border-radius:28px;background:#fff;padding:6px;box-shadow:0 10px 50px rgba(59,130,246,.35)}
+nav a.l{color:var(--dim);font-size:14px}nav a.l:hover{color:var(--text)}
+.btn{display:inline-flex;gap:8px;align-items:center;padding:10px 18px;border-radius:9px;font-weight:600;font-size:15px;border:1px solid var(--line);background:var(--panel)}
+.btn.p{background:var(--accent);border-color:var(--accent);color:#04122b}.btn.p:hover{background:var(--accent2)}
+.btn:hover{border-color:#3a3a42}
+.hero{text-align:center;padding:84px 0 40px;background:radial-gradient(ellipse at 50% 0,#0c1a33 0,transparent 60%)}
+.badge{display:inline-flex;gap:10px;align-items:center;font-size:13px;color:var(--dim);border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 14px}
+.badge b{background:#14264a;color:var(--accent);padding:1px 8px;border-radius:5px;font-size:11px;letter-spacing:.06em}
+h1{font-size:clamp(44px,8vw,84px);line-height:1.02;margin:26px 0 20px;letter-spacing:-.03em}
+h1 span{color:var(--accent);display:block}
+.lead{max-width:640px;margin:0 auto 30px;color:var(--dim);font-size:18px}.lead b{color:var(--text)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.chips{display:flex;gap:22px;justify-content:center;flex-wrap:wrap;margin:26px 0 0;color:var(--dim);font-size:13px}
+.chips span:before{content:"• ";color:var(--green)}
+.shot{margin:48px auto 0;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 30px 80px rgba(59,130,246,.12)}
+.shot img{display:block;width:100%;height:auto}
+section{padding:80px 0;border-top:1px solid var(--line)}
+h2{font-size:clamp(28px,4vw,40px);margin:0 0 10px;letter-spacing:-.02em}
+.sub{color:var(--dim);max-width:640px;margin:0 0 36px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px}
+.card h3{margin:0 0 6px;font-size:17px}.card p{margin:0;color:var(--dim);font-size:15px}
+.card em{font-style:normal;color:var(--accent);font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.two img{width:100%;border-radius:12px;border:1px solid var(--line);display:block}
+.cap{color:var(--dim);font-size:14px;margin:8px 0 0;text-align:center}
+.dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+.dl .card{text-align:center}.dl .card b{display:block;margin-bottom:4px}
+code{background:#1d1d23;border:1px solid var(--line);border-radius:6px;padding:2px 7px;font-size:14px}
+pre{background:#121216;border:1px solid var(--line);border-radius:10px;padding:16px;overflow:auto;font-size:14px}
+.dc{display:flex;flex-direction:column;gap:12px}.dc .row{display:flex;gap:10px;flex-wrap:wrap}.dc pre{margin:0;font-size:13px;color:#cfe0ff}.warn{max-width:760px;margin:26px auto 0;padding:14px 18px;border:1px solid #3a3320;background:#17150e;border-radius:10px;color:#e8d9a8;text-align:left;font-size:14px}.dl{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+footer{border-top:1px solid var(--line);padding:34px 0;color:var(--dim);font-size:13px}
+footer p{margin:6px 0;max-width:780px}.frow{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}.flinks{display:flex;gap:22px}.flinks a:hover{color:var(--text)}.fine{margin-top:22px!important;font-size:12px;opacity:.8}
+.dsc{display:flex;align-items:center}.dsc:hover{color:#8ea1ff!important}.dbtn svg{color:#8ea1ff}
+@media(max-width:700px){nav a.l{display:none}nav a.dsc{display:flex}}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="logo" href="#top"><img src="logo.png" alt="" width="28" height="28">Pro Wave</a>
+  <a class="l" href="#features">Features</a><a class="l" href="#screens">Screenshots</a>
+  <a class="l" href="#performance">Performance</a><a class="l" href="#status">Status</a>
+  <a class="l" href="https://github.com/fabox-os/Pro-Wave">GitHub</a>
+  <a class="l dsc" href="https://discord.gg/MRFgBsUNV4" aria-label="Discord" title="Join our Discord"><svg viewBox="0 0 127.14 96.36" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45 65.69C36.18 65.69 31 60 31 53s5-12.74 11.43-12.74S54 46 53.89 53s-5.05 12.69-11.44 12.69Zm42.24 0C78.41 65.69 73.25 60 73.25 53s5-12.74 11.44-12.74S96.23 46 96.12 53s-5.04 12.69-11.43 12.69Z"/></svg></a>
+  <a class="btn p" href="#download">Download</a>
+</div></nav>
+
+<header class="hero" id="top"><div class="wrap">
+  <img class="hero-logo" src="logo.png" alt="Pro Wave logo"><br><br><div class="badge"><b>ALPHA</b> v0.2.2 is out · Open source · GPL-3.0</div>
+  <h1>Make music.<span>Not excuses.</span></h1>
+  <p class="lead">Pro Wave is a <b>Logic Pro–style DAW</b> written in pure Rust. Tracks, MIDI, audio, a Mixer with real effects and automation — drawn with egui and played through cpal. No Electron. No JUCE.</p>
+  <div class="cta">
+    <a class="btn p" href="https://github.com/fabox-os/Pro-Wave/releases/latest">⬇ Download Pro Wave</a>
+    <a class="btn" href="https://github.com/fabox-os/Pro-Wave">★ View on GitHub</a>
+    <a class="btn dbtn" href="https://discord.gg/MRFgBsUNV4"><svg viewBox="0 0 127.14 96.36" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45 65.69C36.18 65.69 31 60 31 53s5-12.74 11.43-12.74S54 46 53.89 53s-5.05 12.69-11.44 12.69Zm42.24 0C78.41 65.69 73.25 60 73.25 53s5-12.74 11.44-12.74S96.23 46 96.12 53s-5.04 12.69-11.43 12.69Z"/></svg> Join the Discord</a>
+  </div>
+  <div class="chips"><span>Windows, macOS &amp; Linux</span><span>Pure Rust</span><span>Lock-free audio thread</span><span>Free &amp; open source</span></div>
+  <div class="shot"><img src="screenshots/tracks-and-mixer.webp" alt="Pro Wave: Tracks area with MIDI and audio regions, the Library, inspector and Mixer"></div>
+</div></header>
+
+<section id="features"><div class="wrap">
+  <h2>Features</h2>
+  <p class="sub">Pro Wave does a lot, and aims to do it the way Logic Pro does: arranging, recording, editing, mixing and bouncing in one window, on an engine where the audio thread never waits.</p>
+  <div class="grid">
+    <div class="card"><em>Engine</em><h3>Real-time and lock-free</h3><p>Sample-accurate transport, cycle, count-in and a tempo and signature map. No allocation, locks or disk access on the audio thread; 64-bit summing and plug-in delay compensation.</p></div>
+    <div class="card"><em>Arrange</em><h3>Tracks and regions</h3><p>Audio, Instrument, Drummer, Pattern, Aux, VCA, Folder and External MIDI tracks. Cut, copy, paste, split, join, Paste Replace, Bounce in Place and Bounce and Join, with a jumpable undo history.</p></div>
+    <div class="card"><em>Record</em><h3>MIDI and audio</h3><p>Count-in, cycle and takes. Follow or send MIDI clock and MIDI Time Code; MIDI out with program, bank, pitch bend and SysEx.</p></div>
+    <div class="card"><em>Edit</em><h3>Piano Roll, Score and more</h3><p>Quantize with strength and swing, scale quantize, velocity lane, Event List, Step Sequencer, MIDI Transform, and a Score view with MusicXML export.</p></div>
+    <div class="card"><em>Mix</em><h3>Mixer and automation</h3><p>Channel strips with sends, buses, groups and VCA. Automation for faders, pan, sends and every effect parameter in Read, Touch, Latch and Write.</p></div>
+    <div class="card"><em>Effects</em><h3>Real DSP</h3><p>Channel EQ, Multi-Band EQ, Compressor, Multi-Band Compressor, Noise Gate, Limiter, Space Designer convolution reverb, Tape Delay, Chorus, Phaser, Overdrive, Filter and Amp Designer. On any strip, even the Stereo Out.</p></div>
+    <div class="card"><em>Sound</em><h3>Instruments</h3><p>A 48-voice subtractive synth with drum-kit modes, SoundFont (.sf2) instruments, Hydrogen drum kits and Library patches.</p></div>
+    <div class="card"><em>Flex</em><h3>Flex Time, Flex Pitch, Smart Tempo</h3><p>Warp and re-pitch audio, detect tempo, and make a project follow a recording.</p></div>
+    <div class="card"><em>Audio</em><h3>Non-destructive regions</h3><p>WAV, AIFF, FLAC, MP3, CAF, OGG and M4A streamed from disk. Gain, fades, crossfades, reverse and normalize never touch the file.</p></div>
+    <div class="card"><em>Share</em><h3>Bounce and export</h3><p>Bounce the project or a cycle section to a 32-bit WAV, export one track, or write the selection as a MIDI file.</p></div>
+    <div class="card"><em>Import</em><h3>Open formats</h3><p>.prowave projects, MIDI files (SMPTE time and markers too), audio files and the audio of GarageBand projects.</p></div>
+    <div class="card"><em>Everywhere</em><h3>Linux, macOS, Windows</h3><p>.deb, .rpm, AppImage, Flatpak, a macOS app and a Windows zip. A program of about 15 MB that starts in a few hundred milliseconds.</p></div>
+  </div>
+</div></section>
+
+<section id="screens"><div class="wrap">
+  <h2>See it</h2>
+  <p class="sub">The look and workflow follow Logic Pro: dark panels, Library, Inspector, Tracks area and Mixer.</p>
+  <div class="two">
+    <div><img src="screenshots/piano-roll.webp" alt="Piano Roll with Time Quantize, Scale Quantize and the velocity lane"><p class="cap">Piano Roll with quantize and velocity lane</p></div>
+    <div><img src="screenshots/playback.webp" alt="Playback with moving playhead and live meters"><p class="cap">Playback with live channel meters</p></div>
+  </div>
+</div></section>
+
+<section id="performance"><div class="wrap">
+  <h2>Light and real-time</h2>
+  <p class="sub">The audio thread never locks, allocates or touches the disk. The UI talks to the engine only through a lock-free command queue.</p>
+  <div class="grid">
+    <div class="card"><h3>~15 MB program</h3><p>Starts in a few hundred milliseconds and idles around 120 MB of memory.</p></div>
+    <div class="card"><h3>Sample-accurate</h3><p>Transport, tempo map and automation run on the audio clock, with plug-in delay compensation.</p></div>
+    <div class="card"><h3>64-bit summing</h3><p>Tracks are summed in double precision before the master fader.</p></div>
+  </div>
+</div></section>
+
+<section id="status"><div class="wrap">
+  <h2>Honest status</h2>
+  <p class="sub">Pro Wave is alpha software. Plug-in hosting, Live Loops and much of Logic's instrument list are still to come. Every release lists what was tested and what was not.</p>
+  <a class="btn" href="https://github.com/fabox-os/Pro-Wave/blob/main/ROADMAP.md">Read the roadmap</a>
+  <a class="btn" href="https://github.com/fabox-os/Pro-Wave/blob/main/CHANGELOG.md">Changelog</a>
+</div></section>
+
+<section id="download"><div class="wrap" style="text-align:center">
+  <p style="color:var(--accent);letter-spacing:.2em;font-size:12px;margin:0">DOWNLOAD</p>
+  <h2 style="font-size:clamp(34px,5vw,52px)">Get Pro Wave.</h2>
+  <p class="sub" style="margin:0 auto 36px">Prebuilt packages for every system. Free and open source under the GPL.</p>
+  <div class="dl" style="text-align:left">
+    <div class="card dc"><h3>Linux</h3><p>An AppImage needs no installation. Also .deb, .rpm, a Flatpak bundle and a tar.gz with an installer.</p>
+      <div class="row"><a class="btn p" href="https://github.com/fabox-os/Pro-Wave/releases/latest">Linux x86-64</a><a class="btn" href="https://github.com/fabox-os/Pro-Wave/blob/main/dist/README-linux.txt">Install steps</a></div>
+      <pre>$ chmod +x ProWave-*.AppImage
+$ ./ProWave-*.AppImage</pre></div>
+    <div class="card dc"><h3>macOS</h3><p>A universal app for Apple Silicon and Intel. It is ad-hoc signed, not notarized: clear the quarantine before the first launch.</p>
+      <div class="row"><a class="btn p" href="https://github.com/fabox-os/Pro-Wave/releases/latest">macOS (.zip)</a></div>
+      <pre>$ xattr -dr com.apple.quarantine \
+  "/Applications/Pro Wave.app"</pre></div>
+    <div class="card dc"><h3>Windows</h3><p>Windows 10 and 11, x86-64. Unzip and run prowave.exe. SmartScreen warns because the file is not code signed.</p>
+      <div class="row"><a class="btn p" href="https://github.com/fabox-os/Pro-Wave/releases/latest">Windows (.zip)</a></div></div>
+    <div class="card dc"><h3>From source</h3><p>Rust stable, plus ALSA development files on Linux. The README has the packages for every distribution.</p>
+      <div class="row"><a class="btn" href="https://github.com/fabox-os/Pro-Wave#building">Build instructions →</a></div>
+      <pre>$ cargo run --release -p prowave-app</pre></div>
+  </div>
+  <div class="warn">⚠ Pro Wave is alpha software and is considered unstable, especially the project file format. Keep your projects backed up and use it at your own risk.</div>
+</div></section>
+
+<section><div class="wrap" style="text-align:center">
+  <p style="color:var(--accent);letter-spacing:.2em;font-size:12px;margin:0">OPEN SOURCE</p>
+  <h2 style="font-size:clamp(34px,5vw,52px)">Built in the open.</h2>
+  <p class="sub" style="margin:0 auto 28px">Issues and pull requests are welcome. The architecture is documented, the conventions are written down for humans and coding agents alike, and CI runs the same checks you run locally.</p>
+  <div class="cta">
+    <a class="btn p" href="https://github.com/fabox-os/Pro-Wave">Star on GitHub</a>
+    <a class="btn" href="https://github.com/fabox-os/Pro-Wave/blob/main/AGENTS.md">Read the architecture</a>
+    <a class="btn" href="https://github.com/fabox-os/Pro-Wave/issues">Report an issue</a>
+    <a class="btn dbtn" href="https://discord.gg/MRFgBsUNV4"><svg viewBox="0 0 127.14 96.36" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0a105.89 105.89 0 0 0-26.25 8.09C2.79 32.65-1.71 56.6.54 80.21a105.73 105.73 0 0 0 32.17 16.15 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.85-5.18c.91-.66 1.8-1.34 2.66-2a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2a68.68 68.68 0 0 1-10.87 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.14c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45 65.69C36.18 65.69 31 60 31 53s5-12.74 11.43-12.74S54 46 53.89 53s-5.05 12.69-11.44 12.69Zm42.24 0C78.41 65.69 73.25 60 73.25 53s5-12.74 11.44-12.74S96.23 46 96.12 53s-5.04 12.69-11.43 12.69Z"/></svg> Discord</a>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="frow">
+    <div><a class="logo" href="#top"><img src="logo.png" alt="" width="28" height="28">Pro Wave</a>
+      <p>Free and open source software, GPL-3.0-or-later.</p></div>
+    <div class="flinks"><a href="https://github.com/fabox-os/Pro-Wave">GitHub</a><a href="https://github.com/fabox-os/Pro-Wave/releases">Releases</a><a href="https://discord.gg/MRFgBsUNV4">Discord</a><a href="https://github.com/fabox-os/Pro-Wave/blob/main/ROADMAP.md">Roadmap</a><a href="https://github.com/fabox-os/Pro-Wave/blob/main/LICENSE">Licence</a></div>
+  </div>
+  <p class="fine">Pro Wave is an independent project. It is not affiliated with, sponsored by or endorsed by Apple Inc. Logic Pro is a trademark of Apple Inc., used only to describe the workflow Pro Wave follows. Pro Wave contains no Apple code, artwork or sounds.</p>
+</div></footer>
+</body>
+</html>
