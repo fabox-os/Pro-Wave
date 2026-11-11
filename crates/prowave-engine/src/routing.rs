@@ -4,7 +4,7 @@
 //! Plain data, made on the UI thread and handed to the audio thread by [`crate::Command`]s.
 
 /// Sends in one channel strip.
-pub const MAX_SENDS: usize = 4;
+pub const MAX_SENDS: usize = 8;
 /// Buses a send can feed (Logic's Bus 1..8); an Aux track listens to one of them.
 pub const MAX_BUSES: usize = 8;
 
@@ -273,28 +273,47 @@ mod tests {
             l.points,
             [AutoPoint::new(1.0, -96.0), AutoPoint::new(2.0, 6.0)]
         );
+        let mut sends = [SendSpec::default(); MAX_SENDS];
+        sends[0] = SendSpec {
+            bus: 9,
+            level: f32::NAN,
+            pre: true,
+        };
+        sends[1] = SendSpec {
+            bus: 3,
+            level: 5.0,
+            pre: false,
+        };
         let r = Route {
             bus_in: 200,
             output: 0,
-            sends: [
-                SendSpec {
-                    bus: 9,
-                    level: f32::NAN,
-                    pre: true,
-                },
-                SendSpec {
-                    bus: 3,
-                    level: 5.0,
-                    pre: false,
-                },
-                SendSpec::default(),
-                SendSpec::default(),
-            ],
+            sends,
         }
         .sanitized();
         assert_eq!((r.bus_in, r.sends[0].bus, r.sends[0].level), (0, 0, 0.0));
         assert_eq!((r.sends[1].bus, r.sends[1].level), (3, 1.0));
         assert!(r.has_sends() && !Route::default().has_sends());
+    }
+
+    #[test]
+    fn eight_sends_all_survive_sanitizing() {
+        let mut sends = [SendSpec::default(); MAX_SENDS];
+        for (index, send) in sends.iter_mut().enumerate() {
+            send.bus = (index + 1) as u8;
+            send.level = 0.5;
+        }
+        let route = Route {
+            bus_in: 0,
+            output: 0,
+            sends,
+        }
+        .sanitized();
+        assert_eq!(
+            route.sends.iter().filter(|send| send.bus > 0).count(),
+            MAX_SENDS
+        );
+        assert_eq!(route.sends[MAX_SENDS - 1].bus as usize, MAX_SENDS);
+        assert!(route.has_sends());
     }
 
     #[test]
