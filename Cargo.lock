@@ -3486,6 +3486,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-hydrogen-import"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.42.0",
+]
+
+[[package]]
 name = "prowave-ladspa"
 version = "0.1.0"
 dependencies = [

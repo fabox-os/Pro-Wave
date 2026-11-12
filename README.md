@@ -151,6 +151,7 @@ not a Rust tier-1 target; a report from a build there is welcome.
 | [`crates/prowave-engine`](crates/prowave-engine) | Real-time audio engine: transport, tempo map, synth, mixer, disk streaming, cpal output |
 | [`crates/prowave-app`](crates/prowave-app) | The desktop app (egui): every view and editor |
 | [`crates/prowave-project`](crates/prowave-project) | The `.prowave` project file format |
+| [`crates/prowave-hydrogen-import`](crates/prowave-hydrogen-import) | Hydrogen `.h2song` session reading: kit, instruments, patterns and sequence |
 | [`crates/prowave-logicx-import`](crates/prowave-logicx-import) | Logic Pro `.logicx` bundles: save shapes, active alternative, metadata plists and the ProjectData envelope |
 | [`crates/prowave-guitarpro`](crates/prowave-guitarpro) | Guitar Pro 7/8 `.gp` tablature reading: tracks, bars, beats, rhythms and notes |
 | [`xtask`](xtask) | `cargo xtask check`, `wasm-check` and `rt-check` |
