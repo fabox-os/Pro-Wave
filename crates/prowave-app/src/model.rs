@@ -1716,6 +1716,28 @@ impl Project {
         Some(ri)
     }
 
+    /// Adds an empty MIDI region at `at_bar` (Logic: Create > MIDI Region), ready for the
+    /// Piano Roll.
+    pub fn add_empty_region(&mut self, ti: usize, at_bar: f32) -> Option<usize> {
+        let track = self.tracks.get_mut(ti)?;
+        if !track.kind.has_regions() || track.kind == TrackKind::Audio {
+            return None;
+        }
+        track.regions.push(Region {
+            name: "MIDI".into(),
+            start_bar: at_bar.max(1.0),
+            len_bars: 4.0,
+            notes: Vec::new(),
+            controls: Vec::new(),
+            folder: None,
+            audio: None,
+            params: RegionParams::default(),
+            generated: None,
+        });
+        self.song_rev += 1;
+        Some(track.regions.len() - 1)
+    }
+
     /// Turns a generated region into an ordinary MIDI region with the notes it has now, which
     /// can then be edited note by note.
     pub fn convert_to_midi_region(&mut self, ti: usize, ri: usize) {
@@ -2888,6 +2910,17 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_midi_region_is_editable_and_audio_tracks_refuse_one() {
+        let mut p = Project::empty();
+        let ri = p.add_empty_region(0, 3.0).expect("a MIDI region");
+        let region = &p.tracks[0].regions[ri];
+        assert!(region.generated.is_none(), "it is a plain MIDI region");
+        assert!(region.notes.is_empty());
+        assert_eq!(region.start_bar, 3.0);
+        p.tracks[0].kind = TrackKind::Audio;
+        assert!(p.add_empty_region(0, 4.0).is_none());
+    }
+
     fn a_drummer_region_makes_notes_and_follows_its_length_and_the_bars_under_it() {
         let mut p = Project::empty();
         let ti = p.add_track(TrackKind::Drummer);
