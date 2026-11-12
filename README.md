@@ -108,6 +108,7 @@ cargo run --release -p prowave-app -- song.prowave   # open a project
 cargo run --release -p prowave-app -- drums.wav      # new project, import audio files
 cargo run --release -p prowave-app -- --play         # start playing right away
 cargo run --release -p prowave-app -- --piano        # open the Piano Roll on start
+cargo run --release -p prowave-app -- --screenshot shot.png   # save one picture of the window, then exit
 cargo run -p prowave-engine --example beep           # 440 Hz test tone, reports output latency
 ```
 
@@ -129,6 +130,20 @@ cargo build --release -p prowave-app   # the program is target/release/prowave
 cargo xtask check                      # fmt, clippy -D warnings, tests, no-alloc check, cargo-deny, wasm check
 ```
 
+### Wayland without X11
+
+The app normally builds with winit's X11 and Wayland backends. For a Wayland-only desktop (and
+as the starting point for issue #79's OpenBSD request), leave both X11 and the screen-reader
+feature out — `accesskit_winit`'s defaults pull the X11 backend in on Linux:
+
+```sh
+cargo build --release -p prowave-app --no-default-features
+```
+
+That build has no X11 dependency (`cargo tree --no-default-features -e features | grep x11`
+finds none) and uses the Wayland backend. It has not been tested on OpenBSD itself, which is
+not a Rust tier-1 target; a report from a build there is welcome.
+
 ## Workspace
 
 | Crate | What it is |
@@ -138,6 +153,7 @@ cargo xtask check                      # fmt, clippy -D warnings, tests, no-allo
 | [`crates/prowave-project`](crates/prowave-project) | The `.prowave` project file format |
 | [`crates/prowave-hydrogen-import`](crates/prowave-hydrogen-import) | Hydrogen `.h2song` session reading: kit, instruments, patterns and sequence |
 | [`crates/prowave-logicx-import`](crates/prowave-logicx-import) | Logic Pro `.logicx` bundles: save shapes, active alternative, metadata plists and the ProjectData envelope |
+| [`crates/prowave-guitarpro`](crates/prowave-guitarpro) | Guitar Pro 7/8 `.gp` tablature reading: tracks, bars, beats, rhythms and notes |
 | [`xtask`](xtask) | `cargo xtask check`, `wasm-check` and `rt-check` |
 | [`dist/linux`](dist/linux) | Linux desktop entry, icon, MIME type, `install.sh` and the .deb, .rpm and Flatpak recipes |
 

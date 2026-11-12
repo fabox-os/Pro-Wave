@@ -799,3 +799,4 @@ Redo {} = Gjør om {}
 Nothing to undo yet = Ingenting å angre ennå
 Send {} = Send {}
 Disk streaming load: {}% = Belastning på diskstrømming: {}%
+No plug-ins match = Ingen plug-in samsvarer

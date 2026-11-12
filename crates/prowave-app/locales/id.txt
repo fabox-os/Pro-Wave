@@ -799,3 +799,4 @@ Redo {} = Ulangi {}
 Nothing to undo yet = Belum ada yang bisa diurungkan
 Send {} = Kirim {}
 Disk streaming load: {}% = Beban streaming disk: {}%
+No plug-ins match = Tidak ada plug-in yang cocok

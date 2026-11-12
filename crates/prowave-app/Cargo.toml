@@ -9,9 +9,36 @@ license = "GPL-3.0-or-later"
 name = "prowave"
 path = "src/main.rs"
 
+[features]
+default = ["x11", "accessibility"]
+# X11 support through winit. Turn everything off (`--no-default-features`) for a pure Wayland
+# build, as an OpenBSD or Wayland-only Linux desktop wants (see issue #79).
+x11 = ["eframe/x11", "winit/x11"]
+# Screen-reader support. `accesskit_winit`'s defaults pull winit's X11 backend on Linux, so a
+# pure Wayland build leaves this off too.
+accessibility = ["eframe/accesskit"]
+
 [dependencies]
 assert_no_alloc = "1.1.2"
-eframe = "0.37.0"
+# The defaults are listed one by one so that `x11` can stay optional: an eframe default build
+# always pulls winit's X11 backend.
+eframe = { version = "0.37.0", default-features = false, features = [
+    "clipboard",
+    "default_fonts",
+    "links",
+    "system_fonts",
+    "wayland",
+    "web_screen_reader",
+    "wgpu",
+] }
+# eframe re-exports winit's types but not its features. `rwh_06` and the Wayland features are
+# what winit's own defaults give on Linux; `x11` is added by this crate's default feature.
+winit = { version = "0.30.13", default-features = false, features = [
+    "rwh_06",
+    "wayland",
+    "wayland-dlopen",
+    "wayland-csd-adwaita",
+] }
 egui = "0.37"
 human-panic = "2.0.8"
 prowave-engine = { version = "0.1.0", path = "../prowave-engine" }
@@ -36,6 +63,9 @@ rhai = { version = "1", features = ["no_module"] }
 # The menus in the macOS system menu bar (see src/native_menu.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "=0.21.0", default-features = false }
+# `--screenshot` must not take the focus on macOS (see `event_loop_builder` in main.rs);
+# eframe re-exports winit's types but not the `platform::macos` extension trait.
+winit = "0.30.13"
 
 [build-dependencies]
 winresource = "0.1.34"
