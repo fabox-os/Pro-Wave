@@ -3469,6 +3469,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-exs"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "prowave-garageband-import"
 version = "0.1.0"
 dependencies = [
