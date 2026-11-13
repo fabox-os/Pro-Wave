@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/prowave-app", "crates/prowave-engine", "crates/prowave-sfz", "crates/prowave-exs", "crates/prowave-garageband-import", "crates/prowave-guitarpro", "crates/prowave-hydrogen-import", "crates/prowave-ladspa", "crates/prowave-logicx-import", "crates/prowave-musicxml", "crates/prowave-project", "xtask"]
+
 
 [profile.release]
 lto = true
