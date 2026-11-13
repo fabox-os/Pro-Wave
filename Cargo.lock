@@ -3939,6 +3939,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-rex"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "prowave-sfz"
 version = "0.1.0"
 dependencies = [

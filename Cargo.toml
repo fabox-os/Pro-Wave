@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/prowave-app","crates/prowave-engine","crates/prowave-exs","crates/prowave-garageband-import","crates/prowave-guitarpro","crates/prowave-hydrogen-import","crates/prowave-ladspa","crates/prowave-logicx-import","crates/prowave-musicxml","crates/prowave-plugin-helper","crates/prowave-plugin-host","crates/prowave-project","crates/prowave-sfz","crates/prowave-vamp", "xtask"]
-
-
+members = ["crates/prowave-app", "crates/prowave-engine", "crates/prowave-exs", "crates/prowave-garageband-import", "crates/prowave-guitarpro", "crates/prowave-hydrogen-import", "crates/prowave-ladspa", "crates/prowave-logicx-import", "crates/prowave-musicxml", "crates/prowave-plugin-helper", "crates/prowave-plugin-host", "crates/prowave-project", "crates/prowave-rex", "crates/prowave-sfz", "crates/prowave-vamp", "xtask"]
 [profile.release]
 lto = true
 codegen-units = 1
