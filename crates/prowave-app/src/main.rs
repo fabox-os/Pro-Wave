@@ -44,6 +44,7 @@ mod patches;
 mod pattern;
 mod piano_roll;
 mod plugin_picker;
+mod plugins;
 mod project_io;
 mod project_settings;
 mod recent_files;
@@ -206,6 +207,8 @@ pub struct UiState {
     pub can_redo: bool,
     /// Mix > Edit Groups… window is open.
     pub show_groups: bool,
+    /// Mix > Plug-in Manager… was chosen.
+    pub plugin_manager: bool,
 }
 
 impl UiState {
@@ -280,6 +283,7 @@ impl UiState {
             can_undo: false,
             can_redo: false,
             show_groups: false,
+            plugin_manager: false,
         }
     }
 
@@ -319,6 +323,8 @@ struct App {
     shot: Option<bench::Screenshot>,
     /// The exit code a failed `--screenshot` leaves for `main` (0 while it is fine).
     shot_exit: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    /// `--fx-shots <folder>`: pictures of every built-in effect window, then closing.
+    fx_shots: Option<bench::FxShots>,
     /// Edit > Undo / Redo.
     history: undo::History,
     /// Frames since the history last looked for an edit.
@@ -336,6 +342,8 @@ struct App {
     chase: mtc_in::Chase,
     /// Looks for a newer release and installs it (Windows).
     updater: updater::Updater,
+    /// VST3/Audio Unit/CLAP plug-ins: catalog, controls and the manager windows.
+    plugins: plugins::Plugins,
 }
 
 impl App {
@@ -1065,6 +1073,12 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+        if let Some(shots) = self.fx_shots.as_mut() {
+            if shots.frame(&ctx, &mut self.ui) {
+                self.fx_shots = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         if let Some(shot) = self.shot.as_mut() {
             if let Some(outcome) = shot.frame(&ctx) {
                 self.shot = None;
@@ -1141,6 +1155,9 @@ impl eframe::App for App {
             let map = self.project.tempo_map();
             self.project.position_beats = map.advance(self.project.position_beats, dt);
         }
+        // Hosted plug-ins: poll the scanner, load a restored plug-in, draw their windows.
+        self.plugins
+            .show(&ctx, &mut self.project, &mut self.ui, self.sync.as_mut());
         if self.project.playing {
             ctx.request_repaint();
         }
@@ -1238,7 +1255,8 @@ impl eframe::App for App {
         if std::mem::take(&mut self.ui.update_check) {
             self.updater.start_check(true);
         }
-        let unsaved = || file_commands::content(&self.project) != self.saved;
+        let unsaved =
+            || self.plugins.dirty() || file_commands::content(&self.project) != self.saved;
         if self.updater.show(&ctx, &unsaved) == updater::Action::Quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -1590,6 +1608,9 @@ fn print_help() {
         "  --layout-shots <folder>   save pictures of the layout at four window sizes, then exit"
     );
     println!("  --screenshot <file.png>   save one picture of the window, then exit");
+    println!(
+        "  --fx-shots <folder>       save a picture of every built-in effect window, then exit"
+    );
     println!();
     println!("A .prowave path opens that project; other paths are imported as audio files.");
 }
@@ -1624,11 +1645,13 @@ fn main() -> eframe::Result {
         std::process::exit(2);
     }
     let shot_exit = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
-    if bench_out.is_none() && shots_dir.is_none() && shot_out.is_none() {
+    let fx_shots_dir = bench::fx_shots_requested(&all_args);
+    if bench_out.is_none() && shots_dir.is_none() && shot_out.is_none() && fx_shots_dir.is_none() {
         updater::clean_up_after_update();
     }
     // Measuring runs leave the user's settings (recent projects, size) alone.
-    let measuring = bench_out.is_some() || shots_dir.is_some() || shot_out.is_some();
+    let measuring =
+        bench_out.is_some() || shots_dir.is_some() || shot_out.is_some() || fx_shots_dir.is_some();
     // Release builds: on a crash, write a report to the temp folder instead of a raw panic.
     human_panic::setup_panic!(human_panic::Metadata::new(
         "Pro Wave",
@@ -1693,8 +1716,16 @@ fn main() -> eframe::Result {
             // Cmd/Ctrl + = / - / 0 resize the interface through `ui_scale` instead, which
             // also keeps the fit for small windows.
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-            // Every start begins clean; the picture runs need something to show.
-            let project = if shots_dir.is_some() || shot_out.is_some() {
+            // Every start begins clean; only the layout pictures need something to show.
+            let project = if fx_shots_dir.is_some() {
+                let mut p = Project::empty();
+                p.tracks[0].inserts = bench::FX_SHOT_KINDS
+                    .iter()
+                    .copied()
+                    .map(crate::model::Insert::new)
+                    .collect();
+                p
+            } else if shots_dir.is_some() || shot_out.is_some() {
                 Project::demo()
             } else {
                 Project::empty()
@@ -1736,6 +1767,7 @@ fn main() -> eframe::Result {
                 shots: shots_dir.clone().map(bench::LayoutShots::new),
                 shot: shot_out.clone().map(bench::Screenshot::new),
                 shot_exit: shot_exit.clone(),
+                fx_shots: fx_shots_dir.clone().map(bench::FxShots::new),
                 frames_since_record: 0,
                 midi: (!measuring).then(midi_in::MidiIn::new),
                 midi_out,
@@ -1744,6 +1776,7 @@ fn main() -> eframe::Result {
                 clock_follow: clock_follow::ClockFollower::default(),
                 chase: mtc_in::Chase::default(),
                 updater: updater::Updater::new(),
+                plugins: plugins::Plugins::default(),
             };
             if !measuring {
                 app.ui.update_auto = updater::auto_enabled();

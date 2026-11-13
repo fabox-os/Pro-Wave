@@ -181,6 +181,35 @@ fn signature(sig: (u8, u8)) -> (u8, u8) {
 }
 
 /// The effects of a track in a file: the detailed list, else (older files) the names.
+fn hosted_to_doc(h: &crate::model::HostedInsert) -> prowave_project::HostedDoc {
+    prowave_project::HostedDoc {
+        plugin_key: h.key.clone(),
+        name: h.name.clone(),
+        vendor: h.vendor.clone(),
+        format: h.format.key().to_string(),
+        bypass: h.bypass,
+        state: h.state.clone(),
+    }
+}
+
+fn hosted_from_doc(h: &prowave_project::HostedDoc) -> crate::model::HostedInsert {
+    crate::model::HostedInsert {
+        key: h.plugin_key.chars().take(256).collect(),
+        name: h.name.chars().take(128).collect(),
+        vendor: h.vendor.chars().take(128).collect(),
+        format: match h.format.as_str() {
+            "au" => prowave_plugin_host::Format::AudioUnit,
+            "clap" => prowave_plugin_host::Format::Clap,
+            _ => prowave_plugin_host::Format::Vst3,
+        },
+        bypass: h.bypass,
+        // A project is untrusted input; plughost accepts at most 128 MiB of state.
+        state: h.state.iter().copied().take(128 << 20).collect(),
+        latency: 0,
+        parameters: Vec::new(),
+    }
+}
+
 fn inserts_from_doc(t: &prowave_project::TrackDoc) -> Vec<crate::model::Insert> {
     if t.fx.is_empty() {
         let names: Vec<&str> = t.inserts.iter().map(String::as_str).collect();
@@ -269,8 +298,14 @@ fn automation_from_doc(t: &prowave_project::TrackDoc) -> crate::model::Automatio
     a.volume = points_from_doc(AutoTarget::Volume, &t.auto_volume);
     a.pan = points_from_doc(AutoTarget::Pan, &t.auto_pan);
     for l in t.auto_fx.iter().take(MAX_FX_LANES) {
-        let known = usize::from(l.slot) < prowave_engine::MAX_INSERTS
-            && usize::from(l.param) < prowave_engine::MAX_FX_PARAMS;
+        // Slot 255 is the hosted plug-in's virtual slot; its parameter list is loaded with
+        // the plug-in, so any index is accepted here and labelled later.
+        let known = if l.slot == crate::model::HOSTED_SLOT {
+            true
+        } else {
+            usize::from(l.slot) < prowave_engine::MAX_INSERTS
+                && usize::from(l.param) < prowave_engine::MAX_FX_PARAMS
+        };
         let target = AutoTarget::Fx {
             slot: l.slot,
             param: l.param,
@@ -354,6 +389,8 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             volume_db: t.volume_db,
             pan: t.pan,
             inserts: t.inserts.iter().map(|s| s.name().to_string()).collect(),
+            hosted: t.hosted.as_ref().map(hosted_to_doc),
+            hosted_instrument: t.hosted_instrument.as_ref().map(hosted_to_doc),
             fx: t
                 .inserts
                 .iter()
@@ -575,6 +612,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
                 params: s.params[..s.kind.params().len()].to_vec(),
             })
             .collect(),
+        master_hosted: p.master_hosted.as_ref().map(hosted_to_doc),
         selected_track: p.selected_track,
         tracks,
         groups: p
@@ -786,6 +824,16 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             volume_db: t.volume_db.clamp(-60.0, 6.0),
             pan: t.pan.clamp(-1.0, 1.0),
             inserts: inserts_from_doc(t),
+            hosted: t
+                .hosted
+                .as_ref()
+                .filter(|h| !h.plugin_key.is_empty())
+                .map(hosted_from_doc),
+            hosted_instrument: t
+                .hosted_instrument
+                .as_ref()
+                .filter(|h| !h.plugin_key.is_empty())
+                .map(hosted_from_doc),
             instrument: t.instrument.as_deref().map(intern),
             regions,
             params: TrackParams {
@@ -905,6 +953,11 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
         .collect();
     p.master_vol = doc.master_vol.clamp(0.0, 2.0);
     p.master_inserts = inserts_from_fx_docs(&doc.master_fx);
+    p.master_hosted = doc
+        .master_hosted
+        .as_ref()
+        .filter(|h| !h.plugin_key.is_empty())
+        .map(hosted_from_doc);
     p.groups = doc
         .groups
         .iter()
@@ -1285,6 +1338,140 @@ pub(crate) mod tests {
             &egui::Context::default(),
         );
         assert!(!old.show_master_track && old.header_hidden.is_empty());
+    }
+
+    #[test]
+    fn a_hosted_parameter_lane_is_saved() {
+        use crate::model::{AutoTarget, HostedParam, HOSTED_SLOT};
+        let mut p = Project::empty();
+        p.tracks[0].hosted = Some(crate::model::HostedInsert {
+            key: "au:eq".into(),
+            name: "EQ".into(),
+            vendor: String::new(),
+            format: prowave_plugin_host::Format::AudioUnit,
+            bypass: false,
+            state: Vec::new(),
+            latency: 0,
+            parameters: vec![HostedParam {
+                id: 7,
+                title: "Gain".into(),
+                default: 0.5,
+                value: 0.5,
+                steps: 0,
+                discrete: false,
+            }],
+        });
+        let target = AutoTarget::Fx {
+            slot: HOSTED_SLOT,
+            param: 0,
+        };
+        p.tracks[0].auto.set_point(target, 1.0, 0.25);
+        let (doc, _) = to_doc(&p);
+        assert!(
+            doc.tracks[0]
+                .auto_fx
+                .iter()
+                .any(|lane| lane.slot == HOSTED_SLOT),
+            "the lane is written to the project"
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert!(!q.tracks[0].auto.lane(target).is_empty());
+    }
+
+    #[test]
+    fn a_track_hosted_plug_in_is_saved_with_its_state() {
+        let mut p = Project::empty();
+        p.tracks[0].hosted = Some(crate::model::HostedInsert {
+            key: "vst3:ABC".into(),
+            name: "Track Comp".into(),
+            vendor: "Vendor".into(),
+            format: prowave_plugin_host::Format::Vst3,
+            bypass: false,
+            state: vec![1, 2, 3],
+            latency: 0,
+            parameters: Vec::new(),
+        });
+        let (doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0].hosted.as_ref().map(|h| h.plugin_key.as_str()),
+            Some("vst3:ABC")
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].hosted, p.tracks[0].hosted);
+        // A hand-edited file with no key is no plug-in.
+        let mut empty = doc.clone();
+        if let Some(h) = empty.tracks[0].hosted.as_mut() {
+            h.plugin_key.clear();
+        }
+        let (r, _) = from_doc(&empty, Path::new("."), &egui::Context::default());
+        assert!(r.tracks[0].hosted.is_none());
+    }
+
+    #[test]
+    fn a_hosted_instrument_is_saved_with_its_state() {
+        let mut p = Project::empty();
+        p.tracks[0].hosted_instrument = Some(crate::model::HostedInsert {
+            key: "au:61756D7553675854566D6241".into(),
+            name: "Surge XT".into(),
+            vendor: "Surge Synth Team".into(),
+            format: prowave_plugin_host::Format::AudioUnit,
+            bypass: false,
+            state: vec![4, 5, 6],
+            latency: 0,
+            parameters: Vec::new(),
+        });
+        let (doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0]
+                .hosted_instrument
+                .as_ref()
+                .map(|h| h.plugin_key.as_str()),
+            Some("au:61756D7553675854566D6241")
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].hosted_instrument, p.tracks[0].hosted_instrument);
+        // The document field defaults to none, so older projects open without an instrument.
+        assert!(prowave_project::TrackDoc::default()
+            .hosted_instrument
+            .is_none());
+    }
+
+    #[test]
+    fn a_hosted_plug_in_is_saved_with_its_state() {
+        let mut p = Project::empty();
+        p.master_hosted = Some(crate::model::HostedInsert {
+            key: "au:AUPK".into(),
+            name: "Peak Limiter".into(),
+            vendor: "Apple".into(),
+            format: prowave_plugin_host::Format::AudioUnit,
+            bypass: true,
+            state: vec![9, 8, 7, 6],
+            latency: 0,
+            parameters: Vec::new(),
+        });
+        let (doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.master_hosted.as_ref().map(|h| h.plugin_key.as_str()),
+            Some("au:AUPK")
+        );
+        assert_eq!(
+            doc.master_hosted.as_ref().map(|h| h.format.as_str()),
+            Some("au")
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.master_hosted, p.master_hosted);
+        assert_eq!(
+            q.master_hosted.as_ref().map(|h| h.state.as_slice()),
+            Some([9, 8, 7, 6].as_slice())
+        );
+
+        // Files from before hosted plug-ins open with none.
+        let (old, _) = from_doc(
+            &ProjectDoc::default(),
+            Path::new("."),
+            &egui::Context::default(),
+        );
+        assert!(old.master_hosted.is_none());
     }
 
     #[test]

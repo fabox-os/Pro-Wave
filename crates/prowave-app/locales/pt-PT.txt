@@ -799,4 +799,5 @@ Redo {} = Refazer {}
 Nothing to undo yet = Ainda não há nada para desfazer
 Send {} = Envio {}
 Disk streaming load: {}% = Carga de streaming do disco: {}%
+Plug-in Manager… = Gestor de plug-ins…
 No plug-ins match = Nenhum plug-in corresponde

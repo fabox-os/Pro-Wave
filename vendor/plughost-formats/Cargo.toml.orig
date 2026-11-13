@@ -1,0 +1,161 @@
+[package]
+name = "plughost-formats"
+description = "In-process VST3, Audio Unit, and CLAP hosting for plughost"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+documentation = "https://docs.rs/plughost-formats"
+publish = true
+include = ["/src/**", "/examples/**", "/Cargo.toml", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+keywords = ["audio", "plugin", "vst3", "clap", "audio-unit"]
+categories = ["multimedia::audio"]
+
+[package.metadata.docs.rs]
+default-target = "aarch64-apple-darwin"
+targets = ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
+
+[lints]
+workspace = true
+
+[features]
+default = ["vst3", "au", "clap"]
+# Marks plugin calls and host callbacks for the helper's real-time audit build; not for shipping.
+realtime-audit = ["plughost-core/realtime-audit"]
+vst3 = ["dep:vst3"]
+clap = ["dep:clack-host", "dep:clack-extensions", "dep:clap-sys", "dep:walkdir"]
+# Audio Units, macOS only.
+au = [
+    "dep:block2",
+    "dep:objc2",
+    "dep:objc2-app-kit",
+    "dep:objc2-audio-toolbox",
+    "dep:objc2-avf-audio",
+    "dep:objc2-core-audio-kit",
+    "dep:objc2-core-audio-types",
+    "dep:objc2-foundation",
+]
+
+# Tests and the example load fixtures of these formats.
+[[example]]
+name = "check"
+required-features = ["vst3", "clap", "au"]
+
+[[test]]
+name = "au"
+required-features = ["au"]
+
+[[test]]
+name = "au_buffers"
+required-features = ["au"]
+
+[[test]]
+name = "au_buses"
+required-features = ["au"]
+
+[[test]]
+name = "au_editor"
+required-features = ["au"]
+harness = false
+
+[[test]]
+name = "au_midi_output"
+required-features = ["au"]
+
+[[test]]
+name = "au_state"
+required-features = ["au"]
+
+[[test]]
+name = "au_v2"
+required-features = ["au"]
+
+[[test]]
+name = "clap"
+required-features = ["clap"]
+
+[[test]]
+name = "clap_audio"
+required-features = ["clap"]
+
+[[test]]
+name = "clap_buffers"
+required-features = ["clap"]
+
+[[test]]
+name = "clap_events"
+required-features = ["clap"]
+
+[[test]]
+name = "clap_lifecycle"
+required-features = ["clap"]
+
+[[test]]
+name = "clap_presets"
+required-features = ["clap"]
+
+[[test]]
+name = "parameter_events"
+required-features = ["vst3", "clap"]
+
+[[test]]
+name = "state_size"
+required-features = ["vst3", "clap"]
+
+[[test]]
+name = "vst3"
+required-features = ["vst3"]
+
+[[test]]
+name = "vst3_buffers"
+required-features = ["vst3"]
+
+[dependencies]
+clack-extensions = { workspace = true, optional = true, features = [
+    "ambisonic",
+    "audio-ports",
+    "audio-ports-config",
+    "audio-ports-activation",
+    "clack-host",
+    "configurable-audio-ports",
+    "gui",
+    "latency",
+    "log",
+    "note-ports",
+    "params",
+    "preset-discovery",
+    "render",
+    "state",
+    "state-context",
+    "surround",
+    "tail",
+    "thread-check",
+    "timer",
+] }
+clack-host = { workspace = true, optional = true }
+clap-sys = { workspace = true, optional = true }
+plughost-core.workspace = true
+vst3 = { workspace = true, optional = true }
+walkdir = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { workspace = true, optional = true }
+objc2 = { workspace = true, optional = true }
+objc2-app-kit = { workspace = true, optional = true, features = ["NSView", "NSViewController", "NSResponder"] }
+objc2-audio-toolbox = { workspace = true, optional = true }
+objc2-avf-audio = { workspace = true, optional = true }
+objc2-core-audio-kit = { workspace = true, optional = true }
+objc2-core-audio-types = { workspace = true, optional = true }
+objc2-core-foundation.workspace = true
+objc2-foundation = { workspace = true, optional = true, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSPropertyList", "NSString", "NSValue", "NSNotification", "NSOperation", "block2"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+libloading.workspace = true

@@ -7,7 +7,7 @@
 //! added, moved and removed and the stretches between them are bent.
 use crate::i18n::{tr, trf};
 use crate::mixer::{db_to_frac, frac_to_db};
-use crate::model::{AutoMode, AutoPoint, AutoTarget, Automation, Project, Track};
+use crate::model::{AutoMode, AutoPoint, AutoTarget, Automation, Project, Track, HOSTED_SLOT};
 use crate::UiState;
 use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Shape, Stroke, StrokeKind, Ui};
 use prowave_engine::curve_shape;
@@ -32,20 +32,32 @@ pub struct AutoEditor {
     drag: Option<Drag>,
 }
 
+/// The hosted plug-in's parameter `param`, when `slot` is the hosted virtual slot.
+fn hosted_param(t: &Track, slot: u8, param: u8) -> Option<&crate::model::HostedParam> {
+    if slot != HOSTED_SLOT {
+        return None;
+    }
+    t.hosted.as_ref()?.parameters.get(param as usize)
+}
+
 /// The value of a control in its lane's units: dB, pan, or for an effect parameter its
 /// position 0..=1 along its range.
 fn current(t: &Track, target: AutoTarget) -> f32 {
     match target {
         AutoTarget::Volume => t.volume_db,
         AutoTarget::Pan => t.pan,
-        AutoTarget::Fx { slot, param } => t
-            .inserts
-            .get(slot as usize)
-            .and_then(|i| {
-                let info = i.kind.params().get(param as usize)?;
-                Some(info.to_norm(i.params[param as usize]))
-            })
-            .unwrap_or(0.0),
+        AutoTarget::Fx { slot, param } => {
+            if let Some(parameter) = hosted_param(t, slot, param) {
+                return parameter.value;
+            }
+            t.inserts
+                .get(slot as usize)
+                .and_then(|i| {
+                    let info = i.kind.params().get(param as usize)?;
+                    Some(info.to_norm(i.params[param as usize]))
+                })
+                .unwrap_or(0.0)
+        }
         AutoTarget::Send { slot } => t.sends.get(slot as usize).map_or(0.0, |s| s.level),
     }
 }
@@ -54,11 +66,15 @@ fn current(t: &Track, target: AutoTarget) -> f32 {
 /// its value in dB, Hz, ms...).
 pub fn natural(t: &Track, target: AutoTarget, v: f32) -> f32 {
     match target {
-        AutoTarget::Fx { slot, param } => t
-            .inserts
-            .get(slot as usize)
-            .and_then(|i| i.kind.params().get(param as usize))
-            .map_or(v, |info| info.from_norm(v)),
+        AutoTarget::Fx { slot, param } => {
+            if hosted_param(t, slot, param).is_some() {
+                return v;
+            }
+            t.inserts
+                .get(slot as usize)
+                .and_then(|i| i.kind.params().get(param as usize))
+                .map_or(v, |info| info.from_norm(v))
+        }
         _ => v,
     }
 }
@@ -117,7 +133,15 @@ fn set_control(t: &mut Track, target: AutoTarget, value: f32) {
         AutoTarget::Volume => t.volume_db = value.clamp(-60.0, 6.0),
         AutoTarget::Pan => t.pan = value.clamp(-1.0, 1.0),
         AutoTarget::Fx { slot, param } => {
-            if let Some(ins) = t.inserts.get_mut(slot as usize) {
+            if slot == HOSTED_SLOT {
+                if let Some(saved) = t.hosted.as_mut() {
+                    if let Some(parameter) = saved.parameters.get_mut(param as usize) {
+                        if value.is_finite() {
+                            parameter.value = value.clamp(0.0, 1.0);
+                        }
+                    }
+                }
+            } else if let Some(ins) = t.inserts.get_mut(slot as usize) {
                 if let Some(info) = ins.kind.params().get(param as usize) {
                     if value.is_finite() {
                         ins.params[param as usize] = value.clamp(info.min, info.max);
@@ -171,6 +195,16 @@ pub fn lane_label(t: &Track, target: AutoTarget) -> String {
         AutoTarget::Volume => tr("Volume").to_string(),
         AutoTarget::Pan => tr("Pan").to_string(),
         AutoTarget::Fx { slot, param } => {
+            if slot == HOSTED_SLOT {
+                if let Some(parameter) = hosted_param(t, slot, param) {
+                    let name = t
+                        .hosted
+                        .as_ref()
+                        .map_or("Hosted", |saved| saved.name.as_str());
+                    return format!("{name} · {}", parameter.title);
+                }
+                return "?".to_string();
+            }
             match t
                 .inserts
                 .get(slot as usize)
@@ -202,6 +236,9 @@ pub fn value_text(t: &Track, target: AutoTarget, v: f32) -> String {
             }
         }
         AutoTarget::Fx { slot, param } => {
+            if hosted_param(t, slot, param).is_some() {
+                return format!("{:.0} %", v.clamp(0.0, 1.0) * 100.0);
+            }
             let Some(info) = t
                 .inserts
                 .get(slot as usize)
@@ -347,6 +384,18 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
                                     slot: slot as u8,
                                     param: k as u8,
                                 });
+                            }
+                        }
+                        if let Some(saved) = &t.hosted {
+                            for k in 0..saved.parameters.len() {
+                                // Automation parameters are u8 indexes; higher parameters can
+                                // be controlled but not automated yet.
+                                if let Ok(param) = u8::try_from(k) {
+                                    choices.push(AutoTarget::Fx {
+                                        slot: HOSTED_SLOT,
+                                        param,
+                                    });
+                                }
                             }
                         }
                         for (slot, send) in t.sends.iter().enumerate() {

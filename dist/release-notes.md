@@ -16,6 +16,8 @@
 
 Linux packages need glibc 2.31 or newer (Ubuntu 20.04+, Debian 11+, Fedora 32+) and ALSA for sound. Details, required libraries and troubleshooting are in `README.txt` inside the tarball and in [`dist/README-linux.txt`](https://github.com/fabox-os/Pro-Wave/blob/@TAG@/dist/README-linux.txt).
 
+**Plug-ins:** the macOS Apple Silicon and Windows x64 packages include the sandboxed plug-in host (`prowave-plugin-helper`) and load VST3, Audio Unit and CLAP plug-ins on the Stereo Out. Linux and Intel Macs do not host plug-ins yet.
+
 ## Not signed yet
 
 None of the files is code signed, so your system will warn before running them:

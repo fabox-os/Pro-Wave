@@ -214,6 +214,7 @@ const MIX: &[&str] = &[
     "-",
     "Group",
     "Edit Groups…",
+    "Plug-in Manager…",
     "-",
     "Pre-Fader Metering",
     "Mastering",
@@ -539,6 +540,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
             .any(|t| t.regions.iter().any(|r| !r.notes.is_empty())),
         // Edit > Undo History…: the history window (empty until the first edit).
         "Undo History…" => true,
+        // Mix > Plug-in Manager…: the hosted VST3/AU/CLAP browser.
+        "Plug-in Manager…" => true,
         // File > Import > Audio File…: any audio file the engine can read.
         "Audio File…" => true,
         // File > Import > Other Projects…: imports a GarageBand bundle's audio.
@@ -812,6 +815,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             p.recording = true;
         }
         "Undo History…" => s.show_undo_history = true,
+        "Plug-in Manager…" => s.plugin_manager = true,
         "Redo" => s.undo_cmd = Some(UndoCmd::Redo),
         "Delete Undo History" => s.undo_cmd = Some(UndoCmd::Clear),
         "Delete" => crate::tracks_area::delete_selected(p, &mut s.tracks),
@@ -1236,6 +1240,7 @@ mod tests {
                     s.bounce_cmd,
                     s.export_track_cmd,
                     s.bounce_region_cmd,
+                    s.plugin_manager,
                     s.bounce_join_cmd,
                     s.mixer.auto_editor.track,
                     // (a tuple holds twelve at most to print)

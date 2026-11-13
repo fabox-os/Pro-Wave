@@ -1,0 +1,15 @@
+[package]
+name = "prowave-plugin-host"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: sandboxed VST3, Audio Unit and CLAP plug-in hosting"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+arrayvec = "0.7"
+prowave-engine = { version = "0.1.0", path = "../prowave-engine" }
+
+# plughost runs plug-ins in a helper process and supports macOS on Apple Silicon and Windows
+# x64 only. Other targets build the stubs in `unsupported.rs`.
+[target.'cfg(any(all(target_os = "macos", target_arch = "aarch64"), all(target_os = "windows", target_arch = "x86_64")))'.dependencies]
+plughost = "=0.2.3"

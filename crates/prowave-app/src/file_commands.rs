@@ -138,7 +138,7 @@ impl App {
         );
         if cmd == FileCmd::Revert {
             self.request_revert();
-        } else if discards && content(&self.project) != self.saved {
+        } else if discards && (self.plugins.dirty() || content(&self.project) != self.saved) {
             self.ui.ask_save = Some(cmd);
         } else {
             self.do_file_cmd(cmd, ctx);
@@ -267,7 +267,7 @@ impl App {
         if self.path.is_none() {
             self.ui.status =
                 Some(tr("nothing to revert to: the project has not been saved yet").into());
-        } else if content(&self.project) == self.saved {
+        } else if !self.plugins.dirty() && content(&self.project) == self.saved {
             self.ui.status = Some(tr("no unsaved changes to revert").into());
         } else {
             self.ui.ask_revert = true;
@@ -334,6 +334,7 @@ impl App {
     /// Writes the project to `path` without making it the current file: the title, the unsaved
     /// state and Open Recent stay as they were.
     pub fn save_copy_to(&mut self, path: &Path) -> bool {
+        self.plugins.snapshot(&mut self.project);
         match project_io::save_project(&self.project, path) {
             Ok(path) => {
                 self.ui.status = Some(trf("saved a copy: {}", &[&path.display()]));
@@ -347,6 +348,7 @@ impl App {
     }
 
     pub fn save_to(&mut self, path: &Path) -> bool {
+        self.plugins.snapshot(&mut self.project);
         match project_io::save_project(&self.project, path) {
             Ok(path) => {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -377,6 +379,9 @@ impl App {
         self.history.reset(&self.project);
         // A project is open now, so the Project Chooser has done its job.
         self.ui.chooser = None;
+        // Load the project's hosted plug-in (or wait for the first scan).
+        let sync = self.sync.as_mut();
+        self.plugins.restore(&mut self.project, sync, &mut self.ui);
     }
 }
 
@@ -441,6 +446,7 @@ mod tests {
             shots: None,
             shot: None,
             shot_exit: Default::default(),
+            fx_shots: None,
             frames_since_record: 0,
             midi: None,
             midi_out: None,
@@ -449,6 +455,7 @@ mod tests {
             clock_follow: crate::clock_follow::ClockFollower::default(),
             chase: crate::mtc_in::Chase::default(),
             updater: crate::updater::Updater::new(),
+            plugins: Default::default(),
         }
     }
 

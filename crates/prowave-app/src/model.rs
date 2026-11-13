@@ -239,6 +239,60 @@ impl Insert {
     }
 }
 
+/// A second-party plug-in (VST3, Audio Unit or CLAP) on the Stereo Out strip.
+///
+/// Virtual insert slot used by automation lanes for a track's hosted plug-in. The built-in
+/// inserts use slots 0..MAX_INSERTS; the engine sends this slot to the hosted stage.
+pub const HOSTED_SLOT: u8 = u8::MAX;
+
+/// The plug-in itself lives in [`crate::plugins::Plugins`] (its control chains) and in the
+/// engine (its realtime adapter); this is the part a project file keeps: what to load, whether
+/// it is bypassed, and the plug-in's own state blob.
+/// One parameter of a hosted plug-in, as the Automation editor needs it. Values are
+/// normalized to 0..=1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostedParam {
+    /// The plug-in's native parameter ID.
+    pub id: u64,
+    pub title: String,
+    pub default: f32,
+    /// The current value, when the plug-in reports one.
+    pub value: f32,
+    pub steps: u32,
+    pub discrete: bool,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct HostedInsert {
+    /// `format:class-id`, the key `prowave_plugin_host::Catalog::instantiate` takes.
+    pub key: String,
+    pub name: String,
+    pub vendor: String,
+    pub format: prowave_plugin_host::Format,
+    pub bypass: bool,
+    /// The plug-in's state (`PluginState::to_bytes`), or empty when it would not save.
+    pub state: Vec<u8>,
+    /// The host adapter's latency in frames (not saved; measured when the plug-in loads).
+    pub latency: u32,
+    /// The parameters the Automation editor can address (not saved; read when it loads).
+    pub parameters: Vec<HostedParam>,
+}
+
+impl HostedInsert {
+    pub fn new(plugin: &prowave_plugin_host::PluginDescriptor, state: Vec<u8>) -> Self {
+        Self {
+            key: plugin.key.clone(),
+            name: plugin.name.clone(),
+            vendor: plugin.vendor.clone(),
+            format: plugin.format,
+            bypass: false,
+            state,
+            latency: 0,
+            parameters: Vec::new(),
+        }
+    }
+}
+
 /// The effects a Library patch names (names that are no effect here are left out).
 pub fn inserts_from_names(names: &[&str]) -> Vec<Insert> {
     names
@@ -625,6 +679,10 @@ pub struct Track {
     pub volume_db: f32,
     pub pan: f32,
     pub inserts: Vec<Insert>,
+    /// A hosted VST3/Audio Unit/CLAP plug-in after the built-in inserts.
+    pub hosted: Option<HostedInsert>,
+    /// A hosted instrument (VST3, Audio Unit or CLAP) on the track.
+    pub hosted_instrument: Option<HostedInsert>,
     pub instrument: Option<&'static str>,
     pub regions: Vec<Region>,
     pub params: TrackParams,
@@ -701,6 +759,8 @@ impl Track {
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
+            hosted: None,
+            hosted_instrument: None,
             instrument,
             regions: vec![],
             params: TrackParams::default(),
@@ -865,6 +925,8 @@ pub struct Project {
     pub master_vol: f32,
     /// The effects on the Stereo Out strip, in order (they process the whole mix).
     pub master_inserts: Vec<Insert>,
+    /// A hosted VST3/AU/CLAP plug-in after the built-in master effects.
+    pub master_hosted: Option<HostedInsert>,
     /// Mix groups; a track's `group` is an index into this list.
     pub groups: Vec<MixGroup>,
     /// Bumped whenever tracks/regions change so the engine song is rebuilt.
@@ -917,6 +979,8 @@ impl Project {
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
+            hosted: None,
+            hosted_instrument: None,
             instrument: Some("Sampler"),
             regions: vec![],
             params: TrackParams::default(),
@@ -966,6 +1030,8 @@ impl Project {
             volume_db: vol,
             pan: 0.0,
             inserts: inserts_from_names(&ins),
+            hosted: None,
+            hosted_instrument: None,
             instrument: inst,
             regions: vec![Region {
                 name: name.into(),
@@ -1085,6 +1151,7 @@ impl Project {
             selected_track: 0,
             master_vol: 0.8,
             master_inserts: Vec::new(),
+            master_hosted: None,
             groups: Vec::new(),
             song_rev: 0,
             show_master_track: false,
