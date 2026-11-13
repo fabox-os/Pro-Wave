@@ -108,6 +108,7 @@ cargo run --release -p prowave-app -- song.prowave   # open a project
 cargo run --release -p prowave-app -- drums.wav      # new project, import audio files
 cargo run --release -p prowave-app -- --play         # start playing right away
 cargo run --release -p prowave-app -- --piano        # open the Piano Roll on start
+cargo run --release -p prowave-app -- --screenshot shot.png   # save one picture of the window, then exit
 cargo run -p prowave-engine --example beep           # 440 Hz test tone, reports output latency
 ```
 
@@ -150,6 +151,9 @@ not a Rust tier-1 target; a report from a build there is welcome.
 | [`crates/prowave-engine`](crates/prowave-engine) | Real-time audio engine: transport, tempo map, synth, mixer, disk streaming, cpal output |
 | [`crates/prowave-app`](crates/prowave-app) | The desktop app (egui): every view and editor |
 | [`crates/prowave-project`](crates/prowave-project) | The `.prowave` project file format |
+| [`crates/prowave-hydrogen-import`](crates/prowave-hydrogen-import) | Hydrogen `.h2song` session reading: kit, instruments, patterns and sequence |
+| [`crates/prowave-exs`](crates/prowave-exs) | EXS24 `.exs` sampler instrument reading: zones, groups, samples, loops and round-robin |
+| [`crates/prowave-sfz`](crates/prowave-sfz) | SFZ sampler instrument reading: regions, groups, sample paths and loops |
 | [`crates/prowave-logicx-import`](crates/prowave-logicx-import) | Logic Pro `.logicx` bundles: save shapes, active alternative, metadata plists and the ProjectData envelope |
 | [`xtask`](xtask) | `cargo xtask check`, `wasm-check` and `rt-check` |
 | [`dist/linux`](dist/linux) | Linux desktop entry, icon, MIME type, `install.sh` and the .deb, .rpm and Flatpak recipes |

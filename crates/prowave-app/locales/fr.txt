@@ -799,3 +799,4 @@ Redo {} = Rétablir {}
 Nothing to undo yet = Rien à annuler pour le moment
 Send {} = Départ {}
 Disk streaming load: {}% = Charge du streaming disque : {}%
+No plug-ins match = Aucun plug-in ne correspond

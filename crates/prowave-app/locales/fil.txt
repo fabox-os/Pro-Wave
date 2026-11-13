@@ -799,3 +799,4 @@ Redo {} = I-redo {}
 Nothing to undo yet = Wala pang maa-undo
 Send {} = Padala {}
 Disk streaming load: {}% = Load ng disk streaming: {}%
+No plug-ins match = Walang tugmang plug-in

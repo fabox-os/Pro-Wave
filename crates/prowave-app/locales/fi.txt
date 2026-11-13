@@ -799,3 +799,4 @@ Redo {} = Tee uudelleen {}
 Nothing to undo yet = Ei vielä kumottavaa
 Send {} = Lähetys {}
 Disk streaming load: {}% = Levyn suoratoiston kuormitus: {}%
+No plug-ins match = Yksikään liitännäinen ei vastaa
