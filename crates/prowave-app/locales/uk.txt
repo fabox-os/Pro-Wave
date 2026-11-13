@@ -799,4 +799,5 @@ Redo {} = Повторити {}
 Nothing to undo yet = Поки нічого скасовувати
 Send {} = Надсилання {}
 Disk streaming load: {}% = Навантаження дискового потоку: {}%
+Plug-in Manager… = Менеджер плагінів…
 No plug-ins match = Жоден плагін не відповідає

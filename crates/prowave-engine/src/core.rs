@@ -450,6 +450,41 @@ pub enum Command {
     /// The effects of the master bus (Stereo Out): they process the whole mix before the master
     /// fader. The old chain goes back through the garbage queue.
     SetMasterInserts(Box<Chain>),
+    /// A hosted plug-in (VST3, Audio Unit or CLAP) on the master bus, made off the audio thread.
+    /// `None` removes it; the old adapter goes back through the garbage queue.
+    SetMasterHosted(Option<Box<dyn crate::hosted::HostedEffect>>),
+    /// Bypass the hosted master plug-in without unloading it.
+    SetMasterHostedBypass(bool),
+    /// A hosted plug-in in `slot` of `track`'s insert section (`None` clears the slot). The old
+    /// one goes back through the garbage queue.
+    SetTrackHosted {
+        track: u16,
+        slot: u8,
+        effect: Option<Box<dyn crate::hosted::HostedEffect>>,
+    },
+    /// Bypass slot `slot` of a track's hosted plug-ins.
+    SetTrackHostedBypass {
+        track: u16,
+        slot: u8,
+        bypass: bool,
+    },
+    /// A hosted instrument (VST3, Audio Unit or CLAP) on `track` (`None` clears it). The old
+    /// adapter goes back through the garbage queue.
+    SetTrackHostedInstrument {
+        track: u16,
+        instrument: Option<Box<dyn crate::hosted::HostedInstrument>>,
+    },
+    /// Remove every hosted instrument, for a project replace. The adapters go back through the
+    /// garbage queue.
+    ClearHostedInstruments,
+    /// Bypass a track's hosted instrument without unloading it.
+    SetTrackHostedInstrumentBypass {
+        track: u16,
+        bypass: bool,
+    },
+    /// Remove every hosted plug-in (all tracks and the master), for a project replace. The
+    /// adapters go back through the garbage queue.
+    ClearHosted,
     /// Space Designer: a new impulse response for the effect in `slot` of `track` (made with
     /// [`Convolver::for_params`]); the old one goes back through the garbage queue.
     SetConvolver {
@@ -501,6 +536,9 @@ impl Command {
                 | Self::SetInserts { .. }
                 | Self::SetConvolver { .. }
                 | Self::SetMasterInserts(_)
+                | Self::SetMasterHosted(_)
+                | Self::SetTrackHosted { .. }
+                | Self::ClearHosted
                 | Self::SetPdc { .. }
                 | Self::SetAutomation(_)
                 | Self::SetInput(_)
@@ -533,6 +571,10 @@ pub enum Garbage {
     Controls(Vec<ControlEvent>),
     TempoMap(Box<TempoMap>),
     Chain(Box<Chain>),
+    /// A replaced hosted master plug-in, dropped on the UI thread.
+    Hosted(Option<Box<dyn crate::hosted::HostedEffect>>),
+    /// A replaced hosted instrument, dropped on the UI thread.
+    HostedInstrument(Option<Box<dyn crate::hosted::HostedInstrument>>),
     Convolver(Box<crate::convolver::Convolver>),
     Pdc(Box<Pdc>),
     Automation(Vec<AutoLane>),
@@ -732,6 +774,24 @@ struct SfNote {
     released: bool,
 }
 
+/// A note started by a hosted instrument, so it can be ended at its end beat or on note-off.
+#[derive(Clone, Copy, Debug, Default)]
+struct HostedNote {
+    active: bool,
+    track: u16,
+    channel: u8,
+    pitch: u8,
+    /// Timeline notes end at this beat; live notes end on their `NoteOff`.
+    end_beat: f64,
+    live: bool,
+    /// Safety net so a live note whose `NoteOff` never came still ends.
+    live_left: u32,
+    released: bool,
+}
+
+/// The most hosted-instrument notes sounding at once across all tracks.
+const MAX_HOSTED_NOTES: usize = 128;
+
 /// The app's halves of the queues a core publishes to.
 pub(crate) struct Readers {
     pub state: Option<StateReader>,
@@ -800,6 +860,17 @@ pub struct EngineCore {
     chains: Vec<Option<Box<Chain>>>,
     /// The effects of the master bus.
     master_chain: Option<Box<Chain>>,
+    /// A hosted plug-in after the master effects, before the master fader.
+    master_hosted: Option<Box<dyn crate::hosted::HostedEffect>>,
+    /// Hosted plug-ins per track, after the built-in insert chain and before delay
+    /// compensation. Slots may be sparse.
+    track_hosted: Vec<Vec<Option<Box<dyn crate::hosted::HostedEffect>>>>,
+    /// One hosted instrument per track (a VST3, Audio Unit or CLAP synth).
+    track_instrument: Vec<Option<Box<dyn crate::hosted::HostedInstrument>>>,
+    /// The tracks that have a hosted instrument, for the per-sample render.
+    hosted_tracks: Vec<u16>,
+    /// Notes started by hosted instruments, so their note-offs are sent when they end.
+    hosted_notes: [HostedNote; MAX_HOSTED_NOTES],
     /// Delay compensation per strip.
     pdc: Vec<Option<Box<Pdc>>>,
     routes: Vec<Route>,
@@ -948,6 +1019,13 @@ impl EngineCore {
             sf_notes: [SfNote::default(); MAX_SF_NOTES],
             chains: (0..MAX_TRACKS).map(|_| None).collect(),
             master_chain: None,
+            master_hosted: None,
+            track_hosted: (0..MAX_TRACKS)
+                .map(|_| (0..crate::fx::MAX_INSERTS).map(|_| None).collect())
+                .collect(),
+            track_instrument: (0..MAX_TRACKS).map(|_| None).collect(),
+            hosted_tracks: Vec::with_capacity(MAX_TRACKS),
+            hosted_notes: [HostedNote::default(); MAX_HOSTED_NOTES],
             pdc: (0..MAX_TRACKS).map(|_| None).collect(),
             routes: vec![Route::default(); MAX_TRACKS],
             complex: Vec::with_capacity(MAX_TRACKS),
@@ -1273,11 +1351,12 @@ impl EngineCore {
         for i in 0..MAX_TRACKS {
             let has_chain = self.chains[i].as_ref().is_some_and(|c| !c.fx.is_empty());
             let has_pdc = self.pdc[i].as_ref().is_some_and(|p| !p.is_empty());
+            let has_hosted = self.track_hosted[i].iter().any(Option::is_some);
             let to_bus = self.routes[i].output > 0;
             self.strip_kind[i] = if self.routes[i].bus_in > 0 {
                 self.aux.push(i as u16);
                 2
-            } else if has_chain || has_pdc || to_bus || self.routes[i].has_sends() {
+            } else if has_chain || has_pdc || has_hosted || to_bus || self.routes[i].has_sends() {
                 self.complex.push(i as u16);
                 1
             } else {
@@ -1313,7 +1392,18 @@ impl EngineCore {
                     }
                 }
                 AutoTarget::Fx { slot, param } => {
-                    if let Some(chain) = self.chains[t].as_mut() {
+                    // The hosted plug-in uses a virtual slot past the built-in inserts (see
+                    // `prowave_app::model::HOSTED_SLOT`).
+                    if usize::from(slot) >= crate::fx::MAX_INSERTS {
+                        if let Some(effect) = self
+                            .track_hosted
+                            .get_mut(t)
+                            .and_then(|slots| slots.first_mut())
+                            .and_then(Option::as_mut)
+                        {
+                            effect.set_param_norm(param as usize, v);
+                        }
+                    } else if let Some(chain) = self.chains[t].as_mut() {
                         chain.set_param_norm(slot as usize, param as usize, v);
                     }
                 }
@@ -1353,6 +1443,11 @@ impl EngineCore {
         let (mut xl, mut xr) = (xl as f32, xr as f32);
         if let Some(chain) = self.chains[t].as_mut() {
             (xl, xr) = chain.process(xl, xr);
+        }
+        if let Some(slots) = self.track_hosted.get_mut(t) {
+            for effect in slots.iter_mut().flatten() {
+                (xl, xr) = effect.process(xl, xr);
+            }
         }
         if let Some(pdc) = self.pdc[t].as_mut() {
             (xl, xr) = pdc.delay_before(xl, xr);
@@ -1554,7 +1649,11 @@ impl EngineCore {
                     let b = self.start_beat;
                     self.seek(b);
                 }
-                Command::SetPosition { beat } => self.seek(beat),
+                Command::SetPosition { beat } => {
+                    self.seek(beat);
+                    // A hosted instrument must not hold notes from before the jump.
+                    self.hosted_all_notes_off();
+                }
                 Command::SetTempoMap(map) => {
                     let old = std::mem::replace(&mut self.tempo_map, map);
                     let _ = self.trash.push(Garbage::TempoMap(old));
@@ -1688,6 +1787,105 @@ impl EngineCore {
                         let _ = self.trash.push(Garbage::Chain(old));
                     }
                 }
+                Command::SetMasterHosted(hosted) => {
+                    let old = std::mem::replace(&mut self.master_hosted, hosted);
+                    if let Some(old) = old {
+                        let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                    }
+                }
+                Command::SetMasterHostedBypass(bypass) => {
+                    if let Some(hosted) = self.master_hosted.as_mut() {
+                        hosted.set_bypass(bypass);
+                    }
+                }
+                Command::SetTrackHosted {
+                    track,
+                    slot,
+                    effect,
+                } => {
+                    let t = track as usize;
+                    if t < MAX_TRACKS {
+                        if let Some(slot) = self.track_hosted[t].get_mut(slot as usize) {
+                            if let Some(old) = std::mem::replace(slot, effect) {
+                                let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                            }
+                        } else if let Some(old) = effect {
+                            let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                        }
+                        self.sort_strips();
+                    } else if let Some(old) = effect {
+                        let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                    }
+                }
+                Command::SetTrackHostedBypass {
+                    track,
+                    slot,
+                    bypass,
+                } => {
+                    if let Some(effect) = self
+                        .track_hosted
+                        .get_mut(track as usize)
+                        .and_then(|slots| slots.get_mut(slot as usize))
+                        .and_then(Option::as_mut)
+                    {
+                        effect.set_bypass(bypass);
+                    }
+                }
+                Command::ClearHosted => {
+                    if let Some(old) = self.master_hosted.take() {
+                        let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                    }
+                    for slots in &mut self.track_hosted {
+                        for slot in slots.iter_mut() {
+                            if let Some(old) = slot.take() {
+                                let _ = self.trash.push(Garbage::Hosted(Some(old)));
+                            }
+                        }
+                    }
+                    self.sort_strips();
+                }
+                Command::SetTrackHostedInstrument { track, instrument } => {
+                    let t = track as usize;
+                    if t < MAX_TRACKS {
+                        if let Some(mut old) =
+                            std::mem::replace(&mut self.track_instrument[t], instrument)
+                        {
+                            old.all_notes_off();
+                            let _ = self.trash.push(Garbage::HostedInstrument(Some(old)));
+                        }
+                        for note in self
+                            .hosted_notes
+                            .iter_mut()
+                            .filter(|note| note.active && note.track == track)
+                        {
+                            note.active = false;
+                        }
+                        self.rebuild_hosted_tracks();
+                    } else if let Some(old) = instrument {
+                        let _ = self.trash.push(Garbage::HostedInstrument(Some(old)));
+                    }
+                }
+                Command::ClearHostedInstruments => {
+                    for slot in &mut self.track_instrument {
+                        if let Some(mut old) = slot.take() {
+                            old.all_notes_off();
+                            let _ = self.trash.push(Garbage::HostedInstrument(Some(old)));
+                        }
+                    }
+                    for note in self.hosted_notes.iter_mut() {
+                        note.active = false;
+                    }
+                    self.rebuild_hosted_tracks();
+                }
+                Command::SetTrackHostedInstrumentBypass { track, bypass } => {
+                    if let Some(instrument) = self
+                        .track_instrument
+                        .get_mut(track as usize)
+                        .and_then(Option::as_mut)
+                    {
+                        instrument.set_bypass(bypass);
+                    }
+                }
                 Command::SetConvolver { track, slot, conv } => {
                     let chain = if track == MASTER_TRACK {
                         self.master_chain.as_mut()
@@ -1798,6 +1996,11 @@ impl EngineCore {
             self.ext_note_on(n, false);
             return 0;
         }
+        let track = n.track.min(MAX_TRACKS as u16 - 1);
+        if self.track_instrument[track as usize].is_some() {
+            self.hosted_note_on(n, false);
+            return 0;
+        }
         let sf_track = n.track.min(MAX_TRACKS as u16 - 1);
         if self.sf.get(sf_track as usize).is_some_and(Option::is_some) {
             self.sf_note_on(sf_track, n.pitch, n.vel, n.end_beat, false);
@@ -1890,6 +2093,19 @@ impl EngineCore {
             return;
         }
         let sf_track = track.min(MAX_TRACKS as u16 - 1);
+        if self.track_instrument[sf_track as usize].is_some() {
+            self.hosted_note_on(
+                NoteEvent {
+                    start_beat: 0.0,
+                    end_beat: f64::MAX,
+                    pitch,
+                    vel,
+                    track: sf_track,
+                },
+                true,
+            );
+            return;
+        }
         if self.sf.get(sf_track as usize).is_some_and(Option::is_some) {
             self.sf_note_on(sf_track, pitch, vel, f64::MAX, true);
             return;
@@ -1923,6 +2139,11 @@ impl EngineCore {
             v.active && v.live && v.pitch == pitch && track.is_none_or(|t| v.track == t)
         }) {
             v.releasing = true;
+        }
+        for n in self.hosted_notes.iter_mut().filter(|n| {
+            n.active && n.live && n.pitch == pitch && track.is_none_or(|t| n.track == t)
+        }) {
+            n.released = true;
         }
         for n in self.sf_notes.iter_mut().filter(|n| {
             n.active && n.live && n.pitch == pitch && track.is_none_or(|t| n.track == t)
@@ -1996,6 +2217,85 @@ impl EngineCore {
                     self.touched[t] = true;
                     self.dirty.push(t as u16);
                 }
+            }
+        }
+    }
+
+    /// Starts a note on the hosted instrument of the note's track.
+    fn hosted_note_on(&mut self, n: NoteEvent, live: bool) {
+        let Some(slot) = self.hosted_notes.iter().position(|note| !note.active) else {
+            return;
+        };
+        let track = n.track.min(MAX_TRACKS as u16 - 1);
+        if let Some(Some(instrument)) = self.track_instrument.get_mut(track as usize) {
+            instrument.note_on(0, n.pitch, n.vel);
+        }
+        self.hosted_notes[slot] = HostedNote {
+            active: true,
+            track,
+            channel: 0,
+            pitch: n.pitch,
+            end_beat: n.end_beat,
+            live,
+            live_left: (4.0 * self.sr) as u32,
+            released: false,
+        };
+    }
+
+    /// Ends hosted-instrument notes that are due: a timeline note at its end beat (or when the
+    /// transport stops), a live note on its `NoteOff` (or after the safety time).
+    fn hosted_release_due(&mut self) {
+        for note in self.hosted_notes.iter_mut().filter(|note| note.active) {
+            let due = if note.live {
+                note.live_left = note.live_left.saturating_sub(1);
+                note.live_left == 0 || note.released
+            } else {
+                note.released || !self.playing || self.beat >= note.end_beat
+            };
+            if due {
+                note.active = false;
+                if let Some(Some(instrument)) = self.track_instrument.get_mut(note.track as usize) {
+                    instrument.note_off(note.channel, note.pitch);
+                }
+            }
+        }
+    }
+
+    /// Ends every hosted-instrument note now (a transport jump or a project replace).
+    fn hosted_all_notes_off(&mut self) {
+        for note in self.hosted_notes.iter_mut() {
+            note.active = false;
+        }
+        for instrument in self.track_instrument.iter_mut().flatten() {
+            instrument.all_notes_off();
+        }
+    }
+
+    /// Adds one frame of every hosted instrument to its track's strip.
+    fn hosted_render(&mut self) {
+        for k in 0..self.hosted_tracks.len() {
+            let t = self.hosted_tracks[k] as usize;
+            let Some(instrument) = self.track_instrument.get_mut(t).and_then(Option::as_mut) else {
+                continue;
+            };
+            let (x, y) = instrument.process();
+            if self.track_audible[t] {
+                self.in_l[t] += finite_or_zero(x) as f64;
+                self.in_r[t] += finite_or_zero(y) as f64;
+                if !self.touched[t] {
+                    self.touched[t] = true;
+                    self.dirty.push(t as u16);
+                }
+            }
+        }
+    }
+
+    /// Rebuilds the list of tracks whose instrument is rendered each sample.
+    fn rebuild_hosted_tracks(&mut self) {
+        self.hosted_tracks.clear();
+        for (track, slot) in self.track_instrument.iter().enumerate() {
+            if slot.is_some() {
+                self.hosted_tracks.push(track as u16);
             }
         }
     }
@@ -2083,6 +2383,9 @@ impl EngineCore {
             }
             if !self.sf_tracks.is_empty() {
                 self.sf_release_due();
+            }
+            if !self.hosted_tracks.is_empty() {
+                self.hosted_release_due();
             }
             for v in self.voices.iter_mut().filter(|v| v.active) {
                 if v.live {
@@ -2231,6 +2534,7 @@ impl EngineCore {
                 }
             }
             self.sf_render();
+            self.hosted_render();
             let (ml, mr) = self.mix_strips();
             l += ml;
             r += mr;
@@ -2258,6 +2562,11 @@ impl EngineCore {
                         chain.process(finite_or_zero(l as f32), finite_or_zero(r as f32));
                     (f64::from(cl), f64::from(cr))
                 };
+            }
+            // The hosted master plug-in runs after the built-in effects, still before the fader.
+            if let Some(hosted) = self.master_hosted.as_mut() {
+                let (hl, hr) = hosted.process(finite_or_zero(l as f32), finite_or_zero(r as f32));
+                (l, r) = (f64::from(hl), f64::from(hr));
             }
             let master = self.master.next() as f64;
             // `clamp` lets NaN through, so a non-finite sum becomes silence first.
@@ -4224,109 +4533,5 @@ mod tests {
             .is_ok());
         render(&mut e, 0.01);
         assert_eq!(e.pdc[3].as_ref().map(|p| p.lengths()), Some((2, 2)));
-    }
-
-    /// One-bin DFT magnitude of `samples` at `hz` (the engine's 48 kHz rate).
-    fn energy_at(samples: &[f32], hz: f32) -> f32 {
-        let (mut re, mut im) = (0.0f32, 0.0f32);
-        for (n, x) in samples.iter().enumerate() {
-            let phase = std::f32::consts::TAU * hz * n as f32 / 48_000.0;
-            re += x * phase.cos();
-            im -= x * phase.sin();
-        }
-        (re * re + im * im).sqrt() / samples.len() as f32
-    }
-
-    /// Mean absolute first difference: grows with high-frequency content (key click, noise).
-    fn roughness(samples: &[f32]) -> f32 {
-        samples.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / samples.len() as f32
-    }
-
-    fn organ(drawbars: [u8; 9]) -> SynthPatch {
-        SynthPatch {
-            voice: VoiceKind::DrawbarOrgan,
-            drawbars,
-            ..SynthPatch::default()
-        }
-    }
-
-    #[test]
-    fn drawbar_organ_plays_the_selected_harmonics() {
-        // A4: the 8' drawbar is the 440 Hz fundamental, the 16' drawbar the octave below.
-        let eight = play_note_with(organ([0, 0, 8, 0, 0, 0, 0, 0, 0]), 69, 24_000);
-        let base = energy_at(&eight, 440.0);
-        assert!(base > 0.008, "fundamental {base}");
-        assert!(energy_at(&eight, 220.0) < base * 0.1);
-        assert!(energy_at(&eight, 880.0) < base * 0.1);
-
-        let sixteen = play_note_with(organ([8, 0, 0, 0, 0, 0, 0, 0, 0]), 69, 24_000);
-        let sub = energy_at(&sixteen, 220.0);
-        assert!(sub > 0.008, "sub-octave {sub}");
-        assert!(energy_at(&sixteen, 440.0) < sub * 0.1);
-    }
-
-    #[test]
-    fn organ_percussion_decays_after_the_attack() {
-        let patch = SynthPatch {
-            percussion: 3,
-            percussion_decay: 0.1,
-            percussion_level: 1.0,
-            ..organ([0, 0, 8, 0, 0, 0, 0, 0, 0])
-        };
-        let samples = play_note_with(patch, 69, 24_000);
-        // The steady 8' drawbar has no third harmonic, so 1320 Hz is percussion only.
-        let early = energy_at(&samples[..4_800], 1_320.0);
-        let late = energy_at(&samples[19_200..], 1_320.0);
-        assert!(early > late * 5.0, "early {early}, late {late}");
-        assert!(late < early * 0.2);
-    }
-
-    #[test]
-    fn organ_key_click_is_a_short_transient() {
-        let without = play_note_with(organ([0, 0, 8, 0, 0, 0, 0, 0, 0]), 69, 24_000);
-        let patch = SynthPatch {
-            key_click: 1.0,
-            ..organ([0, 0, 8, 0, 0, 0, 0, 0, 0])
-        };
-        let with = play_note_with(patch, 69, 24_000);
-        // The click is high-frequency noise for a few milliseconds; the tone is a slow 440 Hz
-        // sine. Compare the first two milliseconds with and without the click.
-        let clicked = roughness(&with[..96]);
-        let plain = roughness(&without[..96]);
-        assert!(clicked > plain * 1.5, "clicked {clicked}, plain {plain}");
-        // And it is gone by half a second.
-        assert!(roughness(&with[19_200..]) < clicked * 0.5);
-    }
-
-    #[test]
-    fn organ_leslie_modulates_the_amplitude() {
-        fn swing(samples: &[f32]) -> f32 {
-            // Ratio of the loudest 21 ms window to the quietest, over steady tone.
-            let windows: Vec<f32> = samples[9_600..19_200]
-                .chunks(1_024)
-                .map(|w| (w.iter().map(|x| x * x).sum::<f32>() / w.len() as f32).sqrt())
-                .collect();
-            let loud = windows.iter().copied().fold(0.0f32, f32::max);
-            let quiet = windows.iter().copied().fold(f32::MAX, f32::min);
-            loud / quiet.max(1e-9)
-        }
-
-        let still = play_note_with(organ([0, 0, 8, 0, 0, 0, 0, 0, 0]), 69, 24_000);
-        let moving = play_note_with(
-            SynthPatch {
-                leslie: 2,
-                leslie_depth: 1.0,
-                ..organ([0, 0, 8, 0, 0, 0, 0, 0, 0])
-            },
-            69,
-            24_000,
-        );
-        assert!(swing(&still) < 1.1, "still {}", swing(&still));
-        assert!(
-            swing(&moving) > swing(&still) * 1.3,
-            "moving {} still {}",
-            swing(&moving),
-            swing(&still)
-        );
     }
 }

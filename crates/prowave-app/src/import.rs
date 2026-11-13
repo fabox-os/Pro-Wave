@@ -75,6 +75,8 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         volume_db: 0.0,
         pan: 0.0,
         inserts: vec![],
+        hosted: None,
+        hosted_instrument: None,
         instrument: None,
         regions: vec![Region {
             name,

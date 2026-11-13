@@ -321,6 +321,8 @@ jobs:
         run: |
           cargo build --release -p prowave-app --target aarch64-apple-darwin
           cargo build --release -p prowave-app --target x86_64-apple-darwin
+          # Plug-in hosting is Apple Silicon only; the helper lives in the app bundle.
+          cargo build --release -p prowave-plugin-helper --target aarch64-apple-darwin
       - name: Bundle Pro Wave.app
         run: |
           APP="dist/Pro Wave.app"
@@ -329,6 +331,9 @@ jobs:
           lipo -create -output "$APP/Contents/MacOS/prowave" \
             target/aarch64-apple-darwin/release/prowave \
             target/x86_64-apple-darwin/release/prowave
+          # The sandboxed plug-in host is found next to the app binary.
+          install -m 755 target/aarch64-apple-darwin/release/prowave-plugin-helper \
+            "$APP/Contents/MacOS/prowave-plugin-helper"
           VERSION=$(cargo pkgid -p prowave-app | sed 's/.*[#@]//')
           cat > "$APP/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -349,7 +354,11 @@ jobs:
           </dict>
           </plist>
           EOF
-          codesign --force --deep --sign - "$APP"
+          # The helper needs the entitlements third-party plug-in code requires; sign it
+          # before sealing the app so --deep does not replace that signature.
+          codesign --force --sign - --entitlements dist/macos/helper.entitlements \
+            "$APP/Contents/MacOS/prowave-plugin-helper"
+          codesign --force --sign - "$APP"
           ditto -c -k --keepParent "$APP" prowave-macos-universal.zip
       - uses: actions/upload-artifact@v4
         with:
@@ -365,13 +374,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release -p prowave-app
+        run: |
+          cargo build --release -p prowave-app
+          cargo build --release -p prowave-plugin-helper
       - name: Package
         shell: pwsh
         run: |
           $pkg = "prowave-windows-x86_64"
           New-Item -ItemType Directory -Force $pkg | Out-Null
-          Copy-Item target/release/prowave.exe, LICENSE $pkg
+          Copy-Item target/release/prowave.exe, target/release/prowave-plugin-helper.exe, LICENSE $pkg
           Copy-Item dist/windows/README.txt "$pkg/README.txt"
           Compress-Archive -Path $pkg -DestinationPath "$pkg.zip" -Force
       - name: Check zip contents
@@ -379,7 +390,7 @@ jobs:
         run: |
           $out = Join-Path $env:RUNNER_TEMP "zipcheck"
           Expand-Archive prowave-windows-x86_64.zip $out
-          foreach ($f in 'prowave.exe', 'README.txt', 'LICENSE') {
+          foreach ($f in 'prowave.exe', 'prowave-plugin-helper.exe', 'README.txt', 'LICENSE') {
             if (-not (Test-Path (Join-Path $out "prowave-windows-x86_64/$f"))) { throw "the zip is missing $f" }
           }
           $exe = Get-Item (Join-Path $out "prowave-windows-x86_64/prowave.exe")

@@ -232,11 +232,23 @@ fn automation_unchanged(p: &Project, sent: &[AutoLane]) -> bool {
 
 /// The delay every effect of the strip puts on the sound, in samples.
 fn latency_of(t: &Track, sample_rate: f32) -> usize {
-    t.inserts
+    let built_in: usize = t
+        .inserts
         .iter()
         .filter(|i| !i.bypass)
         .map(|i| i.kind.latency_samples(sample_rate))
-        .sum()
+        .sum();
+    let hosted = t
+        .hosted
+        .as_ref()
+        .filter(|h| !h.bypass)
+        .map_or(0, |h| h.latency as usize);
+    let instrument = t
+        .hosted_instrument
+        .as_ref()
+        .filter(|h| !h.bypass)
+        .map_or(0, |h| h.latency as usize);
+    built_in + hosted + instrument
 }
 
 /// Delay compensation for every track: (before the fader and sends, after them), in samples.
@@ -506,6 +518,91 @@ impl EngineSync {
             self.engine.device_name().to_string(),
             self.engine.sample_rate(),
         )
+    }
+
+    /// The engine's output sample rate, for preparing a hosted plug-in.
+    pub fn sample_rate(&self) -> f64 {
+        f64::from(self.engine.sample_rate())
+    }
+
+    /// Replaces the hosted plug-in on the master bus (`None` removes it) and sets its bypass.
+    /// Returns false when the command queue is full (the caller may retry).
+    pub fn set_master_hosted(
+        &mut self,
+        effect: Option<Box<dyn prowave_engine::HostedEffect>>,
+        bypass: bool,
+    ) -> bool {
+        let sent = self.send(Command::SetMasterHosted(effect));
+        if sent {
+            self.send(Command::SetMasterHostedBypass(bypass));
+        }
+        sent
+    }
+
+    /// Sets the hosted master plug-in's bypass without reloading it.
+    pub fn set_master_hosted_bypass(&mut self, bypass: bool) -> bool {
+        self.send(Command::SetMasterHostedBypass(bypass))
+    }
+
+    /// Replaces the hosted plug-in on `track` (slot 0); `None` removes it.
+    pub fn set_track_hosted(
+        &mut self,
+        track: usize,
+        effect: Option<Box<dyn prowave_engine::HostedEffect>>,
+        bypass: bool,
+    ) -> bool {
+        let sent = self.send(Command::SetTrackHosted {
+            track: track as u16,
+            slot: 0,
+            effect,
+        });
+        if sent {
+            self.send(Command::SetTrackHostedBypass {
+                track: track as u16,
+                slot: 0,
+                bypass,
+            });
+        }
+        sent
+    }
+
+    /// Sets a track hosted plug-in's bypass without reloading it.
+    pub fn set_track_hosted_bypass(&mut self, track: usize, bypass: bool) -> bool {
+        self.send(Command::SetTrackHostedBypass {
+            track: track as u16,
+            slot: 0,
+            bypass,
+        })
+    }
+
+    /// Removes every hosted plug-in when a project is replaced.
+    pub fn clear_hosted(&mut self) -> bool {
+        self.send(Command::ClearHosted)
+    }
+
+    /// Replaces the hosted instrument on `track` (`None` removes it).
+    pub fn set_track_hosted_instrument(
+        &mut self,
+        track: usize,
+        instrument: Option<Box<dyn prowave_engine::HostedInstrument>>,
+    ) -> bool {
+        self.send(Command::SetTrackHostedInstrument {
+            track: track as u16,
+            instrument,
+        })
+    }
+
+    /// Removes every hosted instrument when a project is replaced.
+    pub fn clear_hosted_instruments(&mut self) -> bool {
+        self.send(Command::ClearHostedInstruments)
+    }
+
+    /// Sets a track hosted instrument's bypass without reloading it.
+    pub fn set_track_instrument_bypass(&mut self, track: usize, bypass: bool) -> bool {
+        self.send(Command::SetTrackHostedInstrumentBypass {
+            track: track as u16,
+            bypass,
+        })
     }
 
     pub fn new(engine: Engine, p: &Project) -> Self {
@@ -1073,6 +1170,8 @@ mod tests {
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
+            hosted: None,
+            hosted_instrument: None,
             instrument: None,
             regions: vec![Region {
                 name: "r".into(),
@@ -1173,6 +1272,46 @@ mod tests {
         // The effects as the audio thread gets them.
         let chain = chain_of(&p.tracks[0].inserts, 48_000.0);
         assert_eq!(chain.fx.len(), p.tracks[0].inserts.len());
+    }
+
+    #[test]
+    fn a_hosted_parameter_lane_reaches_the_engine() {
+        use crate::model::{AutoTarget, HOSTED_SLOT};
+        let mut p = Project::empty();
+        let target = AutoTarget::Fx {
+            slot: HOSTED_SLOT,
+            param: 0,
+        };
+        p.tracks[0].auto.set_point(target, 0.0, 0.5);
+        let lanes = automation_lanes(&p);
+        assert!(
+            lanes.iter().any(|lane| lane.target == target),
+            "the hosted lane must be part of the engine automation"
+        );
+    }
+
+    #[test]
+    fn hosted_latency_counts_for_compensation() {
+        use crate::model::HostedInsert;
+        use prowave_plugin_host::Format;
+        let mut t = Track::new("A", crate::model::TrackKind::Audio);
+        t.hosted = Some(HostedInsert {
+            key: "au:x".into(),
+            name: "X".into(),
+            vendor: String::new(),
+            format: Format::AudioUnit,
+            bypass: false,
+            state: Vec::new(),
+            latency: 256,
+            parameters: Vec::new(),
+        });
+        assert_eq!(latency_of(&t, 48_000.0), 256);
+        t.hosted.as_mut().unwrap().bypass = true;
+        assert_eq!(
+            latency_of(&t, 48_000.0),
+            0,
+            "a bypassed plug-in adds no delay"
+        );
     }
 
     #[test]
