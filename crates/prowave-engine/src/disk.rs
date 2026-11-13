@@ -327,20 +327,26 @@ impl Source {
     #[cfg(test)]
     fn is_released(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        if matches!(self.kind, Kind::Released { .. }) {
-            return true;
+        {
+            matches!(self.kind, Kind::Released { .. })
         }
-        false
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// Whether the samples come from a memory map.
     #[cfg(test)]
     fn is_mapped(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        if matches!(self.kind, Kind::Mapped(_)) {
-            return true;
+        {
+            matches!(self.kind, Kind::Mapped(_))
         }
-        false
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// Appends the next packet as stereo frames. `Ok(false)` at end of stream.
