@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use crate::epiano::EPiano;
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 
 /// The largest SoundFont accepted, in bytes. The General MIDI banks are about 150 MB.
@@ -84,7 +85,9 @@ impl SoundFontBank {
 /// One track's SoundFont instrument: a synthesizer set to one preset. Make it with
 /// [`SfPlayer::new`] off the audio thread.
 pub struct SfPlayer {
-    synth: Synthesizer,
+    synth: Option<Synthesizer>,
+    /// The Electric Piano, when this player is one (`SfPlayer::electric_piano`).
+    piano: Option<Box<EPiano>>,
     channel: i32,
     sample_rate: i32,
 }
@@ -108,10 +111,31 @@ impl SfPlayer {
         }
         synth.process_midi_message(channel, 0xC0, i32::from(preset.program), 0);
         Ok(Self {
-            synth,
+            synth: Some(synth),
+            piano: None,
             channel,
             sample_rate: rate,
         })
+    }
+
+    /// A player that plays the physically modelled Electric Piano (`crate::epiano`) with the
+    /// dials at `params`. Allocates; call off the audio thread.
+    pub fn electric_piano(params: [f32; crate::epiano::PARAMS], sample_rate: f32) -> Self {
+        let rate = sample_rate.round().clamp(16_000.0, 192_000.0) as i32;
+        Self {
+            synth: None,
+            piano: Some(Box::new(EPiano::new(rate as f32, params))),
+            channel: 0,
+            sample_rate: rate,
+        }
+    }
+
+    /// Moves the Electric Piano's dials while it plays (nothing for a SoundFont player).
+    /// Allocation free.
+    pub fn set_piano_params(&mut self, params: [f32; crate::epiano::PARAMS]) {
+        if let Some(p) = self.piano.as_mut() {
+            p.set_params(params);
+        }
     }
 
     /// The sample rate the player renders at (Hz).
@@ -122,25 +146,44 @@ impl SfPlayer {
     /// Starts `pitch` (MIDI note number) at velocity `vel` (1-127; 0 is treated as 1).
     pub fn note_on(&mut self, pitch: u8, vel: u8) {
         let velocity = i32::from(vel.clamp(1, 127));
-        self.synth
-            .note_on(self.channel, i32::from(pitch.min(127)), velocity);
+        if let Some(p) = self.piano.as_mut() {
+            p.note_on(pitch, vel);
+        }
+        if let Some(s) = self.synth.as_mut() {
+            s.note_on(self.channel, i32::from(pitch.min(127)), velocity);
+        }
     }
 
     /// Releases the sounding `pitch`; it fades out with its release time.
     pub fn note_off(&mut self, pitch: u8) {
-        self.synth.note_off(self.channel, i32::from(pitch.min(127)));
+        if let Some(p) = self.piano.as_mut() {
+            p.note_off(pitch);
+        }
+        if let Some(s) = self.synth.as_mut() {
+            s.note_off(self.channel, i32::from(pitch.min(127)));
+        }
     }
 
     /// Releases every sounding note at once.
     pub fn all_notes_off(&mut self) {
-        self.synth.note_off_all(false);
+        if let Some(p) = self.piano.as_mut() {
+            p.all_notes_off();
+        }
+        if let Some(s) = self.synth.as_mut() {
+            s.note_off_all(false);
+        }
     }
 
     /// One frame of the instrument's output, `(left, right)`. Does not allocate.
     pub fn render(&mut self) -> (f32, f32) {
+        if let Some(p) = self.piano.as_mut() {
+            return p.render();
+        }
         let mut left = [0f32; 1];
         let mut right = [0f32; 1];
-        self.synth.render(&mut left, &mut right);
+        if let Some(s) = self.synth.as_mut() {
+            s.render(&mut left, &mut right);
+        }
         (left[0], right[0])
     }
 }

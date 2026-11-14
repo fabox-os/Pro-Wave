@@ -52,6 +52,8 @@ pub struct EngineSync {
     patches: Vec<SynthPatch>,
     /// The SoundFont each track was last given (`None`: its synth patch), by track.
     soundfonts: Vec<Option<SoundFontUse>>,
+    /// The Electric Piano dials each track was last given (`None`: no Electric Piano), by track.
+    pianos: Vec<Option<[f32; prowave_engine::epiano::PARAMS]>>,
     /// Which tracks the engine was told are external, by track.
     externals: Vec<bool>,
     /// The controller changes the engine has.
@@ -523,6 +525,7 @@ impl EngineSync {
             mixes: Vec::new(),
             patches: Vec::new(),
             soundfonts: Vec::new(),
+            pianos: Vec::new(),
             externals: Vec::new(),
             controls: Vec::new(),
             mtc: None,
@@ -689,22 +692,44 @@ impl EngineSync {
             } else {
                 t.soundfont.as_ref()
             };
-            let unchanged = match self.soundfonts.get(i) {
+            let want_piano = if t.kind == TrackKind::ExternalMidi {
+                None
+            } else {
+                t.epiano.map(|e| prowave_engine::epiano::clamp(e.params))
+            };
+            let sent_piano = self.pianos.get(i).copied().flatten();
+            let same_sound = match self.soundfonts.get(i) {
                 Some(sent) => sent.as_ref() == want,
                 None => want.is_none(),
-            };
-            if unchanged {
+            } && sent_piano.is_some() == want_piano.is_some();
+            if same_sound {
+                // Only the Electric Piano's dials moved: they change while the notes ring.
+                if let (Some(dials), true) = (want_piano, sent_piano != want_piano) {
+                    if !self.send(Command::SetPianoParams {
+                        track: i as u16,
+                        params: dials,
+                    }) {
+                        break;
+                    }
+                    self.pianos[i] = Some(dials);
+                }
                 continue;
             }
-            let player = match want {
-                Some(sf) => match soundfont_player(sf, sample_rate) {
-                    Ok(player) => Some(player),
-                    Err(e) => {
-                        tracing::warn!("SoundFont of track {}: {e}", t.name);
-                        None
-                    }
-                },
-                None => None,
+            // An Electric Piano wins over a SoundFont; a SoundFont that cannot be played is
+            // logged and the track plays its synth patch.
+            let player = if let Some(dials) = want_piano {
+                Some(Box::new(SfPlayer::electric_piano(dials, sample_rate)))
+            } else {
+                match want {
+                    Some(sf) => match soundfont_player(sf, sample_rate) {
+                        Ok(player) => Some(player),
+                        Err(e) => {
+                            tracing::warn!("SoundFont of track {}: {e}", t.name);
+                            None
+                        }
+                    },
+                    None => None,
+                }
             };
             if !self.send(Command::SetTrackSoundFont {
                 track: i as u16,
@@ -716,6 +741,10 @@ impl EngineSync {
                 self.soundfonts.resize(i + 1, None);
             }
             self.soundfonts[i] = want.cloned();
+            if self.pianos.len() <= i {
+                self.pianos.resize(i + 1, None);
+            }
+            self.pianos[i] = want_piano;
         }
         // External MIDI tracks: their notes go out as MIDI instead of sounding here.
         for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
@@ -1097,6 +1126,7 @@ mod tests {
             vca: None,
             midi_port: None,
             soundfont: None,
+            epiano: None,
             midi_channel: 1,
             midi_program: None,
             midi_bank: None,

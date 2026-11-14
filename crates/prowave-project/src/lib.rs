@@ -275,6 +275,8 @@ pub struct TrackDoc {
     pub soundfont: Option<String>,
     pub soundfont_bank: u16,
     pub soundfont_program: u8,
+    /// The dials of an Electric Piano the track plays (none: not an Electric Piano).
+    pub epiano: Option<Vec<f32>>,
     /// The icon the user picked (`IconKind::name`); absent or unknown names give the automatic one.
     pub icon: Option<String>,
     /// Audio tracks: the first input channel they record (0 is Input 1), and whether they
@@ -413,6 +415,7 @@ impl Default for TrackDoc {
             soundfont: None,
             soundfont_bank: 0,
             soundfont_program: 0,
+            epiano: None,
             icon: None,
             input: 0,
             input_stereo: false,

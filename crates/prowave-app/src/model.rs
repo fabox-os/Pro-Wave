@@ -656,8 +656,25 @@ pub struct Track {
     pub midi_fx: Vec<crate::midi_fx::FxSlot>,
     /// A SoundFont (`.sf2`) instrument the track plays instead of its synth patch.
     pub soundfont: Option<SoundFontUse>,
+    /// The physically modelled Electric Piano the track plays instead of its synth patch or
+    /// SoundFont (it wins over a SoundFont).
+    pub epiano: Option<EPianoUse>,
     /// The icon the user picked (Track > Assign Track Icon); `None` is the automatic one.
     pub icon: Option<crate::track_icons::IconKind>,
+}
+
+/// The Electric Piano on a track: its dials (see `prowave_engine::epiano::dial`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EPianoUse {
+    pub params: [f32; prowave_engine::epiano::PARAMS],
+}
+
+impl Default for EPianoUse {
+    fn default() -> Self {
+        Self {
+            params: prowave_engine::epiano::defaults(),
+        }
+    }
 }
 
 /// A SoundFont instrument on a track: the `.sf2` file and the preset played from it.
@@ -714,6 +731,7 @@ impl Track {
             vca: None,
             midi_port: None,
             soundfont: None,
+            epiano: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,
@@ -930,6 +948,7 @@ impl Project {
             vca: None,
             midi_port: None,
             soundfont: None,
+            epiano: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,
@@ -993,6 +1012,7 @@ impl Project {
             vca: None,
             midi_port: None,
             soundfont: None,
+            epiano: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,

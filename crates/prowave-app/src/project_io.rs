@@ -417,6 +417,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             soundfont: t.soundfont.as_ref().map(|s| s.path.clone()),
             soundfont_bank: t.soundfont.as_ref().map_or(0, |s| s.bank),
             soundfont_program: t.soundfont.as_ref().map_or(0, |s| s.program),
+            epiano: t.epiano.map(|e| e.params.to_vec()),
             icon: t.icon.map(|k| k.name().to_string()),
             input: match t.input {
                 InputSource::Mono(c) | InputSource::Stereo(c) => c,
@@ -809,6 +810,7 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             midi_program: t.midi_program.map(|p| p.min(127)),
             midi_bank: t.midi_bank.map(|b| b.min(16383)),
             soundfont: soundfont_of(t),
+            epiano: epiano_of(t),
             icon: t
                 .icon
                 .as_deref()
@@ -1087,6 +1089,19 @@ fn soundfont_of(t: &TrackDoc) -> Option<crate::model::SoundFontUse> {
         path: path.to_string(),
         bank: t.soundfont_bank.min(128),
         program: t.soundfont_program.min(127),
+    })
+}
+
+/// The Electric Piano a saved track plays: its dials, put into range (missing ones start at
+/// their defaults).
+fn epiano_of(t: &TrackDoc) -> Option<crate::model::EPianoUse> {
+    let saved = t.epiano.as_ref()?;
+    let mut params = prowave_engine::epiano::defaults();
+    for (slot, v) in params.iter_mut().zip(saved) {
+        *slot = *v;
+    }
+    Some(crate::model::EPianoUse {
+        params: prowave_engine::epiano::clamp(params),
     })
 }
 
@@ -1404,6 +1419,34 @@ pub(crate) mod tests {
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         let top = prowave_engine::MAX_INPUT_CHANNELS as u16 - 2;
         assert_eq!(r.tracks[1].input, InputSource::Stereo(top));
+    }
+
+    #[test]
+    fn an_electric_piano_keeps_its_dials_and_hand_edited_ones_are_put_into_range() {
+        use crate::model::EPianoUse;
+        let mut p = Project::empty();
+        let mut dials = prowave_engine::epiano::defaults();
+        dials[prowave_engine::epiano::dial::BARK] = 0.9;
+        dials[prowave_engine::epiano::dial::TREMOLO_DEPTH] = 0.4;
+        p.tracks[0].epiano = Some(EPianoUse { params: dials });
+        let (mut doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0].epiano.as_ref().map(Vec::len),
+            Some(prowave_engine::epiano::PARAMS)
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].epiano, Some(EPianoUse { params: dials }));
+        // Too few numbers: the rest start at their defaults. Wild ones are clamped.
+        doc.tracks[0].epiano = Some(vec![9.0, f32::NAN]);
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        let e = r.tracks[0].epiano.expect("a piano");
+        assert_eq!(e.params[0], 1.0);
+        assert_eq!(e.params[1], prowave_engine::epiano::DIALS[1].default);
+        assert_eq!(e.params[2], prowave_engine::epiano::DIALS[2].default);
+        // A project without one has none.
+        doc.tracks[0].epiano = None;
+        let (n, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(n.tracks[0].epiano, None);
     }
 
     #[test]
