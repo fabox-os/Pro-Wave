@@ -7,6 +7,10 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **LADSPA plug-ins in the Audio FX slots (issues #64, #115):** every Audio FX slot, the Stereo Out's included, now has **LADSPA Plug-ins** in its plug-in menu (and in the search), listing the effects found in `LADSPA_PATH` or the usual folders (`/usr/lib/ladspa`, `~/.ladspa`, the macOS and Windows equivalents). A plug-in shows its own controls, with their names and ranges, as knobs (toggles show On or Off, whole-number controls step), and every control can be automated like a built-in effect's. A mono plug-in runs once for each side, so the stereo image is kept; the delay a plug-in reports is made up for by delay compensation. The plug-in is saved in the project by file and name, and found again by file name on another machine; a project that names a plug-in this computer lacks opens with the sound passing through. **Window > Plugin Manager** lists what was found, the folders, and any library that failed. Libraries are read in a child process with a time limit (`prowave --scan-ladspa <file>`), so a plug-in that crashes or hangs while it is scanned does not close the program; after three failures a library is left alone (`quarantine.json`) until **Retry Failed Plug-ins**. Not done: DSSI synths, a plug-in's own window, and running plug-ins in a separate process while they play (a plug-in that crashes while processing still ends the program).
+
+✅ **Fixed: knobs of effects on the Stereo Out strip did nothing:** the Stereo Out's effect windows ignored every knob except Space Designer's. They now move the setting.
+
 ✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
 
 

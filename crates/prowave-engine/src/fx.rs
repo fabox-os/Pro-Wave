@@ -7,6 +7,7 @@
 //! [`FxKind::params`] lists their names, ranges and defaults, and anything out of range or
 //! not finite is clamped, so a damaged project cannot make the output blow up.
 use crate::convolver::Convolver;
+use crate::plugin::{BlockEffect, PluginSlot, PLUGIN_BLOCK};
 use std::f32::consts::{PI, TAU};
 
 /// Most parameters one effect has.
@@ -30,6 +31,9 @@ pub enum FxKind {
     Limiter,
     MultiEq,
     Amp,
+    /// A hosted LADSPA effect (see [`crate::plugin`]). Its parameters are positions from 0
+    /// to 1 along each control port's range; the app names and scales them from the plug-in.
+    Plugin,
 }
 
 /// One parameter of an effect.
@@ -203,6 +207,42 @@ const LIMIT_PARAMS: [ParamInfo; 3] = [
     p("Gain", 0.0, 24.0, 0.0, "dB"),
     p("Ceiling", -12.0, 0.0, -0.3, "dB"),
     pl("Release", 10.0, 1000.0, 100.0, "ms"),
+];
+/// A hosted plug-in's parameters: 32 positions from 0 to 1. The app names them and shows
+/// their real ranges from the plug-in's own description.
+const PLUGIN_PARAMS: [ParamInfo; MAX_FX_PARAMS] = [
+    p("Parameter 1", 0.0, 1.0, 0.5, ""),
+    p("Parameter 2", 0.0, 1.0, 0.5, ""),
+    p("Parameter 3", 0.0, 1.0, 0.5, ""),
+    p("Parameter 4", 0.0, 1.0, 0.5, ""),
+    p("Parameter 5", 0.0, 1.0, 0.5, ""),
+    p("Parameter 6", 0.0, 1.0, 0.5, ""),
+    p("Parameter 7", 0.0, 1.0, 0.5, ""),
+    p("Parameter 8", 0.0, 1.0, 0.5, ""),
+    p("Parameter 9", 0.0, 1.0, 0.5, ""),
+    p("Parameter 10", 0.0, 1.0, 0.5, ""),
+    p("Parameter 11", 0.0, 1.0, 0.5, ""),
+    p("Parameter 12", 0.0, 1.0, 0.5, ""),
+    p("Parameter 13", 0.0, 1.0, 0.5, ""),
+    p("Parameter 14", 0.0, 1.0, 0.5, ""),
+    p("Parameter 15", 0.0, 1.0, 0.5, ""),
+    p("Parameter 16", 0.0, 1.0, 0.5, ""),
+    p("Parameter 17", 0.0, 1.0, 0.5, ""),
+    p("Parameter 18", 0.0, 1.0, 0.5, ""),
+    p("Parameter 19", 0.0, 1.0, 0.5, ""),
+    p("Parameter 20", 0.0, 1.0, 0.5, ""),
+    p("Parameter 21", 0.0, 1.0, 0.5, ""),
+    p("Parameter 22", 0.0, 1.0, 0.5, ""),
+    p("Parameter 23", 0.0, 1.0, 0.5, ""),
+    p("Parameter 24", 0.0, 1.0, 0.5, ""),
+    p("Parameter 25", 0.0, 1.0, 0.5, ""),
+    p("Parameter 26", 0.0, 1.0, 0.5, ""),
+    p("Parameter 27", 0.0, 1.0, 0.5, ""),
+    p("Parameter 28", 0.0, 1.0, 0.5, ""),
+    p("Parameter 29", 0.0, 1.0, 0.5, ""),
+    p("Parameter 30", 0.0, 1.0, 0.5, ""),
+    p("Parameter 31", 0.0, 1.0, 0.5, ""),
+    p("Parameter 32", 0.0, 1.0, 0.5, ""),
 ];
 const AMP_PARAMS: [ParamInfo; 9] = [
     p("Amp", 0.0, 4.0, 0.0, ""),
@@ -446,6 +486,7 @@ impl FxKind {
             FxKind::Limiter => "Limiter",
             FxKind::MultiEq => "Multi-Band EQ",
             FxKind::Amp => "Amp Designer",
+            FxKind::Plugin => "Plug-in",
         }
     }
 
@@ -455,6 +496,7 @@ impl FxKind {
         match self {
             FxKind::Limiter => limiter_len(sample_rate.clamp(8_000.0, 384_000.0)) - 1,
             FxKind::Amp => AMP_LATENCY,
+            FxKind::Plugin => PLUGIN_BLOCK,
             FxKind::Reverb => crate::convolver::BLOCK,
             _ => 0,
         }
@@ -480,6 +522,7 @@ impl FxKind {
             "limiter" | "adaptive limiter" => FxKind::Limiter,
             "multi-band eq" | "multiband eq" | "multi band eq" => FxKind::MultiEq,
             "amp designer" | "amp" | "guitar amp" => FxKind::Amp,
+            "plug-in" | "plugin" | "ladspa" => FxKind::Plugin,
             _ => return None,
         })
     }
@@ -500,6 +543,7 @@ impl FxKind {
             FxKind::Limiter => &LIMIT_PARAMS,
             FxKind::MultiEq => &MULTI_PARAMS,
             FxKind::Amp => &AMP_PARAMS,
+            FxKind::Plugin => &PLUGIN_PARAMS,
         }
     }
 
@@ -1043,6 +1087,7 @@ enum State {
     Drive(DriveState),
     Filter([Biquad; 2]),
     Amp(Box<AmpState>),
+    Plugin(Box<PluginSlot>),
 }
 
 /// One effect with its state. Make it with [`Fx::new`] off the audio thread.
@@ -1107,6 +1152,7 @@ impl Fx {
             FxKind::Limiter => State::Limiter(Box::new(LimiterState::new(sr))),
             FxKind::MultiEq => State::MultiEq([[Biquad::unity(); 6]; 2]),
             FxKind::Amp => State::Amp(Box::new(AmpState::new())),
+            FxKind::Plugin => State::Plugin(Box::new(PluginSlot::empty())),
         };
         let mut fx = Self {
             kind,
@@ -1171,6 +1217,21 @@ impl Fx {
         }
     }
 
+    /// A hosted-plug-in effect ([`FxKind::Plugin`]): puts the plug-in in place (made off the
+    /// audio thread) and gives it the current parameters. Any other effect drops `plugin` at
+    /// once, so call this off the audio thread.
+    pub fn set_plugin(&mut self, plugin: Box<dyn BlockEffect>) {
+        if let State::Plugin(s) = &mut self.state {
+            s.set_plugin(plugin);
+            self.apply();
+        }
+    }
+
+    /// Whether this is a [`FxKind::Plugin`] effect with its plug-in loaded.
+    pub fn has_plugin(&self) -> bool {
+        matches!(&self.state, State::Plugin(s) if s.has_plugin())
+    }
+
     /// The parameter values being played.
     pub fn current(&self) -> [f32; MAX_FX_PARAMS] {
         self.params
@@ -1180,6 +1241,8 @@ impl Fx {
     pub fn latency_samples(&self) -> usize {
         if self.bypass {
             0
+        } else if let State::Plugin(s) = &self.state {
+            PLUGIN_BLOCK + s.reported_latency()
         } else {
             self.kind.latency_samples(self.sr)
         }
@@ -1263,6 +1326,11 @@ impl Fx {
                         z2: old.z2,
                         ..n
                     };
+                }
+            }
+            State::Plugin(s) => {
+                for (i, v) in pr.iter().enumerate() {
+                    s.set_param(i, *v);
                 }
             }
             State::Amp(s) => {
@@ -1525,6 +1593,7 @@ impl Fx {
                 (out[0], out[1])
             }
             State::Filter(f) => (f[0].tick(l), f[1].tick(r)),
+            State::Plugin(s) => s.tick(l, r),
             State::Amp(s) => {
                 let input = [l, r];
                 let mut out = [0f32; 2];
@@ -1677,6 +1746,7 @@ impl Fx {
                 s.dc_in = [0.0; 2];
                 s.dc_out = [0.0; 2];
             }
+            State::Plugin(s) => s.reset(),
             State::Amp(s) => {
                 s.input_hp.iter_mut().for_each(|b| *b = b.cleared());
                 s.pre_lp.iter_mut().for_each(|b| *b = b.cleared());

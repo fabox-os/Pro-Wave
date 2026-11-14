@@ -194,6 +194,11 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
     fx.iter()
         .filter_map(|d| {
             let kind = prowave_engine::FxKind::from_name(&d.kind)?;
+            // A plug-in effect with no plug-in named is no effect at all, and the other way round.
+            let plugin = d.plugin.as_ref().and_then(crate::plugins::from_doc);
+            if (kind == prowave_engine::FxKind::Plugin) != plugin.is_some() {
+                return None;
+            }
             let mut params = [0.0; prowave_engine::MAX_FX_PARAMS];
             for (slot, v) in params.iter_mut().zip(&d.params) {
                 *slot = *v;
@@ -215,6 +220,7 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
                 kind,
                 bypass: d.bypass,
                 params: kind.clamp_params(params),
+                plugin,
             })
         })
         .take(prowave_engine::MAX_INSERTS)
@@ -354,15 +360,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             volume_db: t.volume_db,
             pan: t.pan,
             inserts: t.inserts.iter().map(|s| s.name().to_string()).collect(),
-            fx: t
-                .inserts
-                .iter()
-                .map(|s| prowave_project::InsertDoc {
-                    kind: s.name().into(),
-                    bypass: s.bypass,
-                    params: s.params[..s.kind.params().len()].to_vec(),
-                })
-                .collect(),
+            fx: t.inserts.iter().map(insert_doc).collect(),
             sends: t
                 .sends
                 .iter()
@@ -566,15 +564,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         count_in: p.count_in,
         notes: p.notes.clone(),
         master_vol: p.master_vol,
-        master_fx: p
-            .master_inserts
-            .iter()
-            .map(|s| prowave_project::InsertDoc {
-                kind: s.name().into(),
-                bypass: s.bypass,
-                params: s.params[..s.kind.params().len()].to_vec(),
-            })
-            .collect(),
+        master_fx: p.master_inserts.iter().map(insert_doc).collect(),
         selected_track: p.selected_track,
         tracks,
         groups: p
@@ -1090,6 +1080,16 @@ fn soundfont_of(t: &TrackDoc) -> Option<crate::model::SoundFontUse> {
     })
 }
 
+/// An effect as the project file keeps it.
+fn insert_doc(s: &crate::model::Insert) -> prowave_project::InsertDoc {
+    prowave_project::InsertDoc {
+        kind: s.name().into(),
+        bypass: s.bypass,
+        params: s.params[..s.kind.params().len()].to_vec(),
+        plugin: s.plugin.and_then(crate::plugins::to_doc),
+    }
+}
+
 fn port_name(name: &Option<String>) -> Option<String> {
     name.as_ref()
         .map(|n| n.chars().take(128).collect::<String>())
@@ -1404,6 +1404,39 @@ pub(crate) mod tests {
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         let top = prowave_engine::MAX_INPUT_CHANNELS as u16 - 2;
         assert_eq!(r.tracks[1].input, InputSource::Stereo(top));
+    }
+
+    #[test]
+    fn a_ladspa_effect_is_saved_with_its_plugin_and_a_plugin_less_one_is_dropped() {
+        use crate::model::Insert;
+        let id = crate::plugins::intern(&crate::plugins::PluginRef {
+            library: "/plugins/saved.so".into(),
+            label: "saved".into(),
+            unique_id: 9,
+            name: "Saved One".into(),
+        });
+        let mut p = Project::empty();
+        let mut ins = Insert::new_plugin(id);
+        ins.params[0] = 0.75;
+        p.tracks[0].inserts = vec![ins, Insert::new(prowave_engine::FxKind::Delay)];
+        let (mut doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0].fx[0]
+                .plugin
+                .as_ref()
+                .map(|d| d.label.as_str()),
+            Some("saved")
+        );
+        assert!(doc.tracks[0].fx[1].plugin.is_none());
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].inserts[0].plugin, Some(id));
+        assert_eq!(q.tracks[0].inserts[0].params[0], 0.75);
+        assert_eq!(q.tracks[0].inserts[1].plugin, None);
+        // A "Plug-in" with no plug-in named, or a plug-in named on another effect, is dropped.
+        doc.tracks[0].fx[0].plugin = None;
+        doc.tracks[0].fx[1].plugin = to_doc(&p).0.tracks[0].fx[0].plugin.clone();
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert!(r.tracks[0].inserts.is_empty());
     }
 
     #[test]
@@ -1863,6 +1896,7 @@ pub(crate) mod tests {
             kind: "Delay".into(),
             bypass: false,
             params: vec![f32::NAN, 1e30, -5.0],
+            ..Default::default()
         };
         doc.tracks[1].fx = vec![
             prowave_project::InsertDoc {

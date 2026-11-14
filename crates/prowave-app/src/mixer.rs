@@ -813,6 +813,9 @@ fn send_slot(
 enum InsertAct {
     Add(prowave_engine::FxKind),
     Replace(prowave_engine::FxKind),
+    /// A LADSPA plug-in found on this computer.
+    AddPlugin(crate::plugins::PluginId),
+    ReplacePlugin(crate::plugins::PluginId),
     Remove,
     Bypass,
     Open,
@@ -895,7 +898,7 @@ fn insert_slot(
             ui.separator();
             ui.menu_button(tr("Replace With"), |ui| {
                 if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-                    act = Some(InsertAct::Replace(pick_kind(pick)));
+                    act = Some(insert_act(pick, true));
                     v.picker_search.clear();
                     ui.close();
                 }
@@ -905,7 +908,7 @@ fn insert_slot(
                 ui.close();
             }
         } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-            act = Some(InsertAct::Add(pick_kind(pick)));
+            act = Some(insert_act(pick, false));
             v.picker_search.clear();
             ui.close();
         }
@@ -915,10 +918,14 @@ fn insert_slot(
     }
 }
 
-/// The effect a picker choice names (hosted plug-ins will join the picker later).
-fn pick_kind(pick: crate::plugin_picker::Pick) -> prowave_engine::FxKind {
-    match pick {
-        crate::plugin_picker::Pick::Effect(kind) => kind,
+/// What a picker choice does to the slot: add the effect there, or replace the one in it.
+fn insert_act(pick: crate::plugin_picker::Pick, replace: bool) -> InsertAct {
+    use crate::plugin_picker::Pick;
+    match (pick, replace) {
+        (Pick::Effect(kind), false) => InsertAct::Add(kind),
+        (Pick::Effect(kind), true) => InsertAct::Replace(kind),
+        (Pick::Plugin(id), false) => InsertAct::AddPlugin(id),
+        (Pick::Plugin(id), true) => InsertAct::ReplacePlugin(id),
     }
 }
 
@@ -942,8 +949,20 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
                 v.fx_window = Some((i, inserts.len() - 1));
             }
         }
+        InsertAct::AddPlugin(id) => {
+            if inserts.len() < prowave_engine::MAX_INSERTS {
+                inserts.push(Insert::new_plugin(id));
+                v.fx_window = Some((i, inserts.len() - 1));
+            }
+        }
         InsertAct::Replace(kind) if filled => {
             inserts[k] = Insert::new(kind);
+            if let Some(a) = auto.as_mut() {
+                a.insert_replaced(k);
+            }
+        }
+        InsertAct::ReplacePlugin(id) if filled => {
+            inserts[k] = Insert::new_plugin(id);
             if let Some(a) = auto.as_mut() {
                 a.insert_replaced(k);
             }
