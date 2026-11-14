@@ -7,6 +7,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **Pult EQ:** a Pultec-style tube equaliser for any Audio FX slot (Logic: the Vintage EQ family), asked for in issue #120. The **low band** has a corner of 20, 30, 60 or 100 Hz with a Boost and an Atten dial (up to 16 dB); with both turned up you get the "Pultec trick", lows that swell with the area above them tightened. The **high band** has a Boost bell at 3 to 16 kHz with a Bandwidth dial, and an Atten shelf starting at 5, 10 or 20 kHz. **Drive** adds tube saturation with a little even-order colour, anti-aliased without oversampling (so no added delay) and level-compensated, so it changes the tone and not the loudness. **Mode** switches the EQ off, or has it work on left and right, or on the mid or the side signal only. Input and Output trim, every dial automatable, no delay reported to delay compensation. It was written from scratch for Pro Wave; the layout follows the free Pult EQ plug-in.
+
 ✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
 
 

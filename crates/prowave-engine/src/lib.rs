@@ -26,6 +26,7 @@ mod mapped;
 mod monitor;
 mod mtc;
 mod output;
+pub mod pult_eq;
 mod routing;
 mod sf2;
 mod soundfont;
