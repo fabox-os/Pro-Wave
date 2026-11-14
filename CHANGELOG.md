@@ -7,6 +7,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **UI tweaks (issue #118):** (1) the Editors (scissors) button no longer touches the Rewind button: the LCD and the transport move right when the window is narrow, and the squeeze is shared with the right-hand side when it cannot fit both. (2) **32 colours** in Track > Assign Track Color (16 new darker, softer and paler ones); clips use their track's colour. (3) **Tooltips:** hover a control bar button, or the M, S, R and I buttons of a track or mixer strip, and a box says what it does (translated into all 16 languages).
+
 ✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
 
 

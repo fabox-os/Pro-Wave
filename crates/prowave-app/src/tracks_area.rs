@@ -564,6 +564,9 @@ fn header_button(
     selected_row: bool,
 ) -> bool {
     let resp = ui.interact(rect, id(("hdrbtn", key)), Sense::click());
+    if let Some(text) = crate::tooltips::button_tip(label) {
+        resp.clone().on_hover_text(crate::i18n::tr(text));
+    }
     g.rect_filled(
         rect,
         3.0,
