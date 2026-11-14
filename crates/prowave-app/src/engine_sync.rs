@@ -162,7 +162,13 @@ fn chain_of(inserts: &[Insert], sample_rate: f32) -> Box<Chain> {
     Box::new(Chain::new(
         inserts
             .iter()
-            .map(|i| Fx::new(i.kind, i.params, i.bypass, sample_rate))
+            .map(|i| {
+                if i.plugin != 0 {
+                    crate::plugins::fx(i.plugin, i.bypass, sample_rate)
+                } else {
+                    Fx::new(i.kind, i.params, i.bypass, sample_rate)
+                }
+            })
             .collect(),
     ))
 }
@@ -235,7 +241,13 @@ fn latency_of(t: &Track, sample_rate: f32) -> usize {
     t.inserts
         .iter()
         .filter(|i| !i.bypass)
-        .map(|i| i.kind.latency_samples(sample_rate))
+        .map(|i| {
+            if i.plugin != 0 {
+                crate::plugins::latency_samples(i.plugin)
+            } else {
+                i.kind.latency_samples(sample_rate)
+            }
+        })
         .sum()
 }
 
@@ -778,7 +790,10 @@ impl EngineSync {
                 .filter(|_| i < MAX_TRACKS)
                 .map_or(&[], |t| &t.inserts);
             let same_kinds = self.fx[i].len() == want.len()
-                && self.fx[i].iter().zip(want).all(|(a, b)| a.kind == b.kind);
+                && self.fx[i]
+                    .iter()
+                    .zip(want)
+                    .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin);
             if !same_kinds {
                 let chain = chain_of(want, sr);
                 if !self.send(Command::SetInserts {
@@ -874,7 +889,7 @@ impl EngineSync {
                 .master_fx
                 .iter()
                 .zip(want)
-                .all(|(a, b)| a.kind == b.kind);
+                .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin);
         if !same_kinds {
             if !self.send(Command::SetMasterInserts(chain_of(want, sr))) {
                 return false;

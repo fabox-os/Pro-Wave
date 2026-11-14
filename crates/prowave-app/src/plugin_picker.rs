@@ -3,9 +3,10 @@
 //!
 //! The categories are Logic's, in its order, so the menu reads the same as a Logic channel
 //! strip's. Categories with no effect yet are shown disabled rather than hidden, which keeps
-//! the list stable as effects are added. Third-party plug-ins will join the same picker when
-//! hosting lands (`prowave-plugin-host`).
+//! the list stable as effects are added. Installed third-party plug-ins (CLAP, VST3, Audio Units)
+//! follow in a submenu for each format, from the catalog in `crate::plugins`.
 use crate::i18n::tr;
+use crate::plugins::{Format, PluginInfo, Scan};
 use egui::Ui;
 use prowave_engine::FxKind;
 
@@ -28,10 +29,16 @@ pub const CATEGORIES: [&str; 14] = [
 ];
 
 /// What the user chose in the picker.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pick {
     Effect(FxKind),
+    /// An installed CLAP, VST3 or Audio Unit plug-in.
+    Plugin(PluginInfo),
 }
+
+/// The formats of hosted plug-ins, in the order of the picker's submenus (Logic has one,
+/// "Audio Units").
+const FORMATS: [Format; 3] = [Format::AudioUnit, Format::Clap, Format::Vst3];
 
 /// The category Logic files `kind` under.
 pub fn category(kind: FxKind) -> &'static str {
@@ -44,6 +51,8 @@ pub fn category(kind: FxKind) -> &'static str {
         FxKind::Filter => "Filter",
         FxKind::Chorus | FxKind::Phaser => "Modulation",
         FxKind::Reverb => "Reverb",
+        // A hosted plug-in is listed under its format, not in a category.
+        FxKind::External => "Specialized",
     }
 }
 
@@ -57,6 +66,9 @@ pub fn matches(kind: FxKind, query: &str) -> bool {
 /// Draws the picker into `ui` and returns the choice, if the user made one. `search` is kept
 /// by the caller so the field survives the frames the menu is open.
 pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
+    // The first time a picker opens, the installed plug-ins are listed in the background.
+    crate::plugins::scan(false);
+    let catalog = crate::plugins::catalog();
     ui.set_min_width(200.0);
     ui.add(
         egui::TextEdit::singleline(search)
@@ -81,6 +93,7 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
                 });
             });
         }
+        hosted_menus(ui, &catalog, &mut picked);
     } else {
         let mut any = false;
         for kind in FxKind::ALL {
@@ -91,11 +104,59 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
                 }
             }
         }
+        let query = search.trim().to_lowercase();
+        // A long list in a menu is no use: the search is narrowed until it fits.
+        for info in catalog
+            .iter()
+            .filter(|info| info.name.to_lowercase().contains(&query))
+            .take(24)
+        {
+            any = true;
+            let label = format!("{} ({})", info.name, info.format.name());
+            if ui.button(label).clicked() {
+                picked = Some(Pick::Plugin(info.clone()));
+            }
+        }
         if !any {
             ui.weak(tr("No plug-ins match"));
         }
     }
     picked
+}
+
+/// The installed plug-ins below the categories: a submenu for each format, then one for each
+/// manufacturer, as Logic's "Audio Units" submenu has.
+fn hosted_menus(ui: &mut Ui, catalog: &[PluginInfo], picked: &mut Option<Pick>) {
+    if matches!(crate::plugins::scan_status(), Scan::Running(..)) {
+        ui.separator();
+        ui.weak(tr("Scanning plug-ins…"));
+    }
+    if catalog.is_empty() {
+        return;
+    }
+    ui.separator();
+    for format in FORMATS {
+        let of_format: Vec<&PluginInfo> = catalog.iter().filter(|i| i.format == format).collect();
+        if of_format.is_empty() {
+            continue;
+        }
+        ui.menu_button(format.name(), |ui| {
+            // The catalog is sorted by manufacturer, so each one's plug-ins are together.
+            for group in of_format.chunk_by(|a, b| a.vendor.eq_ignore_ascii_case(&b.vendor)) {
+                let vendor = match group[0].vendor.as_str() {
+                    "" => "—",
+                    vendor => vendor,
+                };
+                ui.menu_button(vendor, |ui| {
+                    for info in group {
+                        if ui.button(&info.name).clicked() {
+                            *picked = Some(Pick::Plugin((*info).clone()));
+                        }
+                    }
+                });
+            }
+        });
+    }
 }
 
 #[cfg(test)]

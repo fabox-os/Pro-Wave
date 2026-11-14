@@ -90,6 +90,8 @@ pub struct MixerView {
     pub inputs: crate::audio_rec::InputChoice,
     /// The text in the Audio FX plug-in picker's search field (see `plugin_picker`).
     pub picker_search: String,
+    /// The text in a hosted plug-in window's parameter search field (see `fx_ui`).
+    pub plugin_search: String,
 }
 
 /// A channel strip's effects, sends, level and pan, as Copy Channel Strip keeps them.
@@ -115,6 +117,7 @@ impl Default for MixerView {
             copied: None,
             inputs: crate::audio_rec::InputChoice::default(),
             picker_search: String::new(),
+            plugin_search: String::new(),
         }
     }
 }
@@ -811,8 +814,8 @@ fn send_slot(
 
 /// What the user chose in an Audio FX slot's menu.
 enum InsertAct {
-    Add(prowave_engine::FxKind),
-    Replace(prowave_engine::FxKind),
+    Add(Insert),
+    Replace(Insert),
     Remove,
     Bypass,
     Open,
@@ -895,7 +898,7 @@ fn insert_slot(
             ui.separator();
             ui.menu_button(tr("Replace With"), |ui| {
                 if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-                    act = Some(InsertAct::Replace(pick_kind(pick)));
+                    act = Some(InsertAct::Replace(pick_insert(pick)));
                     v.picker_search.clear();
                     ui.close();
                 }
@@ -905,7 +908,7 @@ fn insert_slot(
                 ui.close();
             }
         } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-            act = Some(InsertAct::Add(pick_kind(pick)));
+            act = Some(InsertAct::Add(pick_insert(pick)));
             v.picker_search.clear();
             ui.close();
         }
@@ -915,10 +918,14 @@ fn insert_slot(
     }
 }
 
-/// The effect a picker choice names (hosted plug-ins will join the picker later).
-fn pick_kind(pick: crate::plugin_picker::Pick) -> prowave_engine::FxKind {
+/// A new effect for a picker choice: one of Pro Wave's own, or a hosted plug-in, which joins
+/// the session's rack (`crate::plugins`).
+fn pick_insert(pick: crate::plugin_picker::Pick) -> Insert {
     match pick {
-        crate::plugin_picker::Pick::Effect(kind) => kind,
+        crate::plugin_picker::Pick::Effect(kind) => Insert::new(kind),
+        crate::plugin_picker::Pick::Plugin(info) => {
+            Insert::hosted(crate::plugins::add(&info, None))
+        }
     }
 }
 
@@ -936,14 +943,14 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
     };
     let filled = k < inserts.len();
     match act {
-        InsertAct::Add(kind) => {
+        InsertAct::Add(insert) => {
             if inserts.len() < prowave_engine::MAX_INSERTS {
-                inserts.push(Insert::new(kind));
+                inserts.push(insert);
                 v.fx_window = Some((i, inserts.len() - 1));
             }
         }
-        InsertAct::Replace(kind) if filled => {
-            inserts[k] = Insert::new(kind);
+        InsertAct::Replace(insert) if filled => {
+            inserts[k] = insert;
             if let Some(a) = auto.as_mut() {
                 a.insert_replaced(k);
             }
@@ -2297,7 +2304,7 @@ mod tests {
         let mut p = mixer_project();
         let mut v = MixerView::default();
         for kind in [FxKind::ChannelEq, FxKind::Compressor, FxKind::Reverb] {
-            apply_insert(&mut p, &mut v, 0, 99, InsertAct::Add(kind));
+            apply_insert(&mut p, &mut v, 0, 99, InsertAct::Add(Insert::new(kind)));
         }
         let kinds = |p: &Project| {
             p.tracks[0]
@@ -2322,7 +2329,13 @@ mod tests {
         assert_eq!(kinds(&p).len(), 3, "moving past an end does nothing");
         apply_insert(&mut p, &mut v, 0, 1, InsertAct::Bypass);
         assert!(p.tracks[0].inserts[1].bypass);
-        apply_insert(&mut p, &mut v, 0, 1, InsertAct::Replace(FxKind::Delay));
+        apply_insert(
+            &mut p,
+            &mut v,
+            0,
+            1,
+            InsertAct::Replace(Insert::new(FxKind::Delay)),
+        );
         assert_eq!(p.tracks[0].inserts[1], Insert::new(FxKind::Delay));
         apply_insert(&mut p, &mut v, 0, 0, InsertAct::Remove);
         assert_eq!(
@@ -2335,7 +2348,13 @@ mod tests {
         apply_insert(&mut p, &mut v, 0, 5, InsertAct::Remove);
         apply_insert(&mut p, &mut v, 9, 0, InsertAct::Open);
         for _ in 0..20 {
-            apply_insert(&mut p, &mut v, 0, 0, InsertAct::Add(FxKind::Chorus));
+            apply_insert(
+                &mut p,
+                &mut v,
+                0,
+                0,
+                InsertAct::Add(Insert::new(FxKind::Chorus)),
+            );
         }
         assert_eq!(p.tracks[0].inserts.len(), prowave_engine::MAX_INSERTS);
     }
@@ -2349,14 +2368,14 @@ mod tests {
             &mut v,
             MASTER_STRIP,
             0,
-            InsertAct::Add(FxKind::Reverb),
+            InsertAct::Add(Insert::new(FxKind::Reverb)),
         );
         apply_insert(
             &mut p,
             &mut v,
             MASTER_STRIP,
             1,
-            InsertAct::Add(FxKind::Compressor),
+            InsertAct::Add(Insert::new(FxKind::Compressor)),
         );
         assert_eq!(p.master_inserts.len(), 2);
         assert!(p.tracks[0].inserts.is_empty(), "no track was touched");
@@ -2379,7 +2398,7 @@ mod tests {
             &mut v,
             MASTER_STRIP,
             0,
-            InsertAct::Replace(FxKind::Delay),
+            InsertAct::Replace(Insert::new(FxKind::Delay)),
         );
         assert_eq!(p.master_inserts[0], Insert::new(FxKind::Delay));
         apply_insert(&mut p, &mut v, MASTER_STRIP, 0, InsertAct::Remove);

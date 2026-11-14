@@ -373,7 +373,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 The items below marked done are in 0.2.2 (see CHANGELOG.md for the full list, and its known
 limitations at the end of the section). Still open, in the order the work would take them:
 
-- Plug-in hosting (CLAP first, then VST3 and AU), with a sandboxed process per plug-in. Not started.
+- Plug-in hosting: CLAP, VST3 and Audio Unit effects load in the Audio FX slots (`prowave-plugin-host`, done 2026-11-14), with the Plugin Manager and a scan in a separate process. Not done: instruments, the plug-ins' own windows, parameter automation, and a sandboxed process per plug-in.
 - Audio output device and I/O buffer size in Project Settings > Audio (needs an engine stream restart).
 - An offline (faster than real time) bounce: Bounce, Export Track, Bounce in Place and Bounce and Join all work now, but at playing speed.
 - Convert to New Sampler Track (needs a sampler instrument).
@@ -538,10 +538,10 @@ test of all the features above on Windows and macOS.
 - **DoD:** A/B test Channel EQ curve vs Logic (within 0.5dB), Space Designer IR load
 
 ### Phase 7: Plugin Hosting & Sandboxing (Weeks 51-56)
-- [ ] CLAP host full (note, params, latency, state), VST3 host via `vst3-sys`, AU host on macOS via `coreaudio-sys`
+- [~] CLAP host full (note, params, latency, state), VST3 host via `vst3-sys`, AU host on macOS via `coreaudio-sys` (2026-11-14: audio effects in all three formats with parameters, latency and state, in `prowave-plugin-host`; the three C interfaces are written out by hand, no SDK. Not done: notes and instruments, plug-in windows, parameter automation)
 - [ ] Out-of-process sandbox: separate process, SHM ring buffer (1ms latency overhead max), seccomp (Linux), seatbelt (macOS), AppContainer (Win). Heartbeat, crash isolation, auto-restart
-- [ ] Plugin scanner with quarantine, timeout 5s per plugin, blacklist
-- [ ] Plug-in Manager UI showing latency, type, manufacturer
+- [~] Plugin scanner with quarantine, timeout 5s per plugin, blacklist (2026-11-14: each file is scanned in a child process with a 30 s limit, and a file that crashes or hangs lists nothing; the result is cached until the file changes. Not done: a blacklist the user can edit)
+- [x] Plug-in Manager UI showing latency, type, manufacturer
 - **DoD:** Load Vital, Serum, Kontakt without crashing main DAW if plugin crashes
 
 ### Phase 8: UI - The Logic Look + Live Loops (Weeks 57-66)

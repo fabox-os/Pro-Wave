@@ -43,7 +43,9 @@ mod note_edit;
 mod patches;
 mod pattern;
 mod piano_roll;
+mod plugin_manager;
 mod plugin_picker;
+mod plugins;
 mod project_io;
 mod project_settings;
 mod recent_files;
@@ -206,6 +208,11 @@ pub struct UiState {
     pub can_redo: bool,
     /// Mix > Edit Groups… window is open.
     pub show_groups: bool,
+    /// Window > Plugin Manager is open, and the text in its search field.
+    pub show_plugin_manager: bool,
+    pub plugin_manager_search: String,
+    /// The manufacturer chosen in the Plugin Manager's list (`None`: Show All).
+    pub plugin_manager_vendor: Option<String>,
 }
 
 impl UiState {
@@ -280,6 +287,9 @@ impl UiState {
             can_undo: false,
             can_redo: false,
             show_groups: false,
+            show_plugin_manager: false,
+            plugin_manager_search: String::new(),
+            plugin_manager_vendor: None,
         }
     }
 
@@ -1225,6 +1235,8 @@ impl eframe::App for App {
             .frame(egui::Frame::new())
             .show(ui, |ui| tracks_area::show(ui, p, s, &meters));
         fx_ui::show(&ctx, p, s, &meters);
+        plugin_manager::show(&ctx, s);
+        plugins::idle();
         automation::show(&ctx, p, s);
         undo_history::show(&ctx, p, s, &mut self.history);
 
@@ -1429,7 +1441,9 @@ fn shot_flex_scene(app: &mut App, ctx: &egui::Context, kind: &str) {
 /// The Mixer layout pictures (`PROWAVE_SHOT_SCENE=mix…`): the demo project playing, with two
 /// Aux strips (a reverb and a delay), sends to them, effects on the strips, a compressor
 /// working, and automation in its different modes. `mixfx` also opens the compressor's window,
-/// `mixeq` the Channel EQ's, `mixspace` the Space Designer's and `mixauto` the Automation editor.
+/// `mixeq` the Channel EQ's, `mixspace` the Space Designer's and `mixauto` the Automation editor;
+/// `mixplugin` puts a hosted plug-in on a strip and opens its window, `mixplugins` opens the
+/// Plugin Manager.
 fn shot_mixer_scene(app: &mut App, kind: &str) {
     use model::{AutoMode, AutoTarget, Insert, SendSlot, TrackKind};
     use prowave_engine::FxKind;
@@ -1554,6 +1568,16 @@ fn shot_mixer_scene(app: &mut App, kind: &str) {
             app.project.tracks[bass].inserts = vec![Insert::new(FxKind::Reverb)];
             app.ui.mixer.fx_window = Some((bass, 0));
         }
+        // A hosted plug-in's window: the first Audio Unit the system lists (macOS has its
+        // own), since no plug-in file is certain to be installed.
+        "plugin" => {
+            if let Some(info) = prowave_plugin_host::scan_audio_units().first() {
+                let hosted = Insert::hosted(plugins::add(info, None));
+                app.project.tracks[bass].inserts = vec![hosted];
+                app.ui.mixer.fx_window = Some((bass, 0));
+            }
+        }
+        "plugins" => app.ui.show_plugin_manager = true,
         "auto" => {
             app.ui.mixer.auto_editor.track = Some(piano_t);
             app.ui.mixer.auto_editor.span = 72.0;
@@ -1601,6 +1625,10 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let all_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // The child process that lists one plug-in file's plug-ins (see `plugins`).
+    if plugins::run_scan_if_requested(&all_args) {
+        return Ok(());
+    }
     // `--version` and `--help` answer without opening a window.
     let flag = |name: &str| {
         let name = std::ffi::OsStr::new(name);

@@ -189,10 +189,74 @@ fn inserts_from_doc(t: &prowave_project::TrackDoc) -> Vec<crate::model::Insert> 
     inserts_from_fx_docs(&t.fx)
 }
 
+/// The largest plug-in state read from a project file (64 MiB, as the host reads).
+const MAX_PLUGIN_STATE: usize = 64 * 1024 * 1024;
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
+}
+
+/// The bytes of `text` written by [`hex`]; `None` for anything else or a state too large.
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.is_ascii() || !text.len().is_multiple_of(2) || text.len() / 2 > MAX_PLUGIN_STATE {
+        return None;
+    }
+    (0..text.len() / 2)
+        .map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok())
+        .collect()
+}
+
+/// One effect as a file keeps it: Pro Wave's own with its settings, a hosted plug-in with what
+/// finds it again and its state.
+fn insert_doc(s: &crate::model::Insert) -> prowave_project::InsertDoc {
+    let plugin = crate::plugins::info(s.plugin).map(|info| prowave_project::PluginDoc {
+        format: info.format.name().into(),
+        id: info.id,
+        name: info.name,
+        vendor: info.vendor,
+        path: info.path.to_string_lossy().into_owned(),
+        state: crate::plugins::state(s.plugin)
+            .map(|state| hex(&state))
+            .unwrap_or_default(),
+    });
+    prowave_project::InsertDoc {
+        kind: s.name().into(),
+        bypass: s.bypass,
+        params: s.params[..s.kind.params().len()].to_vec(),
+        plugin,
+    }
+}
+
+/// A hosted plug-in from a file, put in the session's rack with its state. The plug-in is
+/// found by its format and id among the installed ones when the scan knows it, else at the
+/// path the file names; one that is not installed keeps its slot (and its state, for the next
+/// save) and passes the sound through. A format this version does not know is left out.
+fn hosted_from_doc(d: &prowave_project::PluginDoc, bypass: bool) -> Option<crate::model::Insert> {
+    let format = crate::plugins::Format::from_name(&d.format)?;
+    let info = crate::plugins::find(format, &d.id).unwrap_or_else(|| crate::plugins::PluginInfo {
+        format,
+        id: d.id.clone(),
+        name: d.name.clone(),
+        vendor: d.vendor.clone(),
+        path: std::path::PathBuf::from(&d.path),
+    });
+    let state = unhex(&d.state).filter(|state| !state.is_empty());
+    let mut insert = crate::model::Insert::hosted(crate::plugins::add(&info, state));
+    insert.bypass = bypass;
+    Some(insert)
+}
+
 /// The effects of a detailed list in a file (a track's or the master bus's).
 fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::Insert> {
     fx.iter()
         .filter_map(|d| {
+            if let Some(plugin) = &d.plugin {
+                return hosted_from_doc(plugin, d.bypass);
+            }
             let kind = prowave_engine::FxKind::from_name(&d.kind)?;
             let mut params = [0.0; prowave_engine::MAX_FX_PARAMS];
             for (slot, v) in params.iter_mut().zip(&d.params) {
@@ -215,6 +279,7 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
                 kind,
                 bypass: d.bypass,
                 params: kind.clamp_params(params),
+                plugin: 0,
             })
         })
         .take(prowave_engine::MAX_INSERTS)
@@ -354,15 +419,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             volume_db: t.volume_db,
             pan: t.pan,
             inserts: t.inserts.iter().map(|s| s.name().to_string()).collect(),
-            fx: t
-                .inserts
-                .iter()
-                .map(|s| prowave_project::InsertDoc {
-                    kind: s.name().into(),
-                    bypass: s.bypass,
-                    params: s.params[..s.kind.params().len()].to_vec(),
-                })
-                .collect(),
+            fx: t.inserts.iter().map(insert_doc).collect(),
             sends: t
                 .sends
                 .iter()
@@ -566,15 +623,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
         count_in: p.count_in,
         notes: p.notes.clone(),
         master_vol: p.master_vol,
-        master_fx: p
-            .master_inserts
-            .iter()
-            .map(|s| prowave_project::InsertDoc {
-                kind: s.name().into(),
-                bypass: s.bypass,
-                params: s.params[..s.kind.params().len()].to_vec(),
-            })
-            .collect(),
+        master_fx: p.master_inserts.iter().map(insert_doc).collect(),
         selected_track: p.selected_track,
         tracks,
         groups: p
@@ -1860,6 +1909,7 @@ pub(crate) mod tests {
         // Damaged: unknown effects, wild numbers, too many of everything.
         let mut doc = to_doc(&p).0;
         let wild = prowave_project::InsertDoc {
+            plugin: None,
             kind: "Delay".into(),
             bypass: false,
             params: vec![f32::NAN, 1e30, -5.0],
@@ -2257,5 +2307,63 @@ pub(crate) mod tests {
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(r.tracks[0].output, 0, "no such bus");
         assert_eq!(r.notes.len(), crate::side_panes::MAX_NOTES);
+    }
+
+    #[test]
+    fn a_hosted_plug_in_is_saved_with_what_finds_it_and_its_state() {
+        use crate::plugins::{self, Format, PluginInfo};
+        // Not installed here: the slot, the names and the state still survive a save.
+        let info = PluginInfo {
+            format: Format::Vst3,
+            id: "00112233445566778899aabbccddeeff".into(),
+            name: "Far Away EQ".into(),
+            vendor: "Somebody".into(),
+            path: std::path::PathBuf::from("/nonexistent/Far Away EQ.vst3"),
+        };
+        use prowave_engine::FxKind;
+        let here = (Path::new("."), egui::Context::default());
+        let mut p = Project::demo();
+        let mut hosted = crate::model::Insert::hosted(plugins::add(&info, Some(vec![0, 1, 254])));
+        hosted.bypass = true;
+        p.tracks[0].inserts = vec![crate::model::Insert::new(FxKind::Gate), hosted];
+        p.master_inserts = vec![crate::model::Insert::hosted(plugins::add(&info, None))];
+
+        let (doc, _) = to_doc(&p);
+        let saved = doc.tracks[0].fx[1]
+            .plugin
+            .clone()
+            .expect("the plug-in is in the file");
+        assert_eq!(doc.tracks[0].fx[1].kind, "Far Away EQ");
+        assert_eq!(
+            (saved.format.as_str(), saved.state.as_str()),
+            ("VST3", "0001fe")
+        );
+        assert_eq!(saved.id, info.id);
+        assert!(doc.tracks[0].fx[0].plugin.is_none());
+
+        let (q, _) = from_doc(&doc, here.0, &here.1);
+        let back = q.tracks[0].inserts[1];
+        assert_eq!(q.tracks[0].inserts[0].kind, FxKind::Gate);
+        assert_eq!((back.kind, back.bypass), (FxKind::External, true));
+        assert_ne!(back.plugin, 0);
+        assert_eq!(back.name(), "Far Away EQ");
+        assert_eq!(plugins::info(back.plugin), Some(info));
+        assert_eq!(plugins::state(back.plugin), Some(vec![0, 1, 254]));
+        assert_eq!(q.master_inserts.len(), 1);
+        assert_eq!(plugins::state(q.master_inserts[0].plugin), None);
+
+        // A format a later version adds, or a damaged state, never stops a project opening.
+        let mut odd = doc.clone();
+        odd.tracks[0].fx[1].plugin.as_mut().unwrap().format = "LV2".into();
+        odd.master_fx[0].plugin.as_mut().unwrap().state = "not hexadecimal".into();
+        let (r, _) = from_doc(&odd, here.0, &here.1);
+        assert_eq!(
+            r.tracks[0].inserts.len(),
+            1,
+            "the unknown format is left out"
+        );
+        assert_eq!(plugins::state(r.master_inserts[0].plugin), None);
+        assert_eq!(unhex(&hex(&[7, 0, 255])), Some(vec![7, 0, 255]));
+        assert_eq!(unhex("abc"), None);
     }
 }

@@ -66,6 +66,8 @@ fn family(kind: FxKind) -> (Family, &'static str, Color32) {
         FxKind::Delay | FxKind::Chorus | FxKind::Phaser => (Family::Time, "Time", TIME_BLUE),
         FxKind::Overdrive | FxKind::Amp => (Family::Drive, "Drive", DRIVE_RUST),
         FxKind::Filter => (Family::Filter, "Filter", FILTER_TEAL),
+        // A hosted plug-in has its own window (`plugin_window`), not a family's.
+        FxKind::External => (Family::Filter, "Plug-in", FILTER_TEAL),
     }
 }
 
@@ -94,6 +96,10 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
         s.mixer.fx_window = None;
         return;
     };
+    if insert.plugin != 0 {
+        plugin_window(ctx, p, s, ti, slot, insert);
+        return;
+    }
     let stand_in;
     let track: &Track = if master {
         stand_in = Project::empty().tracks[0].clone();
@@ -168,6 +174,192 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
     finish(p, s, ti, slot, insert, edited, edits, open);
 }
 
+/// Logic's blue of a plug-in that is on (its power button, its slot in the Mixer).
+const POWER_BLUE: Color32 = Color32::from_rgb(0x36, 0x6f, 0xd2);
+
+/// The power button at the left of a plug-in window's header (Logic: Bypass): blue while the
+/// plug-in is on, grey while it is bypassed. Returns whether it was clicked.
+fn power_button(ui: &mut Ui, on: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
+    let painter = ui.painter();
+    let fill = if on {
+        POWER_BLUE
+    } else {
+        Color32::from_gray(0x2f)
+    };
+    painter.rect_filled(rect, CornerRadius::same(4), fill);
+    let ink = if on { Color32::WHITE } else { DIM };
+    let c = rect.center();
+    painter.circle_stroke(c + vec2(0.0, 1.0), 4.5, Stroke::new(1.4, ink));
+    // The gap at the top of the ring, and the bar through it.
+    painter.rect_filled(
+        egui::Rect::from_center_size(c - vec2(0.0, 3.5), vec2(4.0, 4.0)),
+        0.0,
+        fill,
+    );
+    painter.line_segment(
+        [c - vec2(0.0, 5.5), c - vec2(0.0, 0.5)],
+        Stroke::new(1.4, ink),
+    );
+    response.on_hover_text(tr("Bypass")).clicked()
+}
+
+/// The window of a hosted plug-in (CLAP, VST3, Audio Unit), laid out as Logic's plug-in window
+/// in its Controls view (View > Controls): the header with the power button, then every
+/// parameter as a row: its name, a slider, and the value in the plug-in's own wording. The
+/// plug-in's own editor (Logic's Editor view) is not hosted yet. Double-click a slider for its
+/// default.
+fn plugin_window(
+    ctx: &egui::Context,
+    p: &mut Project,
+    s: &mut UiState,
+    ti: usize,
+    slot: usize,
+    insert: Insert,
+) {
+    let master = ti == crate::mixer::MASTER_STRIP;
+    let title = if master {
+        format!("{} · {}", tr("Stereo Out"), insert.name())
+    } else {
+        format!("{} · {}", p.tracks[ti].name, insert.name())
+    };
+    let instance = crate::plugins::instance(insert.plugin);
+    let info = crate::plugins::info(insert.plugin);
+    let mut open = true;
+    let mut bypass = insert.bypass;
+    let frame = egui::Frame::NONE
+        .fill(WIN_BG)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin::ZERO);
+    egui::Window::new(title)
+        .id(egui::Id::unique("plugin_window"))
+        .open(&mut open)
+        .resizable([false, true])
+        .default_height(420.0)
+        .frame(frame)
+        .show(ctx, |ui| {
+            ui.set_width(520.0);
+            egui::Frame::NONE
+                .fill(HEAD_BG)
+                .inner_margin(egui::Margin::symmetric(14, 7))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if power_button(ui, !bypass) {
+                            bypass = !bypass;
+                        }
+                        ui.label(RichText::new(insert.name()).size(13.5).color(TXT));
+                        if let Some(info) = &info {
+                            let about = format!("{} · {}", info.vendor, info.format.name());
+                            ui.label(RichText::new(about).size(9.5).color(DIM));
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(RichText::new(tr("Controls")).size(10.5).color(DIM));
+                        });
+                    });
+                });
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+            ui.painter().rect_filled(rect, 0.0, LINE);
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    let Some(instance) = instance else {
+                        // Loaded by the engine's next sync, or not at all: say which.
+                        let text = crate::plugins::error(insert.plugin)
+                            .unwrap_or_else(|| tr("Loading…").to_string());
+                        ui.label(RichText::new(text).color(DIM));
+                        return;
+                    };
+                    ui.add(
+                        egui::TextEdit::singleline(&mut s.mixer.plugin_search)
+                            .hint_text(tr("Search"))
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(6.0);
+                    plugin_controls(ui, &instance, &s.mixer.plugin_search);
+                });
+        });
+    if bypass != insert.bypass {
+        let inserts = if master {
+            Some(&mut p.master_inserts)
+        } else {
+            p.tracks.get_mut(ti).map(|t| &mut t.inserts)
+        };
+        if let Some(found) = inserts.and_then(|list| list.get_mut(slot)) {
+            found.bypass = bypass;
+        }
+    }
+    if !open {
+        s.mixer.fx_window = None;
+    }
+}
+
+/// The rows of Logic's Controls view for the parameters whose name has `search` in it: the
+/// name, right-aligned as Logic sets it, a slider, and the value in a dark field.
+fn plugin_controls(ui: &mut Ui, instance: &crate::plugins::Instance, search: &str) {
+    const NAME_W: f32 = 170.0;
+    const VALUE_W: f32 = 104.0;
+    let query = search.trim().to_lowercase();
+    let rows: Vec<usize> = instance
+        .params()
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| query.is_empty() || param.name.to_lowercase().contains(&query))
+        .map(|(index, _)| index)
+        .collect();
+    if rows.is_empty() {
+        ui.label(RichText::new(tr("No plug-ins match")).color(FAINT));
+        return;
+    }
+    let height = 20.0;
+    egui::ScrollArea::vertical().auto_shrink(false).show_rows(
+        ui,
+        height,
+        rows.len(),
+        |ui, range| {
+            for &index in &rows[range] {
+                let param = &instance.params()[index];
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        vec2(NAME_W, height),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(RichText::new(&param.name).size(11.0).color(TXT))
+                                    .truncate(),
+                            );
+                        },
+                    );
+                    let mut value = instance.param(index);
+                    ui.spacing_mut().slider_width =
+                        (ui.available_width() - VALUE_W - 16.0).max(60.0);
+                    let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
+                    if slider.double_clicked() {
+                        instance.set_param(index, param.default);
+                    } else if slider.changed() {
+                        instance.set_param(index, value);
+                    }
+                    egui::Frame::NONE
+                        .fill(INSET)
+                        .corner_radius(CornerRadius::same(3))
+                        .inner_margin(egui::Margin::symmetric(6, 1))
+                        .show(ui, |ui| {
+                            ui.set_width(VALUE_W - 12.0);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(instance.param_text(index))
+                                        .size(10.5)
+                                        .color(TXT),
+                                )
+                                .truncate(),
+                            );
+                        });
+                });
+            }
+        },
+    );
+}
+
 /// The title strip: the effect's family, Bypass and Reset.
 fn header(
     ui: &mut Ui,
@@ -235,7 +427,7 @@ fn visual(ui: &mut Ui, insert: &Insert, reduction: f32, beat: f64, accent: Color
         FxKind::Phaser => phaser_panel(ui, &params, beat, accent),
         FxKind::Overdrive => drive_panel(ui, &params, accent),
         FxKind::Filter => filter_panel(ui, &params, accent),
-        FxKind::Amp | FxKind::Reverb => {}
+        FxKind::Amp | FxKind::Reverb | FxKind::External => {}
     }
 }
 
