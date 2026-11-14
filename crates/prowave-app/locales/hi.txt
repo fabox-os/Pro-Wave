@@ -810,3 +810,6 @@ Latency = लेटेंसी
 Loading… = लोड हो रहा है…
 Controls = कंट्रोल
 {} plug-ins installed = {} प्लग-इन इंस्टॉल हैं
+Editor = एडिटर
+Reload = फिर से लोड करें
+The plug-in stopped working. The sound passes through its slot. = प्लग-इन ने काम करना बंद कर दिया। ध्वनि उसके स्लॉट से बिना बदले गुज़रती है।

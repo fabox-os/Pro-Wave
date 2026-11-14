@@ -8,6 +8,9 @@
 //!   in a child process (`prowave --scan-plugin`): a plug-in that crashes or hangs there costs
 //!   one file, not the session. The result is kept in the configuration folder and a file is
 //!   scanned again only when it changes.
+//! - A plug-in runs in a **process of its own** (`prowave --plugin-host`, served by the host
+//!   crate): one that crashes while playing leaves its slot passing the sound, and [`again`]
+//!   starts it afresh with the state put aside a few seconds before.
 //! - The **rack**: the plug-ins in use. An `Insert` holds a number; the rack holds the loaded
 //!   plug-in behind it. A plug-in is loaded the first time the engine needs it (the engine
 //!   knows the sample rate) and stays loaded while the app runs, so Undo can bring a removed
@@ -131,11 +134,9 @@ pub fn error(plugin: u32) -> Option<String> {
 /// The plug-in's state for a project file: from the plug-in when it is loaded, else what the
 /// project file it came from had.
 pub fn state(plugin: u32) -> Option<Vec<u8>> {
-    with_slot(plugin, |slot| match &slot.instance {
-        Some(instance) => instance.save_state(),
-        None => slot.saved.clone(),
-    })
-    .flatten()
+    // A plug-in that crashed has no answer: what was last put aside stands in.
+    let (instance, saved) = with_slot(plugin, |slot| (slot.instance.clone(), slot.saved.clone()))?;
+    instance.and_then(|i| i.save_state()).or(saved)
 }
 
 /// The delay plug-in `plugin` puts on the sound, in samples: its own and the block the engine
@@ -159,7 +160,7 @@ pub fn fx(plugin: u32, bypass: bool, sample_rate: f32) -> Fx {
                 Some(old) => old.save_state(),
                 None => slot.saved.clone(),
             };
-            match host::load(&slot.info, f64::from(sample_rate), EXTERNAL_BLOCK) {
+            match load(&slot.info, sample_rate) {
                 Ok(instance) => {
                     if let Some(state) = &state {
                         instance.load_state(state);
@@ -190,15 +191,91 @@ pub fn fx(plugin: u32, bypass: bool, sample_rate: f32) -> Fx {
     }
 }
 
-/// Once a frame, on the UI thread: the main-thread work the loaded plug-ins asked for.
+/// Loads a plug-in in a process of its own, started from this program (`main` hands such a
+/// start to the host first thing), so that a plug-in that crashes while playing takes its
+/// process with it and not Pro Wave. Tests have no app program to start: they load in-process.
+fn load(info: &PluginInfo, sample_rate: f32) -> Result<Instance, host::Error> {
+    let rate = f64::from(sample_rate);
+    #[cfg(not(test))]
+    if let Ok(program) = std::env::current_exe() {
+        return host::load_sandboxed(info, rate, EXTERNAL_BLOCK, &program);
+    }
+    host::load(info, rate, EXTERNAL_BLOCK)
+}
+
+/// How often a running plug-in's state is put aside, so that one that crashes can be loaded
+/// again with nearly the settings it had.
+const KEEP_STATE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Once a frame, on the UI thread: the main-thread work the loaded plug-ins asked for, and now
+/// and then a copy of their state.
 pub fn idle() {
-    let instances: Vec<Instance> = rack()
+    static LAST_KEPT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let instances: Vec<(usize, Instance)> = rack()
         .slots
         .iter()
-        .filter_map(|slot| slot.instance.clone())
+        .enumerate()
+        .filter_map(|(i, slot)| Some((i, slot.instance.clone()?)))
         .collect();
-    for instance in instances {
+    for (_, instance) in &instances {
         instance.idle();
+    }
+    let due = LAST_KEPT.lock().is_ok_and(|mut last| {
+        let due = last.is_none_or(|at| at.elapsed() >= KEEP_STATE_EVERY);
+        if due {
+            *last = Some(std::time::Instant::now());
+        }
+        due
+    });
+    if due {
+        // Asked without the rack's lock held: the answer comes from another process.
+        for (index, instance) in instances {
+            if let Some(state) = instance.save_state() {
+                if let Some(slot) = rack().slots.get_mut(index) {
+                    slot.saved = Some(state);
+                }
+            }
+        }
+    }
+}
+
+/// Whether plug-in `plugin`'s process ended on its own: it crashed while it was loaded.
+pub fn crashed(plugin: u32) -> bool {
+    with_slot(plugin, |slot| {
+        slot.instance.as_ref().is_some_and(Instance::crashed)
+    })
+    .unwrap_or(false)
+}
+
+/// A new place in the rack for the plug-in of `plugin`, with the state last put aside for it:
+/// the number to put in the `Insert` instead, which makes the engine load it afresh. This is
+/// how a plug-in that crashed is started again.
+pub fn again(plugin: u32) -> Option<u32> {
+    let (info, saved) = with_slot(plugin, |slot| (slot.info.clone(), slot.saved.clone()))?;
+    Some(add(&info, saved))
+}
+
+/// The number of parameters of plug-in `plugin` (none before it is loaded).
+pub fn param_count(plugin: u32) -> usize {
+    instance(plugin).map_or(0, |i| i.params().len())
+}
+
+/// The name of parameter `index` of plug-in `plugin` ("?" when there is none).
+pub fn param_name(plugin: u32, index: usize) -> String {
+    instance(plugin)
+        .and_then(|i| i.params().get(index).map(|p| p.name.clone()))
+        .unwrap_or_else(|| "?".to_string())
+}
+
+/// The position (0..=1) of parameter `index` of plug-in `plugin`.
+pub fn param(plugin: u32, index: usize) -> f32 {
+    instance(plugin).map_or(0.0, |i| i.param(index))
+}
+
+/// Moves parameter `index` of plug-in `plugin` to position `norm` (0..=1).
+pub fn set_param(plugin: u32, index: usize, norm: f32) {
+    if let Some(instance) = instance(plugin) {
+        instance.set_param(index, norm);
     }
 }
 

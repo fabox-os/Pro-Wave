@@ -810,3 +810,6 @@ Latency = レイテンシ
 Loading… = 読み込み中…
 Controls = コントロール
 {} plug-ins installed = {} 個のプラグインがインストール済み
+Editor = エディタ
+Reload = 再読み込み
+The plug-in stopped working. The sound passes through its slot. = プラグインが動作を停止しました。音はスロットをそのまま通過します。

@@ -92,6 +92,11 @@ pub struct MixerView {
     pub picker_search: String,
     /// The text in a hosted plug-in window's parameter search field (see `fx_ui`).
     pub plugin_search: String,
+    /// A hosted plug-in is shown as its Controls (the sliders) and not in its own window:
+    /// Logic's View > Controls instead of View > Editor.
+    pub plugin_controls: bool,
+    /// The hosted plug-in whose own window was asked for (see `fx_ui`).
+    pub plugin_editor: Option<crate::fx_ui::EditorWindow>,
 }
 
 /// A channel strip's effects, sends, level and pan, as Copy Channel Strip keeps them.
@@ -118,6 +123,8 @@ impl Default for MixerView {
             inputs: crate::audio_rec::InputChoice::default(),
             picker_search: String::new(),
             plugin_search: String::new(),
+            plugin_controls: false,
+            plugin_editor: None,
         }
     }
 }
@@ -831,6 +838,8 @@ enum InsertAct {
     Remove,
     Bypass,
     Open,
+    /// A hosted plug-in as its sliders (Logic: View > Controls) instead of its own window.
+    Controls,
     Move(isize),
 }
 
@@ -882,6 +891,7 @@ fn insert_slot(
     let resp = ui.interact(r, uid, Sense::click());
     if have.is_some() && resp.double_clicked() {
         v.fx_window = Some((i, k));
+        v.plugin_controls = false;
     }
     let mut act = None;
     egui::Popup::menu(&resp).show(|ui| {
@@ -889,6 +899,10 @@ fn insert_slot(
         if let Some(fx) = have {
             if ui.button(tr("Open")).clicked() {
                 act = Some(InsertAct::Open);
+                ui.close();
+            }
+            if fx.plugin != 0 && ui.button(tr("Controls")).clicked() {
+                act = Some(InsertAct::Controls);
                 ui.close();
             }
             if ui.selectable_label(fx.bypass, tr("Bypass")).clicked() {
@@ -979,7 +993,10 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
             };
         }
         InsertAct::Bypass if filled => inserts[k].bypass = !inserts[k].bypass,
-        InsertAct::Open if filled => v.fx_window = Some((i, k)),
+        InsertAct::Open | InsertAct::Controls if filled => {
+            v.fx_window = Some((i, k));
+            v.plugin_controls = matches!(act, InsertAct::Controls);
+        }
         InsertAct::Move(d) if filled => {
             let to = k as isize + d;
             if to < 0 || to as usize >= inserts.len() {

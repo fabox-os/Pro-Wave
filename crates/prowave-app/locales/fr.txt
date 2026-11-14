@@ -810,3 +810,6 @@ Latency = Latence
 Loading… = Chargement…
 Controls = Commandes
 {} plug-ins installed = {} plug-ins installés
+Editor = Éditeur
+Reload = Recharger
+The plug-in stopped working. The sound passes through its slot. = Le plug-in a cessé de fonctionner. Le son traverse son emplacement sans traitement.

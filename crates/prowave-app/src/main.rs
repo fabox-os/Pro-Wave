@@ -1625,6 +1625,9 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let all_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // A plug-in's own process is this program started with `--plugin-host` (see `plugins`): it
+    // serves the plug-in and never comes back here.
+    prowave_plugin_host::serve_if_requested(&all_args);
     // The child process that lists one plug-in file's plug-ins (see `plugins`).
     if plugins::run_scan_if_requested(&all_args) {
         return Ok(());

@@ -334,8 +334,12 @@ fn automation_from_doc(t: &prowave_project::TrackDoc) -> crate::model::Automatio
     a.volume = points_from_doc(AutoTarget::Volume, &t.auto_volume);
     a.pan = points_from_doc(AutoTarget::Pan, &t.auto_pan);
     for l in t.auto_fx.iter().take(MAX_FX_LANES) {
+        // A hosted plug-in has more parameters than Pro Wave's own effects do.
+        let hosted =
+            t.fx.get(usize::from(l.slot))
+                .is_some_and(|d| d.plugin.is_some());
         let known = usize::from(l.slot) < prowave_engine::MAX_INSERTS
-            && usize::from(l.param) < prowave_engine::MAX_FX_PARAMS;
+            && (hosted || usize::from(l.param) < prowave_engine::MAX_FX_PARAMS);
         let target = AutoTarget::Fx {
             slot: l.slot,
             param: l.param,

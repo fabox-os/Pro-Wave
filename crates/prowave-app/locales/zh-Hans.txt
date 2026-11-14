@@ -810,3 +810,6 @@ Latency = 延迟
 Loading… = 正在载入…
 Controls = 控制
 {} plug-ins installed = 已安装 {} 个插件
+Editor = 编辑器
+Reload = 重新载入
+The plug-in stopped working. The sound passes through its slot. = 插件已停止工作。声音将直接通过其插槽。

@@ -810,3 +810,6 @@ Latency = Viive
 Loading… = Ladataan…
 Controls = Säätimet
 {} plug-ins installed = {} liitännäistä asennettu
+Editor = Editori
+Reload = Lataa uudelleen
+The plug-in stopped working. The sound passes through its slot. = Liitännäinen lakkasi toimimasta. Ääni kulkee paikan läpi muuttumattomana.

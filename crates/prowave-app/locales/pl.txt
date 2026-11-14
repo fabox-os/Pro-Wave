@@ -810,3 +810,6 @@ Latency = Opóźnienie
 Loading… = Wczytywanie…
 Controls = Kontrolki
 {} plug-ins installed = Zainstalowane wtyczki: {}
+Editor = Edytor
+Reload = Wczytaj ponownie
+The plug-in stopped working. The sound passes through its slot. = Wtyczka przestała działać. Dźwięk przechodzi przez jej slot bez zmian.

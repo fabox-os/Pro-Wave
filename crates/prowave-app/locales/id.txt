@@ -810,3 +810,6 @@ Latency = Latensi
 Loading… = Memuat…
 Controls = Kontrol
 {} plug-ins installed = {} plug-in terinstal
+Editor = Editor
+Reload = Muat Ulang
+The plug-in stopped working. The sound passes through its slot. = Plug-in berhenti bekerja. Suara melewati slotnya tanpa diproses.

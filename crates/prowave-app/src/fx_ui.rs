@@ -83,6 +83,7 @@ fn window_width(kind: FxKind) -> f32 {
 /// Draws the effect window for the insert the Mixer opened, if any.
 pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Meters) {
     let Some((ti, slot)) = s.mixer.fx_window else {
+        forget_editor(s, None);
         return;
     };
     // The Stereo Out strip has effects but no automation lanes: a stand-in track with none.
@@ -96,6 +97,9 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
         s.mixer.fx_window = None;
         return;
     };
+    // One plug-in window at a time, as in Logic with its Link button on: another slot's
+    // window takes the place of the one that was open.
+    forget_editor(s, (insert.plugin != 0).then_some(insert.plugin));
     if insert.plugin != 0 {
         plugin_window(ctx, p, s, ti, slot, insert);
         return;
@@ -204,11 +208,39 @@ fn power_button(ui: &mut Ui, on: bool) -> bool {
     response.on_hover_text(tr("Bypass")).clicked()
 }
 
-/// The window of a hosted plug-in (CLAP, VST3, Audio Unit), laid out as Logic's plug-in window
-/// in its Controls view (View > Controls): the header with the power button, then every
-/// parameter as a row: its name, a slider, and the value in the plug-in's own wording. The
-/// plug-in's own editor (Logic's Editor view) is not hosted yet. Double-click a slider for its
-/// default.
+/// A hosted plug-in's own window, as this side follows it: the window belongs to the plug-in's
+/// process.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct EditorWindow {
+    /// The plug-in's number in `crate::plugins`.
+    plugin: u32,
+    /// When it was asked for (egui's clock), and whether it has been seen on screen since.
+    asked: f64,
+    seen: bool,
+}
+
+/// How long a plug-in has to put its own window on screen before its Controls are shown
+/// instead.
+const EDITOR_GRACE: f64 = 2.0;
+
+/// Closes the plug-in window that is not the one the Mixer has open any more.
+fn forget_editor(s: &mut UiState, keep: Option<u32>) {
+    if let Some(editor) = s.mixer.plugin_editor {
+        if keep != Some(editor.plugin) {
+            if let Some(instance) = crate::plugins::instance(editor.plugin) {
+                instance.close_editor();
+            }
+            s.mixer.plugin_editor = None;
+        }
+    }
+}
+
+/// A hosted plug-in (CLAP, VST3, Audio Unit) the Mixer opened. As in Logic it has two views:
+/// **Editor**, the plug-in's own window (shown by the plug-in's process, see
+/// `prowave-plugin-host`), and **Controls**, drawn here: the header with the power button,
+/// then every parameter as a row with its name, a slider, and the value in the plug-in's own
+/// wording. Double-click a slider for its default. Controls is also what shows for a plug-in
+/// without a window of its own, and for one that stopped working, with Reload.
 fn plugin_window(
     ctx: &egui::Context,
     p: &mut Project,
@@ -218,21 +250,58 @@ fn plugin_window(
     insert: Insert,
 ) {
     let master = ti == crate::mixer::MASTER_STRIP;
-    let title = if master {
-        format!("{} · {}", tr("Stereo Out"), insert.name())
+    let owner = if master {
+        tr("Stereo Out").to_string()
     } else {
-        format!("{} · {}", p.tracks[ti].name, insert.name())
+        p.tracks[ti].name.clone()
     };
     let instance = crate::plugins::instance(insert.plugin);
     let info = crate::plugins::info(insert.plugin);
+    let crashed = crate::plugins::crashed(insert.plugin);
     let mut open = true;
     let mut bypass = insert.bypass;
+    let mut reload = false;
+    let now = ctx.input(|i| i.time);
+
+    // The Editor view: the plug-in's own window, until it is closed there.
+    let wants_editor =
+        !s.mixer.plugin_controls && !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
+    if let (true, Some(instance)) = (wants_editor, &instance) {
+        if instance.take_power_click() {
+            bypass = !bypass;
+            instance.open_editor(&owner, bypass);
+        }
+        let editor = s.mixer.plugin_editor.get_or_insert_with(|| {
+            instance.open_editor(&owner, bypass);
+            EditorWindow {
+                plugin: insert.plugin,
+                asked: now,
+                seen: false,
+            }
+        });
+        if instance.editor_open() {
+            editor.seen = true;
+        } else if editor.seen {
+            // Closed in its own window: the plug-in is no longer open here either.
+            open = false;
+        }
+        let waiting = !editor.seen && now - editor.asked < EDITOR_GRACE;
+        if editor.seen || waiting {
+            // The window is in another process: look again soon for its close or power button.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            apply_plugin_window(p, s, ti, slot, insert, bypass, open, false);
+            return;
+        }
+    }
+
     let frame = egui::Frame::NONE
         .fill(WIN_BG)
         .stroke(Stroke::new(1.0, LINE))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin::ZERO);
-    egui::Window::new(title)
+    let mut edits: Vec<Edit> = Vec::new();
+    let mut to_editor = false;
+    egui::Window::new(format!("{owner} · {}", insert.name()))
         .id(egui::Id::unique("plugin_window"))
         .open(&mut open)
         .resizable([false, true])
@@ -254,6 +323,15 @@ fn plugin_window(
                             ui.label(RichText::new(about).size(9.5).color(DIM));
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            // Logic's View menu: Controls is this window, Editor the plug-in's.
+                            let has_editor =
+                                !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
+                            if has_editor {
+                                let label = RichText::new(tr("Editor")).size(10.5);
+                                if ui.add(egui::Button::new(label)).clicked() {
+                                    to_editor = true;
+                                }
+                            }
                             ui.label(RichText::new(tr("Controls")).size(10.5).color(DIM));
                         });
                     });
@@ -263,7 +341,18 @@ fn plugin_window(
             egui::Frame::NONE
                 .inner_margin(egui::Margin::symmetric(12, 10))
                 .show(ui, |ui| {
-                    let Some(instance) = instance else {
+                    if crashed {
+                        ui.label(
+                            RichText::new(tr(
+                                "The plug-in stopped working. The sound passes through its slot.",
+                            ))
+                            .color(TXT),
+                        );
+                        ui.add_space(6.0);
+                        reload = ui.button(tr("Reload")).clicked();
+                        return;
+                    }
+                    let Some(instance) = &instance else {
                         // Loaded by the engine's next sync, or not at all: say which.
                         let text = crate::plugins::error(insert.plugin)
                             .unwrap_or_else(|| tr("Loading…").to_string());
@@ -276,27 +365,80 @@ fn plugin_window(
                             .desired_width(f32::INFINITY),
                     );
                     ui.add_space(6.0);
-                    plugin_controls(ui, &instance, &s.mixer.plugin_search);
+                    let track = (!master).then(|| &p.tracks[ti]);
+                    let search = s.mixer.plugin_search.clone();
+                    let beat = p.position_beats;
+                    plugin_controls(ui, instance, &search, track, slot, beat, &mut edits);
                 });
         });
-    if bypass != insert.bypass {
-        let inserts = if master {
-            Some(&mut p.master_inserts)
-        } else {
-            p.tracks.get_mut(ti).map(|t| &mut t.inserts)
-        };
-        if let Some(found) = inserts.and_then(|list| list.get_mut(slot)) {
-            found.bypass = bypass;
+    if to_editor {
+        s.mixer.plugin_controls = false;
+        s.mixer.plugin_editor = None;
+    }
+    // A slider move goes through the strip's automation, as a built-in effect's knob does: it
+    // sets the plug-in, and in Touch, Latch and Write it is written to the lane.
+    if !master {
+        let (beat, playing) = (p.position_beats, p.playing);
+        for e in &edits {
+            let target = AutoTarget::Fx {
+                slot: slot as u8,
+                param: e.param as u8,
+            };
+            automation::moved(&mut p.tracks[ti], target, e.value);
+            if e.ended {
+                automation::released(&mut p.tracks[ti], target, beat, playing);
+            }
+        }
+    }
+    apply_plugin_window(p, s, ti, slot, insert, bypass, open, reload);
+}
+
+/// What a frame of a hosted plug-in's window changed in the project: Bypass, the window
+/// closing, and Reload, which puts a fresh copy of a plug-in that stopped working in its slot.
+#[allow(clippy::too_many_arguments)]
+fn apply_plugin_window(
+    p: &mut Project,
+    s: &mut UiState,
+    ti: usize,
+    slot: usize,
+    insert: Insert,
+    bypass: bool,
+    open: bool,
+    reload: bool,
+) {
+    let inserts = if ti == crate::mixer::MASTER_STRIP {
+        Some(&mut p.master_inserts)
+    } else {
+        p.tracks.get_mut(ti).map(|t| &mut t.inserts)
+    };
+    if let Some(found) = inserts.and_then(|list| list.get_mut(slot)) {
+        found.bypass = bypass;
+        if reload {
+            if let Some(fresh) = crate::plugins::again(insert.plugin) {
+                found.plugin = fresh;
+            }
         }
     }
     if !open {
         s.mixer.fx_window = None;
+        forget_editor(s, None);
     }
 }
 
 /// The rows of Logic's Controls view for the parameters whose name has `search` in it: the
-/// name, right-aligned as Logic sets it, a slider, and the value in a dark field.
-fn plugin_controls(ui: &mut Ui, instance: &crate::plugins::Instance, search: &str) {
+/// name, right-aligned as Logic sets it, a slider, and the value in a dark field. A parameter
+/// the strip is playing a lane for shows the lane's value and cannot be moved (as a built-in
+/// effect's knob); moves of the others are added to `edits`, or go straight to the plug-in when
+/// they cannot be automated (the Stereo Out strip, a parameter past the 256th).
+fn plugin_controls(
+    ui: &mut Ui,
+    instance: &crate::plugins::Instance,
+    search: &str,
+    track: Option<&Track>,
+    slot: usize,
+    beat: f64,
+    edits: &mut Vec<Edit>,
+) {
     const NAME_W: f32 = 170.0;
     const VALUE_W: f32 = 104.0;
     let query = search.trim().to_lowercase();
@@ -319,6 +461,14 @@ fn plugin_controls(ui: &mut Ui, instance: &crate::plugins::Instance, search: &st
         |ui, range| {
             for &index in &rows[range] {
                 let param = &instance.params()[index];
+                let lane = track.filter(|_| index < 256).map(|t| {
+                    let target = AutoTarget::Fx {
+                        slot: slot as u8,
+                        param: index as u8,
+                    };
+                    (t, target)
+                });
+                let free = lane.is_none_or(|(t, target)| automation::editable(t, target));
                 ui.horizontal(|ui| {
                     ui.allocate_ui_with_layout(
                         vec2(NAME_W, height),
@@ -330,14 +480,32 @@ fn plugin_controls(ui: &mut Ui, instance: &crate::plugins::Instance, search: &st
                             );
                         },
                     );
-                    let mut value = instance.param(index);
+                    let mut value = match lane {
+                        Some((t, target)) => automation::shown_value(t, target, beat),
+                        None => instance.param(index),
+                    };
                     ui.spacing_mut().slider_width =
                         (ui.available_width() - VALUE_W - 16.0).max(60.0);
-                    let slider = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).show_value(false));
-                    if slider.double_clicked() {
-                        instance.set_param(index, param.default);
+                    let slider = ui.add_enabled(
+                        free,
+                        egui::Slider::new(&mut value, 0.0..=1.0).show_value(false),
+                    );
+                    let moved = if slider.double_clicked() {
+                        Some(param.default)
                     } else if slider.changed() {
-                        instance.set_param(index, value);
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    let ended = slider.drag_stopped() || slider.double_clicked();
+                    match (moved, lane) {
+                        (Some(value), None) => instance.set_param(index, value),
+                        (moved, Some(_)) if moved.is_some() || ended => edits.push(Edit {
+                            param: index,
+                            value: moved.unwrap_or(value),
+                            ended,
+                        }),
+                        _ => {}
                     }
                     egui::Frame::NONE
                         .fill(INSET)
