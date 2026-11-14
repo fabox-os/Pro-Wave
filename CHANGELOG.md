@@ -7,6 +7,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **Quiet recordings no longer look flat (issue #119):** waveforms were drawn on a straight scale, so a microphone recording that peaks at 5 to 20 % showed as a thin line. They are now drawn on a soft logarithmic curve: silence is still a line and full scale is still full height, but quiet audio shows its shape. Only the picture changed, not the audio.
+
 ✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
 
 
