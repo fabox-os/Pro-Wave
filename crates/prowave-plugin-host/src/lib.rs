@@ -8,17 +8,21 @@
 //! The three formats are C interfaces, written out here by hand (no SDK is linked): `clap.rs`,
 //! `vst3.rs` and `au.rs`. Each is a `Backend`; the rest of the crate does not know which.
 //!
-//! A plug-in is native code running inside Pro Wave, so every `unsafe` block here calls into it
-//! or reads what it returned, and has a SAFETY comment. A plug-in that crashes takes the process
-//! down: hosting is in-process. Scanning is the exception worth isolating, since it runs every
-//! plug-in once: the app scans in a child process (`prowave --scan-plugins`).
+//! A plug-in is native code, so every `unsafe` block here calls into it or reads what it
+//! returned, and has a SAFETY comment. [`load`] runs the plug-in inside the calling process,
+//! where a crash takes that process down. [`load_sandboxed`] gives it a process of its own
+//! (`sandbox.rs`): the sound crosses in shared memory, and a plug-in that crashes or hangs
+//! while playing leaves the sound passing through its slot. That process also shows the
+//! plug-in's own window (`mac.rs`). The app scans in a child process too
+//! (`prowave --scan-plugin`), since a scan runs every plug-in once.
 //!
 //! Threads: an [`Instance`] belongs to the main (UI) thread, a [`Processor`] to the audio
 //! thread. A parameter moved on the main thread travels to the audio thread through a lock-free
 //! queue and reaches the plug-in at the start of the next block.
 //!
-//! Not done: instruments (a plug-in must take and give audio), plug-in windows (the app draws
-//! sliders), side-chain inputs (they get silence), surround, and an out-of-process sandbox.
+//! Not done: instruments (a plug-in must take and give audio), side-chain inputs (they get
+//! silence), surround; a process of its own on Windows ([`load_sandboxed`] loads in-process
+//! there); the plug-ins' own windows on Windows and Linux.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use std::cell::UnsafeCell;
@@ -29,6 +33,10 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "macos")]
 mod au;
 mod clap;
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg(unix)]
+mod sandbox;
 mod vst3;
 
 /// The most parameter moves handed to a plug-in in one block; later ones wait for the next.
@@ -96,6 +104,8 @@ pub enum Error {
     NotAnEffect,
     /// The format does not exist on this system (an Audio Unit off macOS).
     Unsupported,
+    /// The plug-in's own process did not start or did not answer (the reason is given).
+    Process(String),
 }
 
 impl std::fmt::Display for Error {
@@ -105,6 +115,7 @@ impl std::fmt::Display for Error {
             Error::Refused(step) => write!(f, "the plug-in refused to {step}"),
             Error::NotAnEffect => write!(f, "the plug-in is not an audio effect"),
             Error::Unsupported => write!(f, "this plug-in format is not available here"),
+            Error::Process(why) => write!(f, "the plug-in's process failed: {why}"),
         }
     }
 }
@@ -114,6 +125,8 @@ impl std::error::Error for Error {}
 /// One format's side of a loaded plug-in. The `main_` methods are called on the main thread
 /// only, `process` and `reset` on the audio thread only; the two may run at the same time, as
 /// each format allows.
+// The window methods are used where plug-in windows are hosted (macOS, for now).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) trait Backend {
     fn params(&self) -> Vec<ParamInfo>;
     /// The position (0..=1) of parameter `index` now.
@@ -130,6 +143,20 @@ pub(crate) trait Backend {
     /// One block in place, after applying `changes` (parameter index, position).
     fn process(&self, left: &mut [f32], right: &mut [f32], changes: &[(u32, f32)]);
     fn reset(&self);
+    /// Whether the plug-in has a window of its own.
+    fn main_has_editor(&self) -> bool {
+        false
+    }
+    /// Puts the plug-in's own view inside `parent` (macOS: an `NSView`) and returns its size
+    /// in points, or `None` if it has no view or refused.
+    fn main_editor_open(&self, _parent: *mut std::ffi::c_void) -> Option<(u32, u32)> {
+        None
+    }
+    fn main_editor_close(&self) {}
+    /// The size the plug-in asked its window to take since the last call, if it asked.
+    fn main_editor_resized(&self) -> Option<(u32, u32)> {
+        None
+    }
 }
 
 /// What the audio thread keeps for one plug-in.
@@ -160,14 +187,14 @@ unsafe impl Sync for Shared {}
 
 /// A loaded plug-in, for the main thread: its parameters, its state, its latency.
 #[derive(Clone)]
-pub struct Instance(Arc<Shared>);
+pub(crate) struct LocalInstance(Arc<Shared>);
 
 /// A loaded plug-in, for the audio thread. Cloning gives another handle on the same plug-in;
 /// only one may be played at a time.
 #[derive(Clone)]
-pub struct Processor(Arc<Shared>);
+pub(crate) struct LocalProcessor(Arc<Shared>);
 
-impl Instance {
+impl LocalInstance {
     fn new(backend: Box<dyn Backend>, info: PluginInfo) -> Self {
         let params = backend.params();
         let values = (0..params.len()).map(|i| backend.main_param(i)).collect();
@@ -264,13 +291,39 @@ impl Instance {
             .store(self.0.backend.main_latency(), Ordering::Relaxed);
     }
 
+    /// The parameters whose position is not what the main thread last knew (the plug-in's own
+    /// window moved them, a state was loaded, automation played), with the new position.
+    /// Parameters for which `skip` is true are left for a later call.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn refresh(&self, skip: impl Fn(usize) -> bool) -> Vec<(usize, f32)> {
+        let mut moved = Vec::new();
+        if let Ok(mut values) = self.0.values.lock() {
+            for (i, known) in values.iter_mut().enumerate() {
+                if skip(i) {
+                    continue;
+                }
+                let now = self.0.backend.main_param(i);
+                if (now - *known).abs() > 1e-6 {
+                    *known = now;
+                    moved.push((i, now));
+                }
+            }
+        }
+        moved
+    }
+
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn backend(&self) -> &dyn Backend {
+        &*self.0.backend
+    }
+
     /// The handle the audio thread plays.
-    pub fn processor(&self) -> Processor {
-        Processor(Arc::clone(&self.0))
+    pub fn processor(&self) -> LocalProcessor {
+        LocalProcessor(Arc::clone(&self.0))
     }
 }
 
-impl Processor {
+impl LocalProcessor {
     fn audio(&mut self) -> &mut AudioSide {
         // SAFETY: only the audio thread reaches `audio`, through the one handle being played
         // (see `Shared`), and `&mut self` keeps this handle to one caller.
@@ -323,6 +376,209 @@ impl Processor {
     /// Clears the plug-in's memory (tails, filter state).
     pub fn reset(&mut self) {
         self.0.backend.reset();
+    }
+}
+
+#[derive(Clone)]
+enum Kind {
+    Local(LocalInstance),
+    #[cfg(unix)]
+    Remote(Arc<sandbox::Remote>),
+}
+
+/// A loaded plug-in, for the main thread: its parameters, its state, its latency, its window.
+/// It runs inside Pro Wave ([`load`]) or in a process of its own ([`load_sandboxed`]).
+#[derive(Clone)]
+pub struct Instance(Kind);
+
+enum ProcessorKind {
+    Local(LocalProcessor),
+    #[cfg(unix)]
+    Remote(sandbox::RemoteProcessor),
+}
+
+/// A loaded plug-in, for the audio thread. Cloning gives another handle on the same plug-in;
+/// only one may be played at a time.
+pub struct Processor(ProcessorKind);
+
+impl Clone for Processor {
+    fn clone(&self) -> Self {
+        Processor(match &self.0 {
+            ProcessorKind::Local(p) => ProcessorKind::Local(p.clone()),
+            #[cfg(unix)]
+            ProcessorKind::Remote(p) => ProcessorKind::Remote(p.clone()),
+        })
+    }
+}
+
+macro_rules! each {
+    ($self:expr, $x:ident => $body:expr) => {
+        match &$self.0 {
+            Kind::Local($x) => $body,
+            #[cfg(unix)]
+            Kind::Remote($x) => $body,
+        }
+    };
+}
+
+impl Instance {
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn local(&self) -> Option<&LocalInstance> {
+        match &self.0 {
+            Kind::Local(local) => Some(local),
+            #[cfg(unix)]
+            Kind::Remote(_) => None,
+        }
+    }
+
+    pub fn info(&self) -> &PluginInfo {
+        each!(self, x => x.info())
+    }
+
+    /// The parameters, in the plug-in's order.
+    pub fn params(&self) -> &[ParamInfo] {
+        each!(self, x => x.params())
+    }
+
+    /// The position (0..=1) of parameter `index` (0 when there is none).
+    pub fn param(&self, index: usize) -> f32 {
+        each!(self, x => x.param(index))
+    }
+
+    /// Moves parameter `index` to position `norm` (0..=1). The sound follows at the next block.
+    pub fn set_param(&self, index: usize, norm: f32) {
+        each!(self, x => x.set_param(index, norm))
+    }
+
+    /// How the plug-in writes parameter `index` at its position now.
+    pub fn param_text(&self, index: usize) -> String {
+        each!(self, x => x.param_text(index))
+    }
+
+    /// The plug-in's own delay in samples.
+    pub fn latency_samples(&self) -> usize {
+        each!(self, x => x.latency_samples())
+    }
+
+    /// Everything the plug-in wants in a project file, or `None` if it has no state to give.
+    pub fn save_state(&self) -> Option<Vec<u8>> {
+        each!(self, x => x.save_state())
+    }
+
+    /// Puts back a state made by [`Instance::save_state`]. Returns whether the plug-in took it.
+    pub fn load_state(&self, state: &[u8]) -> bool {
+        each!(self, x => x.load_state(state))
+    }
+
+    /// Call often on the main thread (once a frame): the plug-in's main-thread work.
+    pub fn idle(&self) {
+        each!(self, x => x.idle())
+    }
+
+    /// The handle the audio thread plays.
+    pub fn processor(&self) -> Processor {
+        Processor(match &self.0 {
+            Kind::Local(x) => ProcessorKind::Local(x.processor()),
+            #[cfg(unix)]
+            Kind::Remote(x) => ProcessorKind::Remote(sandbox::RemoteProcessor::new(x)),
+        })
+    }
+
+    /// Whether the plug-in's process ended on its own (it crashed). The sound then passes
+    /// through its slot unchanged. Never true for a plug-in loaded with [`load`]: a crash
+    /// there ends Pro Wave.
+    pub fn crashed(&self) -> bool {
+        match &self.0 {
+            Kind::Local(_) => false,
+            #[cfg(unix)]
+            Kind::Remote(x) => x.crashed(),
+        }
+    }
+
+    /// Whether the plug-in's own window can be shown (macOS, in a process of its own).
+    pub fn has_editor(&self) -> bool {
+        match &self.0 {
+            Kind::Local(_) => false,
+            #[cfg(unix)]
+            Kind::Remote(x) => x.has_editor(),
+        }
+    }
+
+    /// Shows the plug-in's own window, titled `title` (Logic: the channel strip's name), with
+    /// the power button lit unless `bypassed`.
+    pub fn open_editor(&self, title: &str, bypassed: bool) {
+        match &self.0 {
+            Kind::Local(_) => {}
+            #[cfg(unix)]
+            Kind::Remote(x) => x.open_editor(title, bypassed),
+        }
+        let _ = (title, bypassed);
+    }
+
+    pub fn close_editor(&self) {
+        match &self.0 {
+            Kind::Local(_) => {}
+            #[cfg(unix)]
+            Kind::Remote(x) => x.close_editor(),
+        }
+    }
+
+    /// Whether the plug-in's own window is on screen.
+    pub fn editor_open(&self) -> bool {
+        match &self.0 {
+            Kind::Local(_) => false,
+            #[cfg(unix)]
+            Kind::Remote(x) => x.editor_open(),
+        }
+    }
+
+    /// Whether the power button of the plug-in's own window was clicked since the last call
+    /// (an odd number of times): the caller toggles Bypass.
+    pub fn take_power_click(&self) -> bool {
+        match &self.0 {
+            Kind::Local(_) => false,
+            #[cfg(unix)]
+            Kind::Remote(x) => x.take_power_click(),
+        }
+    }
+}
+
+impl Processor {
+    /// One block in place. `left` and `right` must have the same length, at most the block
+    /// size given at load. No allocation, no lock.
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        match &mut self.0 {
+            ProcessorKind::Local(p) => p.process(left, right),
+            #[cfg(unix)]
+            ProcessorKind::Remote(p) => p.process(left, right),
+        }
+    }
+
+    /// Automation, on the audio thread: parameter `index` goes to position `norm` at the next
+    /// block.
+    pub fn set_param_norm(&mut self, index: usize, norm: f32) {
+        match &mut self.0 {
+            ProcessorKind::Local(p) => p.set_param_norm(index, norm),
+            #[cfg(unix)]
+            ProcessorKind::Remote(p) => p.set_param_norm(index, norm),
+        }
+    }
+
+    pub fn latency_samples(&self) -> usize {
+        match &self.0 {
+            ProcessorKind::Local(p) => p.latency_samples(),
+            #[cfg(unix)]
+            ProcessorKind::Remote(p) => p.latency_samples(),
+        }
+    }
+
+    /// Clears the plug-in's memory (tails, filter state).
+    pub fn reset(&mut self) {
+        match &mut self.0 {
+            ProcessorKind::Local(p) => p.reset(),
+            #[cfg(unix)]
+            ProcessorKind::Remote(p) => p.reset(),
+        }
     }
 }
 
@@ -429,7 +685,46 @@ pub fn load(info: &PluginInfo, sample_rate: f64, max_block: usize) -> Result<Ins
         #[cfg(not(target_os = "macos"))]
         Format::AudioUnit => return Err(Error::Unsupported),
     };
-    Ok(Instance::new(backend, info.clone()))
+    Ok(Instance(Kind::Local(LocalInstance::new(
+        backend,
+        info.clone(),
+    ))))
+}
+
+/// The command-line flag of a plug-in's own process: `<program> --plugin-host <arguments>`.
+pub const HOST_ARG: &str = "--plugin-host";
+
+/// Loads `info` in a process of its own, started from `program` (the app itself, or any program
+/// that calls [`serve_if_requested`] first thing). The plug-in's sound crosses in shared memory;
+/// if the plug-in crashes or hangs, its slot passes the sound through and Pro Wave goes on.
+/// Where a process of its own is not available (Windows, for now) this is [`load`].
+pub fn load_sandboxed(
+    info: &PluginInfo,
+    sample_rate: f64,
+    max_block: usize,
+    program: &Path,
+) -> Result<Instance, Error> {
+    #[cfg(unix)]
+    {
+        let block = max_block.clamp(1, sandbox::MAX_BLOCK);
+        sandbox::Remote::start(info, sample_rate, block, program)
+            .map(|remote| Instance(Kind::Remote(remote)))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = program;
+        load(info, sample_rate, max_block)
+    }
+}
+
+/// When the arguments are those of a plug-in's own process ([`HOST_ARG`]), runs it and never
+/// returns; otherwise returns at once. A program passed to [`load_sandboxed`] calls this first.
+pub fn serve_if_requested(args: &[std::ffi::OsString]) {
+    #[cfg(unix)]
+    if let Some(at) = args.iter().position(|a| a == HOST_ARG) {
+        sandbox::serve(&args[at + 1..]);
+    }
+    let _ = args;
 }
 
 /// The program inside a macOS bundle (`Contents/MacOS/<name>`): the one `Info.plist` names,

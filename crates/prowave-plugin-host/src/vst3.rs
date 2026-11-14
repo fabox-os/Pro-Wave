@@ -12,7 +12,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 type Tuid = [u8; 16];
@@ -76,6 +76,8 @@ const IID_STREAM: Tuid = iid(0xC3BF_6EA2, 0x3099_4752, 0x9B6B_F990, 0x1EE3_3E9B)
 const IID_CHANGES: Tuid = iid(0xA477_9663, 0x0BB6_4A56, 0xB443_84A8, 0x466F_EB9D);
 const IID_QUEUE: Tuid = iid(0x0126_3A18, 0xED07_4F6F, 0x98C9_D356, 0x4686_F9BA);
 const IID_HOST: Tuid = iid(0x58E5_95CC, 0xDB2D_4969, 0x8B6A_AF8C, 0x36A6_64E5);
+const IID_HANDLER: Tuid = iid(0x93A0_BEA3, 0x0BD0_45DB, 0x8E89_0B0C, 0xC1E4_6AC6);
+const IID_FRAME: Tuid = iid(0x367F_AF01, 0xAFA9_4693, 0x8D4D_A2A0, 0xED08_82A3);
 const IID_MESSAGE: Tuid = iid(0x936F_033B, 0xC6C0_47DB, 0xBB08_82F8, 0x13C1_E613);
 const IID_ATTRIBUTES: Tuid = iid(0x1E5F_0AEB, 0xCC7F_4533, 0xA254_4011, 0x38AD_5EE4);
 
@@ -1252,6 +1254,8 @@ struct Param {
 
 /// What the audio thread uses in `process`; made once at load.
 struct Audio {
+    /// The moves the plug-in's own window made (parameter id, position).
+    edits: rtrb::Consumer<(u32, f64)>,
     block: usize,
     input: [Vec<f32>; 2],
     output: [Vec<f32>; 2],
@@ -1268,7 +1272,144 @@ struct Audio {
     mono_out: bool,
 }
 
+#[repr(C)]
+struct HandlerTable {
+    unknown: Unknown,
+    begin: unsafe extern "system" fn(Object, u32) -> TResult,
+    perform: unsafe extern "system" fn(Object, u32, f64) -> TResult,
+    end: unsafe extern "system" fn(Object, u32) -> TResult,
+    restart: unsafe extern "system" fn(Object, i32) -> TResult,
+}
+
+/// The `IComponentHandler` a controller reports to: a parameter its own window moved goes on
+/// to the audio thread, which hands it to the processor with the next block.
+#[repr(C)]
+struct Handler {
+    table: *const HandlerTable,
+    edits: Mutex<rtrb::Producer<(u32, f64)>>,
+}
+
+static HANDLER_TABLE: HandlerTable = HandlerTable {
+    unknown: Unknown {
+        query: handler_query,
+        add_ref: host_count,
+        release: host_count,
+    },
+    begin: handler_gesture,
+    perform: handler_perform,
+    end: handler_gesture,
+    restart: handler_restart,
+};
+
+unsafe extern "system" fn handler_query(
+    this: Object,
+    id: *const Tuid,
+    out: *mut Object,
+) -> TResult {
+    // SAFETY: the plug-in's `queryInterface` arguments.
+    unsafe { host_query(this, id, out, &IID_HANDLER) }
+}
+
+unsafe extern "system" fn handler_gesture(_: Object, _: u32) -> TResult {
+    OK
+}
+
+unsafe extern "system" fn handler_perform(this: Object, id: u32, value: f64) -> TResult {
+    // SAFETY: `this` is the backend's `Handler`, which outlives the controller's use of it.
+    let handler = unsafe { &*this.cast::<Handler>() };
+    if let Ok(mut edits) = handler.edits.lock() {
+        // A full queue drops the move; the next one of the same gesture carries the value.
+        let _ = edits.push((id, value));
+    }
+    OK
+}
+
+unsafe extern "system" fn handler_restart(_: Object, _: i32) -> TResult {
+    // A changed latency is read again at the next idle; nothing else is restarted.
+    OK
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ViewRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+/// `IPlugView`: the plug-in's own view.
+#[repr(C)]
+struct ViewTable {
+    unknown: Unknown,
+    supported: unsafe extern "system" fn(Object, *const c_char) -> TResult,
+    attached: unsafe extern "system" fn(Object, *mut c_void, *const c_char) -> TResult,
+    removed: unsafe extern "system" fn(Object) -> TResult,
+    on_wheel: unsafe extern "system" fn(Object, f32) -> TResult,
+    on_key_down: unsafe extern "system" fn(Object, u16, i16, i16) -> TResult,
+    on_key_up: unsafe extern "system" fn(Object, u16, i16, i16) -> TResult,
+    get_size: unsafe extern "system" fn(Object, *mut ViewRect) -> TResult,
+    on_size: unsafe extern "system" fn(Object, *mut ViewRect) -> TResult,
+    on_focus: unsafe extern "system" fn(Object, u8) -> TResult,
+    set_frame: unsafe extern "system" fn(Object, Object) -> TResult,
+    can_resize: unsafe extern "system" fn(Object) -> TResult,
+    check_size: unsafe extern "system" fn(Object, *mut ViewRect) -> TResult,
+}
+
+#[repr(C)]
+struct FrameTable {
+    unknown: Unknown,
+    resize: unsafe extern "system" fn(Object, Object, *mut ViewRect) -> TResult,
+}
+
+/// The `IPlugFrame` a view asks for another size: the size is kept for the window (width in
+/// the high half, height in the low; 0: nothing asked) and the view is told it has it.
+#[repr(C)]
+struct Frame {
+    table: *const FrameTable,
+    wanted: AtomicU64,
+}
+
+static FRAME_TABLE: FrameTable = FrameTable {
+    unknown: Unknown {
+        query: frame_query,
+        add_ref: host_count,
+        release: host_count,
+    },
+    resize: frame_resize,
+};
+
+unsafe extern "system" fn frame_query(this: Object, id: *const Tuid, out: *mut Object) -> TResult {
+    // SAFETY: the plug-in's `queryInterface` arguments.
+    unsafe { host_query(this, id, out, &IID_FRAME) }
+}
+
+unsafe extern "system" fn frame_resize(this: Object, view: Object, size: *mut ViewRect) -> TResult {
+    if view.is_null() || size.is_null() {
+        return FALSE;
+    }
+    // SAFETY: `this` is the backend's `Frame`; `view` is the plug-in's own live view and
+    // `size` the rectangle it passes, on the main thread.
+    unsafe {
+        let rect = *size;
+        let (width, height) = (
+            (rect.right - rect.left).max(1) as u64,
+            (rect.bottom - rect.top).max(1) as u64,
+        );
+        (*this.cast::<Frame>())
+            .wanted
+            .store((width << 32) | height, Ordering::Release);
+        (table::<ViewTable>(view).on_size)(view, size);
+    }
+    OK
+}
+
 pub(crate) struct Vst3Backend {
+    handler: Box<Handler>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    frame: Box<Frame>,
+    /// The plug-in's own view, once made (null before, and when it has none).
+    view: std::sync::atomic::AtomicPtr<*const c_void>,
     component: Object,
     processor: Object,
     /// Null when the plug-in has no controller (then it has no parameters here).
@@ -1409,10 +1550,19 @@ pub(crate) fn load(path: &Path, id: &str, rate: f64, block: usize) -> Result<Vst
         }
         (proc_.set_processing)(processor, 1);
 
+        let (edits_tx, edits_rx) = rtrb::RingBuffer::new(1024);
+        let handler = Box::new(Handler {
+            table: &HANDLER_TABLE,
+            edits: Mutex::new(edits_tx),
+        });
         let mut params = Vec::new();
         let mut names = Vec::new();
         if !controller.is_null() {
             let ctl = table::<ControllerTable>(controller);
+            (ctl.set_handler)(
+                controller,
+                std::ptr::from_ref::<Handler>(&handler).cast_mut().cast(),
+            );
             let count = (ctl.param_count)(controller).clamp(0, crate::MAX_PARAMS as i32);
             for i in 0..count {
                 let mut raw: RawParam = std::mem::zeroed();
@@ -1451,6 +1601,7 @@ pub(crate) fn load(path: &Path, id: &str, rate: f64, block: usize) -> Result<Vst
             out_changes: Box::new(Changes::new()),
             context: std::mem::zeroed(),
             mono_out: outs.first() == Some(&1),
+            edits: edits_rx,
         };
         audio.context.rate = rate;
         audio.context.tempo = 120.0;
@@ -1495,6 +1646,12 @@ pub(crate) fn load(path: &Path, id: &str, rate: f64, block: usize) -> Result<Vst
         audio._out_channels = out_channels;
 
         Ok(Vst3Backend {
+            handler,
+            frame: Box::new(Frame {
+                table: &FRAME_TABLE,
+                wanted: AtomicU64::new(0),
+            }),
+            view: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             component,
             processor,
             controller,
@@ -1634,6 +1791,14 @@ impl Backend for Vst3Backend {
                 count += 1;
             }
         }
+        while count < MAX_CHANGES {
+            let Ok((id, value)) = audio.edits.pop() else {
+                break;
+            };
+            audio.in_changes.queues[count].id = id;
+            audio.in_changes.queues[count].value = value;
+            count += 1;
+        }
         audio.in_changes.count = count as i32;
         audio.input[0][..frames].copy_from_slice(&left[..frames]);
         audio.input[1][..frames].copy_from_slice(&right[..frames]);
@@ -1663,6 +1828,73 @@ impl Backend for Vst3Backend {
         right[..frames].copy_from_slice(&audio.output[usize::from(!audio.mono_out)][..frames]);
     }
 
+    fn main_has_editor(&self) -> bool {
+        // The view is made when it is first shown (making it needs the main thread's run
+        // loop); until then a controller is taken to have one.
+        cfg!(target_os = "macos") && !self.controller.is_null()
+    }
+
+    fn main_editor_open(&self, parent: *mut c_void) -> Option<(u32, u32)> {
+        let ctl = self.controller()?;
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
+        // SAFETY: the controller's and the view's functions on the main thread, in VST3's
+        // order: make the view, give it its frame, put it in the parent view (which the caller
+        // keeps alive), measure it.
+        unsafe {
+            let mut view: Object = self.view.load(Ordering::Relaxed);
+            if view.is_null() {
+                view = (ctl.create_view)(self.controller, c"editor".as_ptr());
+                if view.is_null() {
+                    return None;
+                }
+                let t = table::<ViewTable>(view);
+                if (t.supported)(view, c"NSView".as_ptr()) != OK {
+                    release(view);
+                    return None;
+                }
+                (t.set_frame)(
+                    view,
+                    std::ptr::from_ref::<Frame>(&self.frame).cast_mut().cast(),
+                );
+                if (t.attached)(view, parent, c"NSView".as_ptr()) != OK {
+                    (t.set_frame)(view, std::ptr::null_mut());
+                    release(view);
+                    return None;
+                }
+                self.view.store(view, Ordering::Relaxed);
+            }
+            let mut rect = ViewRect::default();
+            (table::<ViewTable>(view).get_size)(view, &mut rect);
+            let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+            if width > 0 && height > 0 {
+                Some((width as u32, height as u32))
+            } else {
+                Some((480, 320))
+            }
+        }
+    }
+
+    fn main_editor_close(&self) {
+        let view: Object = self.view.swap(std::ptr::null_mut(), Ordering::Relaxed);
+        if !view.is_null() {
+            // SAFETY: `view` is the live view made in `main_editor_open`, taken out of its
+            // parent and released once, on the main thread.
+            unsafe {
+                let t = table::<ViewTable>(view);
+                (t.removed)(view);
+                (t.set_frame)(view, std::ptr::null_mut());
+                release(view);
+            }
+        }
+    }
+
+    fn main_editor_resized(&self) -> Option<(u32, u32)> {
+        let size = self.frame.wanted.swap(0, Ordering::AcqRel);
+        (size != 0).then_some(((size >> 32) as u32, size as u32))
+    }
+
     fn reset(&self) {
         // VST3 clears a plug-in's memory by stopping and starting it, which belongs to the main
         // thread; the tail is left to ring out instead.
@@ -1671,9 +1903,17 @@ impl Backend for Vst3Backend {
 
 impl Drop for Vst3Backend {
     fn drop(&mut self) {
+        self.main_editor_close();
         // SAFETY: the last handle is gone, so no thread is in `process`; each object is live
         // and released once, in the reverse order of `load`.
         unsafe {
+            if !self.controller.is_null() {
+                let _ = &self.handler;
+                (table::<ControllerTable>(self.controller).set_handler)(
+                    self.controller,
+                    std::ptr::null_mut(),
+                );
+            }
             (table::<ProcessorTable>(self.processor).set_processing)(self.processor, 0);
             let comp = table::<ComponentTable>(self.component);
             (comp.set_active)(self.component, 0);

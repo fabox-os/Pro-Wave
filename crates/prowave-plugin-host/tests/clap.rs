@@ -21,7 +21,7 @@ fn scans_loads_and_processes() {
     assert_eq!(info.vendor, "Pro Wave");
 
     let instance = load(&info, 48_000.0, 64).expect("load");
-    assert_eq!(instance.params().len(), 1);
+    assert_eq!(instance.params().len(), 3);
     assert_eq!(instance.params()[0].name, "Gain");
     assert_eq!(instance.params()[0].default, 0.5);
     assert_eq!(instance.param(0), 0.5);

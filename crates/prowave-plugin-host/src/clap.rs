@@ -11,7 +11,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// The most plug-ins one file may list.
@@ -410,8 +410,11 @@ pub(crate) struct ClapBackend {
     plugin: *const Plugin,
     /// Kept for the plug-in, which holds a pointer to it.
     _host: Box<Host>,
-    /// The plug-in asked for `on_main_thread`; the host's `data` points here.
-    callback: Box<AtomicBool>,
+    /// What the plug-in asked of the host; the host's `data` points here.
+    state: Box<HostState>,
+    gui_ext: *const GuiExt,
+    /// The plug-in's view was made (`clap_plugin_gui.create`) and not destroyed yet.
+    editor: AtomicBool,
     params_ext: *const ParamsExt,
     latency_ext: *const LatencyExt,
     state_ext: *const StateExt,
@@ -420,22 +423,109 @@ pub(crate) struct ClapBackend {
     audio: UnsafeCell<Audio>,
 }
 
-unsafe extern "C" fn host_extension(_: *const Host, _: *const c_char) -> *const c_void {
+/// What a plug-in asks of its host between calls.
+struct HostState {
+    /// It asked for `on_main_thread`.
+    callback: AtomicBool,
+    /// It asked its window to take this size (width in the high half, height in the low; 0:
+    /// nothing asked).
+    resize: AtomicU64,
+}
+
+/// `clap_plugin_gui`: the plug-in's own view.
+#[repr(C)]
+struct GuiExt {
+    is_api_supported: Option<unsafe extern "C" fn(*const Plugin, *const c_char, bool) -> bool>,
+    get_preferred_api:
+        Option<unsafe extern "C" fn(*const Plugin, *mut *const c_char, *mut bool) -> bool>,
+    create: Option<unsafe extern "C" fn(*const Plugin, *const c_char, bool) -> bool>,
+    destroy: Option<unsafe extern "C" fn(*const Plugin)>,
+    set_scale: Option<unsafe extern "C" fn(*const Plugin, f64) -> bool>,
+    get_size: Option<unsafe extern "C" fn(*const Plugin, *mut u32, *mut u32) -> bool>,
+    can_resize: Option<unsafe extern "C" fn(*const Plugin) -> bool>,
+    get_resize_hints: Option<unsafe extern "C" fn(*const Plugin, *mut c_void) -> bool>,
+    adjust_size: Option<unsafe extern "C" fn(*const Plugin, *mut u32, *mut u32) -> bool>,
+    set_size: Option<unsafe extern "C" fn(*const Plugin, u32, u32) -> bool>,
+    set_parent: Option<unsafe extern "C" fn(*const Plugin, *const GuiWindow) -> bool>,
+    set_transient: Option<unsafe extern "C" fn(*const Plugin, *const GuiWindow) -> bool>,
+    suggest_title: Option<unsafe extern "C" fn(*const Plugin, *const c_char)>,
+    show: Option<unsafe extern "C" fn(*const Plugin) -> bool>,
+    hide: Option<unsafe extern "C" fn(*const Plugin) -> bool>,
+}
+
+#[repr(C)]
+struct GuiWindow {
+    api: *const c_char,
+    handle: *mut c_void,
+}
+
+/// `clap_host_gui`: what a plug-in's view asks of the window it is in.
+#[repr(C)]
+struct HostGui {
+    resize_hints_changed: unsafe extern "C" fn(*const Host),
+    request_resize: unsafe extern "C" fn(*const Host, u32, u32) -> bool,
+    request_show: unsafe extern "C" fn(*const Host) -> bool,
+    request_hide: unsafe extern "C" fn(*const Host) -> bool,
+    closed: unsafe extern "C" fn(*const Host, bool),
+}
+
+static HOST_GUI: HostGui = HostGui {
+    resize_hints_changed: host_ignore,
+    request_resize: host_resize,
+    request_show: host_refuse,
+    request_hide: host_refuse,
+    closed: host_closed,
+};
+
+/// The window API this system's plug-in views use (none where views are not hosted yet).
+const WINDOW_API: Option<&CStr> = if cfg!(target_os = "macos") {
+    Some(c"cocoa")
+} else {
+    None
+};
+
+/// # Safety
+/// `host` is null or the `Host` this module made, whose `data` is the backend's `HostState`.
+unsafe fn host_state<'a>(host: *const Host) -> Option<&'a HostState> {
+    if host.is_null() {
+        return None;
+    }
+    // SAFETY: the caller's contract; the state lives as long as the plug-in.
+    unsafe { (*host).data.cast::<HostState>().as_ref() }
+}
+
+unsafe extern "C" fn host_resize(host: *const Host, width: u32, height: u32) -> bool {
+    // SAFETY: the plug-in passes the host it was made with.
+    match unsafe { host_state(host) } {
+        Some(state) if width > 0 && height > 0 => {
+            let size = (u64::from(width) << 32) | u64::from(height);
+            state.resize.store(size, Ordering::Release);
+            true
+        }
+        _ => false,
+    }
+}
+
+unsafe extern "C" fn host_refuse(_: *const Host) -> bool {
+    false
+}
+
+unsafe extern "C" fn host_closed(_: *const Host, _: bool) {}
+
+unsafe extern "C" fn host_extension(_: *const Host, name: *const c_char) -> *const c_void {
+    // SAFETY: the plug-in passes a NUL-terminated extension id.
+    if !name.is_null() && unsafe { CStr::from_ptr(name) } == c"clap.gui" {
+        return std::ptr::from_ref(&HOST_GUI).cast();
+    }
     std::ptr::null()
 }
 
 unsafe extern "C" fn host_ignore(_: *const Host) {}
 
 unsafe extern "C" fn host_callback(host: *const Host) {
-    if host.is_null() {
-        return;
-    }
-    // SAFETY: `host` is the `Host` this module made; its `data` is the backend's `AtomicBool`,
-    // which lives as long as the plug-in.
-    let flag = unsafe { (*host).data }.cast::<AtomicBool>();
-    if !flag.is_null() {
-        // SAFETY: as above.
-        unsafe { &*flag }.store(true, Ordering::Release);
+    // SAFETY: the plug-in passes the host it was made with.
+    if let Some(state) = unsafe { host_state(host) } {
+        state.callback.store(true, Ordering::Release);
     }
 }
 
@@ -513,12 +603,13 @@ fn ports(plugin: *const Plugin, ext: *const AudioPortsExt, input: bool) -> Vec<u
 
 pub(crate) fn load(path: &Path, id: &str, rate: f64, block: usize) -> Result<ClapBackend, Error> {
     let c_id = CString::new(id).map_err(|_| Error::NotAPlugin("a bad plug-in id".into()))?;
-    let callback = Box::new(AtomicBool::new(false));
+    let state = Box::new(HostState {
+        callback: AtomicBool::new(false),
+        resize: AtomicU64::new(0),
+    });
     let host = Box::new(Host {
         version: VERSION,
-        data: std::ptr::from_ref::<AtomicBool>(&callback)
-            .cast_mut()
-            .cast(),
+        data: std::ptr::from_ref::<HostState>(&state).cast_mut().cast(),
         name: c"Pro Wave".as_ptr(),
         vendor: c"Pro Wave".as_ptr(),
         url: c"https://github.com/fabox-os/Pro-Wave".as_ptr(),
@@ -558,6 +649,7 @@ pub(crate) fn load(path: &Path, id: &str, rate: f64, block: usize) -> Result<Cla
     let params_ext = extension(c"clap.params").cast::<ParamsExt>();
     let latency_ext = extension(c"clap.latency").cast::<LatencyExt>();
     let state_ext = extension(c"clap.state").cast::<StateExt>();
+    let gui_ext = extension(c"clap.gui").cast::<GuiExt>();
     let ports_ext = extension(c"clap.audio-ports").cast::<AudioPortsExt>();
 
     let ins = ports(plugin, ports_ext, true);
@@ -676,7 +768,9 @@ pub(crate) fn load(path: &Path, id: &str, rate: f64, block: usize) -> Result<Cla
     Ok(ClapBackend {
         plugin,
         _host: host,
-        callback,
+        state,
+        gui_ext,
+        editor: AtomicBool::new(false),
         params_ext,
         latency_ext,
         state_ext,
@@ -777,12 +871,78 @@ impl Backend for ClapBackend {
     }
 
     fn main_idle(&self) {
-        if self.callback.swap(false, Ordering::AcqRel) {
+        if self.state.callback.swap(false, Ordering::AcqRel) {
             if let Some(on_main) = self.plugin().on_main_thread {
                 // SAFETY: the plug-in asked for this call, on the main thread.
                 unsafe { on_main(self.plugin) };
             }
         }
+    }
+
+    fn main_has_editor(&self) -> bool {
+        // SAFETY: a non-null extension is static data of the plug-in.
+        let supported = unsafe { self.gui_ext.as_ref() }.and_then(|e| e.is_api_supported);
+        match (supported, WINDOW_API) {
+            // SAFETY: the extension's function on the main thread, with a NUL-terminated id.
+            (Some(supported), Some(api)) => unsafe { supported(self.plugin, api.as_ptr(), false) },
+            _ => false,
+        }
+    }
+
+    fn main_editor_open(&self, parent: *mut c_void) -> Option<(u32, u32)> {
+        let api = WINDOW_API?;
+        // SAFETY: a non-null extension is static data of the plug-in.
+        let gui = unsafe { self.gui_ext.as_ref() }?;
+        let window = GuiWindow {
+            api: api.as_ptr(),
+            handle: parent,
+        };
+        let (mut width, mut height) = (0u32, 0u32);
+        // SAFETY: the extension's functions on the main thread, in CLAP's order: create, put
+        // in the parent view (which the caller keeps alive), measure, show.
+        unsafe {
+            if !self.editor.load(Ordering::Relaxed) {
+                if !gui.create?(self.plugin, api.as_ptr(), false) {
+                    return None;
+                }
+                self.editor.store(true, Ordering::Relaxed);
+                if !gui.set_parent?(self.plugin, &window) {
+                    self.main_editor_close();
+                    return None;
+                }
+            }
+            if !gui.get_size?(self.plugin, &mut width, &mut height) {
+                (width, height) = (480, 320);
+            }
+            if let Some(show) = gui.show {
+                show(self.plugin);
+            }
+        }
+        Some((width, height))
+    }
+
+    fn main_editor_close(&self) {
+        // SAFETY: a non-null extension is static data of the plug-in.
+        let destroy = unsafe { self.gui_ext.as_ref() }.and_then(|e| e.destroy);
+        if let (true, Some(destroy)) = (self.editor.swap(false, Ordering::Relaxed), destroy) {
+            // SAFETY: the view was made by `create` and is destroyed once, on the main thread.
+            unsafe { destroy(self.plugin) };
+        }
+    }
+
+    fn main_editor_resized(&self) -> Option<(u32, u32)> {
+        let size = self.state.resize.swap(0, Ordering::AcqRel);
+        if size == 0 {
+            return None;
+        }
+        let (width, height) = ((size >> 32) as u32, size as u32);
+        // SAFETY: a non-null extension is static data of the plug-in.
+        if let Some(set_size) = unsafe { self.gui_ext.as_ref() }.and_then(|e| e.set_size) {
+            // SAFETY: the extension's function on the main thread; the plug-in asked for this
+            // size and is told it has it.
+            unsafe { set_size(self.plugin, width, height) };
+        }
+        Some((width, height))
     }
 
     fn process(&self, left: &mut [f32], right: &mut [f32], changes: &[(u32, f32)]) {
@@ -864,6 +1024,7 @@ impl Backend for ClapBackend {
 
 impl Drop for ClapBackend {
     fn drop(&mut self) {
+        self.main_editor_close();
         let started = self.audio.get_mut().started;
         let plugin = self.plugin();
         // SAFETY: the last handle is gone, so no thread is in `process`. CLAP wants

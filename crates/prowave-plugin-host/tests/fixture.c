@@ -1,5 +1,7 @@
-/* A tiny CLAP audio effect for the host's tests: a stereo gain with one parameter ("Gain",
- * 0..2, default 1), a latency of 7 samples (reported, not applied) and a state of one double.
+/* A tiny CLAP audio effect for the host's tests: a stereo gain with a parameter "Gain" (0..2,
+ * default 1), a latency of 7 samples (reported, not applied) and a state of one double. Its
+ * second parameter, "Crash", ends the process when it is moved past half, and its third,
+ * "Hang", makes the audio thread stop for good: what a broken plug-in does while playing.
  * The structures are CLAP 1.2's, written out so the test needs no SDK. */
 #include <stdbool.h>
 #include <stdint.h>
@@ -110,8 +112,11 @@ static int32_t p_process(const plugin_t *p, const process_t *process) {
     uint32_t n = process->in_events->size(process->in_events);
     for (uint32_t i = 0; i < n; i++) {
         const event_header_t *h = process->in_events->get(process->in_events, i);
-        if (h->space == 0 && h->type == 5 && ((const event_param_t *)h)->param_id == 42)
-            g->gain = ((const event_param_t *)h)->value;
+        const event_param_t *e = (const event_param_t *)h;
+        if (h->space != 0 || h->type != 5) continue;
+        if (e->param_id == 42) g->gain = e->value;
+        if (e->param_id == 43 && e->value > 0.5) abort();
+        if (e->param_id == 44 && e->value > 0.5) for (;;) { volatile int stuck = 1; (void)stuck; }
     }
     for (uint32_t c = 0; c < 2; c++)
         for (uint32_t i = 0; i < process->frames; i++)
@@ -119,21 +124,21 @@ static int32_t p_process(const plugin_t *p, const process_t *process) {
     return 1;
 }
 
-static uint32_t params_count(const plugin_t *p) { (void)p; return 1; }
+static uint32_t params_count(const plugin_t *p) { (void)p; return 3; }
 static bool params_info(const plugin_t *p, uint32_t index, param_info_t *info) {
     (void)p;
-    if (index != 0) return false;
+    if (index > 2) return false;
     memset(info, 0, sizeof *info);
-    info->id = 42;
-    strcpy(info->name, "Gain");
+    info->id = 42 + index;
+    strcpy(info->name, index == 0 ? "Gain" : index == 1 ? "Crash" : "Hang");
     info->min = 0.0;
-    info->max = 2.0;
-    info->def = 1.0;
+    info->max = index == 0 ? 2.0 : 1.0;
+    info->def = index == 0 ? 1.0 : 0.0;
     return true;
 }
 static bool params_value(const plugin_t *p, uint32_t id, double *value) {
-    if (id != 42) return false;
-    *value = self(p)->gain;
+    if (id < 42 || id > 44) return false;
+    *value = id == 42 ? self(p)->gain : 0.0;
     return true;
 }
 static bool params_text(const plugin_t *p, uint32_t id, double value, char *out, uint32_t size) {

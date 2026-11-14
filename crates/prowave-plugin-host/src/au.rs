@@ -7,6 +7,7 @@ use crate::{Backend, Error, Format, ParamInfo, PluginInfo};
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 type OsStatus = i32;
 type Component = *mut c_void;
@@ -30,6 +31,7 @@ const PROP_STREAM_FORMAT: u32 = 8;
 const PROP_LATENCY: u32 = 12;
 const PROP_MAX_FRAMES: u32 = 14;
 const PROP_RENDER_CALLBACK: u32 = 23;
+const PROP_COCOA_UI: u32 = 31;
 
 const PARAM_CF_NAME_RELEASE: u32 = 1 << 4;
 const PARAM_HAS_CF_NAME: u32 = 1 << 27;
@@ -121,6 +123,10 @@ struct RawParam {
     default: f32,
     flags: u32,
 }
+
+// AUGenericView, the system's view for a unit that has none of its own.
+#[link(name = "CoreAudioKit", kind = "framework")]
+extern "C" {}
 
 #[link(name = "AudioToolbox", kind = "framework")]
 extern "C" {
@@ -317,6 +323,9 @@ pub(crate) struct AuBackend {
     names: Vec<ParamInfo>,
     rate: f64,
     audio: Box<UnsafeCell<Audio>>,
+    /// The unit's own view once made (null before), and its size when last looked at.
+    view: AtomicPtr<c_void>,
+    view_size: AtomicU64,
 }
 
 /// The unit asks for its input: the block `process` put in `Audio::input`.
@@ -515,6 +524,8 @@ pub(crate) fn load(id: &str, rate: f64, block: usize) -> Result<AuBackend, Error
         names,
         rate,
         audio,
+        view: AtomicPtr::new(std::ptr::null_mut()),
+        view_size: AtomicU64::new(0),
     })
 }
 
@@ -706,6 +717,103 @@ impl Backend for AuBackend {
         }
     }
 
+    fn main_has_editor(&self) -> bool {
+        // A unit without a view of its own gets the system's generic one.
+        true
+    }
+
+    fn main_editor_open(&self, parent: *mut c_void) -> Option<(u32, u32)> {
+        use crate::mac::{class, frame, msg, Id, Rect, Size};
+        // SAFETY: AppKit and AudioToolbox calls on the main thread, each with its own argument
+        // types. The Cocoa UI property is a bundle URL followed by class names, all owned by
+        // the caller; the first class makes the view.
+        unsafe {
+            let mut view: Id = self.view.load(Ordering::Relaxed);
+            if view.is_null() {
+                let mut size = 0u32;
+                let listed = AudioUnitGetPropertyInfo(
+                    self.unit,
+                    PROP_COCOA_UI,
+                    SCOPE_GLOBAL,
+                    0,
+                    &mut size,
+                    std::ptr::null_mut(),
+                ) == 0;
+                let pointers = size as usize / std::mem::size_of::<CfRef>();
+                if listed && (2..=64).contains(&pointers) {
+                    let mut info: Vec<CfRef> = vec![std::ptr::null(); pointers];
+                    if AudioUnitGetProperty(
+                        self.unit,
+                        PROP_COCOA_UI,
+                        SCOPE_GLOBAL,
+                        0,
+                        info.as_mut_ptr().cast(),
+                        &mut size,
+                    ) == 0
+                    {
+                        let bundle = msg!(Id, class("NSBundle"), "bundleWithURL:",
+                            Id: info[0].cast_mut());
+                        if !bundle.is_null() {
+                            let made = msg!(Id, bundle, "classNamed:", Id: info[1].cast_mut());
+                            if !made.is_null() {
+                                let factory = msg!(Id, msg!(Id, made, "alloc"), "init");
+                                view = msg!(Id, factory, "uiViewForAudioUnit:withSize:",
+                                    *mut c_void: self.unit, Size: Size { w: 0.0, h: 0.0 });
+                            }
+                        }
+                        for object in info.into_iter().filter(|o| !o.is_null()) {
+                            CFRelease(object);
+                        }
+                    }
+                }
+                if view.is_null() {
+                    let generic = class("AUGenericView");
+                    if generic.is_null() {
+                        return None;
+                    }
+                    view = msg!(Id, msg!(Id, generic, "alloc"), "initWithAudioUnit:",
+                        *mut c_void: self.unit);
+                }
+                if view.is_null() {
+                    return None;
+                }
+                let at = frame(view);
+                msg!((), view, "setFrame:",
+                    Rect: Rect { x: 0.0, y: 0.0, w: at.w, h: at.h });
+                msg!((), parent.cast::<c_void>(), "addSubview:", Id: view);
+                self.view.store(view, Ordering::Relaxed);
+            }
+            let at = frame(view);
+            let (width, height) = (at.w.max(1.0) as u32, at.h.max(1.0) as u32);
+            self.view_size.store(
+                (u64::from(width) << 32) | u64::from(height),
+                Ordering::Relaxed,
+            );
+            Some((width, height))
+        }
+    }
+
+    fn main_editor_close(&self) {
+        let view = self.view.swap(std::ptr::null_mut(), Ordering::Relaxed);
+        if !view.is_null() {
+            // SAFETY: `view` is the live NSView made in `main_editor_open`.
+            unsafe { crate::mac::msg!((), view, "removeFromSuperview") };
+        }
+    }
+
+    /// An Audio Unit's view sizes itself; the window follows when its size has changed.
+    fn main_editor_resized(&self) -> Option<(u32, u32)> {
+        let view = self.view.load(Ordering::Relaxed);
+        if view.is_null() {
+            return None;
+        }
+        // SAFETY: `view` is the live NSView made in `main_editor_open`.
+        let at = unsafe { crate::mac::frame(view) };
+        let (width, height) = (at.w.max(1.0) as u32, at.h.max(1.0) as u32);
+        let size = (u64::from(width) << 32) | u64::from(height);
+        (self.view_size.swap(size, Ordering::Relaxed) != size).then_some((width, height))
+    }
+
     fn reset(&self) {
         // SAFETY: `unit` is valid until `drop`.
         unsafe { AudioUnitReset(self.unit, SCOPE_GLOBAL, 0) };
@@ -714,6 +822,7 @@ impl Backend for AuBackend {
 
 impl Drop for AuBackend {
     fn drop(&mut self) {
+        self.main_editor_close();
         // SAFETY: the last handle is gone, so no thread is rendering; the unit is ours.
         unsafe {
             AudioUnitUninitialize(self.unit);

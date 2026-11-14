@@ -8,3 +8,12 @@ license = "GPL-3.0-or-later"
 [dependencies]
 libloading = "0.8"
 rtrb = "0.4.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The plug-in's own process, for this crate's tests (the app is that program in a release).
+[[bin]]
+name = "prowave-plugin-host"
+path = "src/bin/host.rs"
+test = false
