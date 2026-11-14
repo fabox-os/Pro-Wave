@@ -208,6 +208,18 @@ fn slot(g: &Painter, r: Rect, text: &str, fill: Color32, color: Color32) {
     }
 }
 
+/// The name of an empty slot, as Logic writes it in the inspector's channel strips ("Audio FX",
+/// "Sends", "Group"): the Mixer has these in its label column, the inspector has no column.
+fn caption(g: &Painter, r: Rect, text: &str) {
+    g.text(
+        r.center(),
+        Align2::CENTER_CENTER,
+        text,
+        FontId::proportional(10.0),
+        TEXT_DIM,
+    );
+}
+
 fn small_button(
     ui: &Ui,
     g: &Painter,
@@ -1241,6 +1253,11 @@ pub fn channel_strip(
                 },
             }
         }
+        let captions = name_style == NameStyle::Plain;
+        if captions && inserts.len() < r.fx_rows && !matches!(key, StripKey::Master) {
+            let empty = row(r.fx + inserts.len() as f32 * 17.0, 15.0);
+            caption(g, empty, tr("Audio FX"));
+        }
         match key {
             // An Aux strip takes its signal from a bus: it has no sends of its own.
             StripKey::Track(i) if p.tracks[i].kind != TrackKind::Aux => {
@@ -1259,6 +1276,23 @@ pub fn channel_strip(
             StripKey::StereoOut => slot(g, row(r.sends, 16.0), "", SLOT_EMPTY, TEXT),
             _ => {}
         }
+        if captions {
+            match key {
+                StripKey::Track(i) if p.tracks[i].kind != TrackKind::Aux => {
+                    let used = p.tracks[i].sends.len();
+                    if used < r.send_rows {
+                        caption(g, row(r.sends + used as f32 * 17.0, 16.0), tr("Sends"));
+                    }
+                }
+                // Logic's output strip has a Group slot too; it stays empty here (the Stereo
+                // Out strip belongs to no group).
+                StripKey::StereoOut => {
+                    slot(g, row(r.group, 16.0), "", SLOT_EMPTY, TEXT);
+                    caption(g, row(r.group, 16.0), tr("Group"));
+                }
+                _ => {}
+            }
+        }
         if let StripKey::Track(_) = key {
             let out = if name_style == NameStyle::Plain {
                 tr("Stereo Out")
@@ -1276,6 +1310,11 @@ pub fn channel_strip(
                     id(ns, (key, "output")),
                 );
                 group_slot(ui, g, row(r.group, 16.0), p, i, id(ns, (key, "vca")));
+                let grouped =
+                    p.tracks[i].group.is_some_and(|g| g < p.groups.len()) || p.vca_of(i).is_some();
+                if name_style == NameStyle::Plain && !grouped {
+                    caption(g, row(r.group, 16.0), tr("Group"));
+                }
             }
         }
         if matches!(key, StripKey::StereoOut | StripKey::Master) {

@@ -1185,7 +1185,7 @@ impl eframe::App for App {
         }
         if s.show_inspector {
             egui::Panel::left("inspector")
-                .exact_size(244.0)
+                .exact_size(inspector::WIDTH)
                 .frame(egui::Frame::new())
                 .show(ui, |ui| inspector::show(ui, p, s, &meters));
         }
