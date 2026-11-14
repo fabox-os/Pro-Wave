@@ -836,3 +836,6 @@ Loop Browser = 循环浏览器
 File Browser = 文件浏览器
 Record Enable: arm the track for recording = 录音准备：让轨道准备录音
 Input Monitoring: hear the input of the track = 输入监听：听到轨道的输入
+Plug-in not found = 未找到插件
+Not found = 未找到
+In Use = 使用中

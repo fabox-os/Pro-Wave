@@ -836,3 +836,6 @@ Loop Browser = Przeglądarka pętli
 File Browser = Przeglądarka plików
 Record Enable: arm the track for recording = Gotowość do nagrywania: przygotuj ścieżkę do nagrania
 Input Monitoring: hear the input of the track = Monitorowanie wejścia: słuchaj wejścia ścieżki
+Plug-in not found = Nie znaleziono wtyczki
+Not found = Nie znaleziono
+In Use = W użyciu

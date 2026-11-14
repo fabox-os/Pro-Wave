@@ -1236,7 +1236,7 @@ impl eframe::App for App {
             .frame(egui::Frame::new())
             .show(ui, |ui| tracks_area::show(ui, p, s, &meters));
         fx_ui::show(&ctx, p, s, &meters);
-        plugin_manager::show(&ctx, s);
+        plugin_manager::show(&ctx, p, s);
         plugins::idle();
         automation::show(&ctx, p, s);
         undo_history::show(&ctx, p, s, &mut self.history);
@@ -1725,6 +1725,10 @@ fn main() -> eframe::Result {
             // Cmd/Ctrl + = / - / 0 resize the interface through `ui_scale` instead, which
             // also keeps the fit for small windows.
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+            // The plug-ins of the last run are listed at once, and the scan for new, changed and
+            // removed ones runs in the background, as Logic does at every start.
+            plugins::set_repaint(&cc.egui_ctx);
+            plugins::scan(false);
             // Every start begins clean; the picture runs need something to show.
             let project = if shots_dir.is_some() || shot_out.is_some() {
                 Project::demo()

@@ -836,3 +836,6 @@ Loop Browser = Explorateur de boucles
 File Browser = Explorateur de fichiers
 Record Enable: arm the track for recording = Armer l'enregistrement : préparer la piste à enregistrer
 Input Monitoring: hear the input of the track = Monitoring d'entrée : écouter l'entrée de la piste
+Plug-in not found = Plug-in introuvable
+Not found = Introuvable
+In Use = Utilisés

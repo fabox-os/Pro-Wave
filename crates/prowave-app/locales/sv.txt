@@ -836,3 +836,6 @@ Loop Browser = Loopbläddrare
 File Browser = Filbläddrare
 Record Enable: arm the track for recording = Inspelningsklar: gör spåret redo för inspelning
 Input Monitoring: hear the input of the track = Ingångsövervakning: hör spårets ingång
+Plug-in not found = Plugin hittades inte
+Not found = Hittades inte
+In Use = I bruk

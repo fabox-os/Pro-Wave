@@ -836,3 +836,6 @@ Loop Browser = लूप ब्राउज़र
 File Browser = फ़ाइल ब्राउज़र
 Record Enable: arm the track for recording = रिकॉर्ड इनेबल: ट्रैक को रिकॉर्डिंग के लिए तैयार करें
 Input Monitoring: hear the input of the track = इनपुट मॉनिटरिंग: ट्रैक का इनपुट सुनें
+Plug-in not found = प्लग-इन नहीं मिला
+Not found = नहीं मिला
+In Use = उपयोग में

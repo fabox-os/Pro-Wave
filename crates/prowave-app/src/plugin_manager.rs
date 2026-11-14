@@ -6,7 +6,9 @@
 //!
 //! Not done: Logic's Version, Compatibility and Use columns (turning single plug-ins off).
 use crate::i18n::{tr, trf};
-use crate::plugins::{self, PluginInfo, Scan};
+use crate::mixer::PLUGIN_NOT_FOUND;
+use crate::model::Project;
+use crate::plugins::{self, Format, PluginInfo, Scan};
 use crate::UiState;
 
 const ROW: f32 = 18.0;
@@ -31,8 +33,30 @@ fn row(ui: &mut egui::Ui, cells: [egui::RichText; 4]) {
     });
 }
 
+/// The plug-ins the project uses that are not installed here, once each: name and format.
+fn not_found(p: &Project) -> Vec<(String, Format)> {
+    let mut found: Vec<(String, Format)> = Vec::new();
+    let inserts = p
+        .tracks
+        .iter()
+        .flat_map(|t| t.inserts.iter())
+        .chain(p.master_inserts.iter());
+    for insert in inserts {
+        if insert.plugin == 0 || !plugins::missing(insert.plugin) {
+            continue;
+        }
+        if let Some(info) = plugins::info(insert.plugin) {
+            let used = (info.name, info.format);
+            if !found.contains(&used) {
+                found.push(used);
+            }
+        }
+    }
+    found
+}
+
 /// The Plugin Manager window, while `UiState::show_plugin_manager` is on.
-pub fn show(ctx: &egui::Context, s: &mut UiState) {
+pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
     if !s.show_plugin_manager {
         return;
     }
@@ -40,6 +64,7 @@ pub fn show(ctx: &egui::Context, s: &mut UiState) {
     let status = plugins::scan_status();
     let catalog = plugins::catalog();
     let loaded = plugins::loaded();
+    let in_use = not_found(p);
     let mut open = true;
     let mut done = false;
     egui::Window::new(tr("Plugin Manager"))
@@ -110,6 +135,19 @@ pub fn show(ctx: &egui::Context, s: &mut UiState) {
                         });
                 });
             egui::CentralPanel::default().show(ui, |ui| {
+                // The project's plug-ins that are not installed: they keep their place in the
+                // project and pass the sound through, until the plug-in is installed again.
+                if !in_use.is_empty() {
+                    ui.weak(tr("In Use"));
+                    for (name, format) in &in_use {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(name).color(PLUGIN_NOT_FOUND));
+                            ui.weak(format.name());
+                            ui.label(egui::RichText::new(tr("Not found")).color(PLUGIN_NOT_FOUND));
+                        });
+                    }
+                    ui.separator();
+                }
                 let query = s.plugin_manager_search.trim().to_lowercase();
                 let rows: Vec<&PluginInfo> = catalog
                     .iter()
@@ -179,7 +217,7 @@ mod tests {
         crate::menus::apply("Plugin Manager", &mut p, &mut s);
         assert!(s.show_plugin_manager);
         let mut h = crate::ui_test::Harness::new(900.0, 600.0);
-        h.settle(|ui| show(ui.ctx(), &mut s));
+        h.settle(|ui| show(ui.ctx(), &p, &mut s));
         assert!(s.show_plugin_manager, "drawing it does not close it");
         assert_eq!(
             plugins::scan_status(),

@@ -836,3 +836,6 @@ Loop Browser = ループブラウザ
 File Browser = ファイルブラウザ
 Record Enable: arm the track for recording = 録音可能: トラックを録音用に準備
 Input Monitoring: hear the input of the track = 入力モニタリング: トラックの入力を聴く
+Plug-in not found = プラグインが見つかりません
+Not found = 見つかりません
+In Use = 使用中

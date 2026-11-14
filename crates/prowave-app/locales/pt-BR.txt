@@ -836,3 +836,6 @@ Loop Browser = Navegador de Loops
 File Browser = Navegador de Arquivos
 Record Enable: arm the track for recording = Armar para gravar: preparar a faixa para gravação
 Input Monitoring: hear the input of the track = Monitoramento de entrada: ouvir a entrada da faixa
+Plug-in not found = Plug-in não encontrado
+Not found = Não encontrado
+In Use = Em uso

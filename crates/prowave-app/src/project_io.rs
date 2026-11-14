@@ -2353,6 +2353,16 @@ pub(crate) mod tests {
         assert_eq!(back.name(), "Far Away EQ");
         assert_eq!(plugins::info(back.plugin), Some(info));
         assert_eq!(plugins::state(back.plugin), Some(vec![0, 1, 254]));
+        // Saved again while still not installed, the slot keeps its file entry and its state.
+        let (again, _) = to_doc(&q);
+        let kept = again.tracks[0].fx[1]
+            .plugin
+            .as_ref()
+            .expect("the plug-in is still in the file");
+        assert_eq!(
+            (kept.id.as_str(), kept.state.as_str()),
+            (saved.id.as_str(), "0001fe")
+        );
         assert_eq!(q.master_inserts.len(), 1);
         assert_eq!(plugins::state(q.master_inserts[0].plugin), None);
 

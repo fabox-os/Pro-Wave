@@ -836,3 +836,6 @@ Loop Browser = Loop-Browser
 File Browser = Dateibrowser
 Record Enable: arm the track for recording = Aufnahmebereitschaft: Spur für die Aufnahme scharfschalten
 Input Monitoring: hear the input of the track = Eingangsüberwachung: den Eingang der Spur hören
+Plug-in not found = Plug-in nicht gefunden
+Not found = Nicht gefunden
+In Use = In Verwendung

@@ -836,3 +836,6 @@ Loop Browser = Kilpų naršyklė
 File Browser = Failų naršyklė
 Record Enable: arm the track for recording = Įrašymo parengtis: paruošti takelį įrašymui
 Input Monitoring: hear the input of the track = Įėjimo stebėjimas: girdėti takelio įėjimą
+Plug-in not found = Papildinys nerastas
+Not found = Nerasta
+In Use = Naudojami

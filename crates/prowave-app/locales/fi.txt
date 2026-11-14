@@ -836,3 +836,6 @@ Loop Browser = Looppiselain
 File Browser = Tiedostoselain
 Record Enable: arm the track for recording = Äänitysvalmius: virittele raita äänitettäväksi
 Input Monitoring: hear the input of the track = Tulon monitorointi: kuule raidan tulo
+Plug-in not found = Liitännäistä ei löytynyt
+Not found = Ei löytynyt
+In Use = Käytössä
