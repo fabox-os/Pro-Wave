@@ -77,11 +77,18 @@ pub struct EngineSync {
 
 /// The settings that change the impulse response of a Space Designer (not Predelay, Dry, Wet,
 /// Input or Output EQ, which the audio thread applies as they move).
-fn ir_key(params: &[f32; prowave_engine::MAX_FX_PARAMS]) -> Vec<u32> {
-    prowave_engine::IR_PARAMS
+fn ir_key(insert: &Insert) -> Vec<u32> {
+    let mut key: Vec<u32> = prowave_engine::IR_PARAMS
         .iter()
-        .map(|&i| params[i].to_bits())
-        .collect()
+        .map(|&i| insert.params[i].to_bits())
+        .collect();
+    // A different impulse-response file is a different response.
+    key.push(
+        insert
+            .ir_file
+            .map_or(u32::MAX, crate::ir_files::IrFileId::number),
+    );
+    key
 }
 
 /// The key of the master bus in the Space Designer jobs (no track has this number).
@@ -92,7 +99,10 @@ const MASTER_KEY: usize = usize::MAX;
 /// up work.
 struct IrJob {
     running: Option<std::sync::mpsc::Receiver<Box<prowave_engine::Convolver>>>,
-    next: Option<[f32; prowave_engine::MAX_FX_PARAMS]>,
+    next: Option<(
+        [f32; prowave_engine::MAX_FX_PARAMS],
+        Option<crate::ir_files::IrFileId>,
+    )>,
     /// A finished response the engine did not take yet.
     ready: Option<Box<prowave_engine::Convolver>>,
 }
@@ -789,6 +799,7 @@ impl EngineSync {
                 }
                 self.fx[i] = want.to_vec();
                 self.irs.retain(|(t, _), _| *t != i);
+                self.queue_file_irs(i, want);
             } else {
                 for (slot, (have, w)) in self.fx[i].iter_mut().zip(want).enumerate() {
                     if have == w {
@@ -804,15 +815,13 @@ impl EngineSync {
                         self.retry = true;
                         return;
                     }
-                    if w.kind == prowave_engine::FxKind::Reverb
-                        && ir_key(&have.params) != ir_key(&w.params)
-                    {
+                    if w.kind == prowave_engine::FxKind::Reverb && ir_key(have) != ir_key(w) {
                         let job = self.irs.entry((i, slot)).or_insert(IrJob {
                             running: None,
                             next: None,
                             ready: None,
                         });
-                        job.next = Some(w.params);
+                        job.next = Some((w.params, w.ir_file));
                     }
                     *have = *w;
                 }
@@ -881,6 +890,7 @@ impl EngineSync {
             }
             self.master_fx = want.to_vec();
             self.irs.retain(|(t, _), _| *t != MASTER_KEY);
+            self.queue_file_irs(MASTER_KEY, want);
             return true;
         }
         for (slot, (have, w)) in self.master_fx.iter_mut().zip(want).enumerate() {
@@ -897,18 +907,38 @@ impl EngineSync {
                 self.retry = true;
                 return false;
             }
-            if w.kind == prowave_engine::FxKind::Reverb && ir_key(&have.params) != ir_key(&w.params)
-            {
+            if w.kind == prowave_engine::FxKind::Reverb && ir_key(have) != ir_key(w) {
                 let job = self.irs.entry((MASTER_KEY, slot)).or_insert(IrJob {
                     running: None,
                     next: None,
                     ready: None,
                 });
-                job.next = Some(w.params);
+                job.next = Some((w.params, w.ir_file));
             }
             *have = *w;
         }
         true
+    }
+
+    /// A new chain's Space Designers start with a built-in response; the ones that play an
+    /// impulse-response file get a job that reads it and swaps its response in.
+    fn queue_file_irs(&mut self, key: usize, inserts: &[Insert]) {
+        for (slot, ins) in inserts.iter().enumerate() {
+            let file = ins.ir_file.filter(|_| {
+                ins.kind == prowave_engine::FxKind::Reverb
+                    && ins.params[prowave_engine::sd::IR_TYPE].round() as i32 == 2
+            });
+            if let Some(file) = file {
+                self.irs.insert(
+                    (key, slot),
+                    IrJob {
+                        running: None,
+                        next: Some((ins.params, Some(file))),
+                        ready: None,
+                    },
+                );
+            }
+        }
     }
 
     /// Starts the response for the newest Space Designer settings, hands finished ones to the
@@ -960,13 +990,22 @@ impl EngineSync {
                 continue;
             };
             if job.running.is_none() {
-                if let Some(params) = job.next.take() {
+                if let Some((params, file)) = job.next.take() {
                     let (tx, rx) = std::sync::mpsc::channel();
                     let spawned = std::thread::Builder::new()
                         .name("space-designer-ir".into())
                         .spawn(move || {
-                            let _ = tx
-                                .send(Box::new(prowave_engine::Convolver::for_params(&params, sr)));
+                            // An impulse-response file is read and resampled here, off the UI
+                            // and audio threads; one that cannot be read plays the built-in
+                            // response chosen by IR.
+                            let frames = file
+                                .and_then(|id| crate::ir_files::resampled(id, sr.round() as u32));
+                            let conv = prowave_engine::Convolver::for_params_with(
+                                &params,
+                                sr,
+                                frames.as_ref().map(|f| f.as_slice()),
+                            );
+                            let _ = tx.send(Box::new(conv));
                         });
                     job.running = spawned.is_ok().then_some(rx);
                 }
@@ -1555,5 +1594,21 @@ mod tests {
             program: 0,
         };
         assert!(soundfont_player(&sf, 48_000.0).is_ok());
+    }
+
+    #[test]
+    fn a_different_impulse_response_file_is_a_different_response_for_the_jobs() {
+        let mut a = Insert::new(prowave_engine::FxKind::Reverb);
+        let b = a;
+        assert_eq!(ir_key(&a), ir_key(&b));
+        a.ir_file = Some(crate::ir_files::intern(std::path::Path::new("/irs/a.wav")));
+        assert_ne!(ir_key(&a), ir_key(&b));
+        let mut c = a;
+        c.ir_file = Some(crate::ir_files::intern(std::path::Path::new("/irs/c.wav")));
+        assert_ne!(ir_key(&a), ir_key(&c));
+        // The mix (Dry, Wet) is not part of the response.
+        let mut d = a;
+        d.params[prowave_engine::sd::WET] = -20.0;
+        assert_eq!(ir_key(&a), ir_key(&d));
     }
 }

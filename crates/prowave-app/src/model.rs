@@ -222,6 +222,8 @@ pub struct Insert {
     pub kind: prowave_engine::FxKind,
     pub bypass: bool,
     pub params: [f32; prowave_engine::MAX_FX_PARAMS],
+    /// For a Space Designer set to `IR Type` 2: the impulse-response file it plays.
+    pub ir_file: Option<crate::ir_files::IrFileId>,
 }
 
 impl Insert {
@@ -231,6 +233,7 @@ impl Insert {
             kind,
             bypass: false,
             params: kind.defaults(),
+            ir_file: None,
         }
     }
 

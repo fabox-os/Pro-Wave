@@ -7,6 +7,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **Space Designer loads your own impulse responses (issue #111):** in the Space Designer window, the response menu has **Load Impulse Response File…** (WAV, AIFF, FLAC, MP3, CAF, OGG or M4A). A mono file is heard on both sides, a stereo file as it is, and a four-channel "true stereo" file uses its left-to-left and right-to-right responses; with more channels the first two. The file is read and resampled to the project's rate in the background (only its first 12 seconds, and files over 256 MB are refused), Length is set to the file's length, and Size, IR Offset, Reverse, the envelopes, the filter, X-Over and Output EQ all work on it. The display draws the file's response. The file is saved in the project by its path (like a SoundFont); if it is gone, the built-in response chosen by IR plays and the window says so. It works on the Stereo Out too.
+
 ✅ **Quiet recordings no longer look flat (issue #119):** waveforms were drawn on a straight scale, so a microphone recording that peaks at 5 to 20 % showed as a thin line. They are now drawn on a soft logarithmic curve: silence is still a line and full scale is still full height, but quiet audio shows its shape. Only the picture changed, not the audio.
 
 ✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
@@ -61,7 +63,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ❌ MusicXML import; GarageBand tempo, signature and arrangement (see `GARAGEBAND-FORMAT-SPEC.md`); Hydrogen kits and the new menu entries (Import Audio File, Show in File Manager, Undo History) were tested by automated tests on Linux only, not on Windows or macOS
 
-❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
+❌ Space Designer: the four-channel (true stereo) cross responses (left-to-right and right-to-left) are not used; the six built-in responses are made in code, none is shipped as a WAV; tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
 
 ## 0.2.2
 

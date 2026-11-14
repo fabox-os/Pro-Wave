@@ -800,3 +800,6 @@ Nothing to undo yet = 暂无可撤销的操作
 Send {} = 发送 {}
 Disk streaming load: {}% = 磁盘流式传输负载：{}%
 No plug-ins match = 没有匹配的插件
+Load Impulse Response File… = 载入脉冲响应文件…
+The impulse response file cannot be read; a built-in response plays. = 无法读取脉冲响应文件；将播放内置响应。
+Cannot use that file: {} = 无法使用该文件：{}

@@ -800,3 +800,6 @@ Nothing to undo yet = Ainda não há nada para desfazer
 Send {} = Envio {}
 Disk streaming load: {}% = Carga de streaming do disco: {}%
 No plug-ins match = Nenhum plug-in corresponde
+Load Impulse Response File… = Carregar arquivo de resposta ao impulso…
+The impulse response file cannot be read; a built-in response plays. = O arquivo de resposta ao impulso não pode ser lido; uma resposta embutida é tocada.
+Cannot use that file: {} = Não é possível usar esse arquivo: {}

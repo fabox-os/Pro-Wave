@@ -152,7 +152,7 @@ const REVERB_PARAMS: [ParamInfo; 30] = [
     p("Output EQ", 0.0, 1.0, 1.0, ""),
     p("Filter Env", 0.0, 1.0, 0.0, ""),
     p("Volume Env", 0.0, 1.0, 1.0, ""),
-    p("IR Type", 0.0, 1.0, 0.0, ""),
+    p("IR Type", 0.0, 2.0, 0.0, ""),
     p("IR", 0.0, 5.0, 0.0, ""),
     p("Density", 0.0, 1.0, 0.5, ""),
     p("Diffuse", 0.0, 1.0, 0.5, ""),

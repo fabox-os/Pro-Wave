@@ -800,3 +800,6 @@ Nothing to undo yet = Ei vielä kumottavaa
 Send {} = Lähetys {}
 Disk streaming load: {}% = Levyn suoratoiston kuormitus: {}%
 No plug-ins match = Yksikään liitännäinen ei vastaa
+Load Impulse Response File… = Lataa impulssivastetiedosto…
+The impulse response file cannot be read; a built-in response plays. = Impulssivastetiedostoa ei voi lukea; soitetaan sisäänrakennettu vaste.
+Cannot use that file: {} = Tiedostoa ei voi käyttää: {}

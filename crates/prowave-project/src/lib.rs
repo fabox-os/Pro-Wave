@@ -299,6 +299,8 @@ pub struct InsertDoc {
     pub kind: String,
     pub bypass: bool,
     pub params: Vec<f32>,
+    /// A Space Designer's impulse-response file (its path), when it plays one.
+    pub ir_file: Option<String>,
 }
 
 /// The automation lane of one effect parameter.

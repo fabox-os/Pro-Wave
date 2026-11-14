@@ -800,3 +800,6 @@ Nothing to undo yet = Ingenting å angre ennå
 Send {} = Send {}
 Disk streaming load: {}% = Belastning på diskstrømming: {}%
 No plug-ins match = Ingen plug-in samsvarer
+Load Impulse Response File… = Last inn impulsresponsfil…
+The impulse response file cannot be read; a built-in response plays. = Impulsresponsfilen kan ikke leses; en innebygd respons spilles.
+Cannot use that file: {} = Kan ikke bruke den filen: {}

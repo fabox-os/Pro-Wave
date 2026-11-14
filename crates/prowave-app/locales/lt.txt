@@ -800,3 +800,6 @@ Nothing to undo yet = Kol kas nėra ką atšaukti
 Send {} = Siuntimas {}
 Disk streaming load: {}% = Disko srautinio perdavimo apkrova: {}%
 No plug-ins match = Joks papildinys neatitinka
+Load Impulse Response File… = Įkelti impulsinio atsako failą…
+The impulse response file cannot be read; a built-in response plays. = Impulsinio atsako failo nepavyksta perskaityti; groja įtaisytas atsakas.
+Cannot use that file: {} = Šio failo naudoti negalima: {}
