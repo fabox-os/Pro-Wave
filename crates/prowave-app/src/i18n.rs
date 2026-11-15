@@ -408,6 +408,9 @@ pub(crate) mod tests {
         for t in crate::tracks_area::TOOLS {
             add(t);
         }
+        for (_, t, _, _) in crate::inspector::SAMPLER_ROWS {
+            add(t);
+        }
         for (t, _) in crate::inspector::QUANTIZE {
             add(t);
         }

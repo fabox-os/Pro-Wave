@@ -275,6 +275,8 @@ pub struct TrackDoc {
     pub soundfont: Option<String>,
     pub soundfont_bank: u16,
     pub soundfont_program: u8,
+    /// The Sampler the track plays (none: not a Sampler).
+    pub sampler: Option<SamplerDoc>,
     /// The icon the user picked (`IconKind::name`); absent or unknown names give the automatic one.
     pub icon: Option<String>,
     /// Audio tracks: the first input channel they record (0 is Input 1), and whether they
@@ -298,6 +300,21 @@ pub struct TrackDoc {
 pub struct InsertDoc {
     pub kind: String,
     pub bypass: bool,
+    pub params: Vec<f32>,
+}
+
+/// A track's Sampler in a project file: where its sounds come from and its dials.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct SamplerDoc {
+    /// `sfz`, `exs` or `audio`.
+    pub kind: String,
+    /// The instrument or audio file.
+    pub path: String,
+    /// For `audio`: the key the sample sounds at, and whether it loops.
+    pub root_key: u8,
+    pub looped: bool,
+    /// The dials (Level, Attack, Release).
     pub params: Vec<f32>,
 }
 
@@ -413,6 +430,7 @@ impl Default for TrackDoc {
             soundfont: None,
             soundfont_bank: 0,
             soundfont_program: 0,
+            sampler: None,
             icon: None,
             input: 0,
             input_stereo: false,

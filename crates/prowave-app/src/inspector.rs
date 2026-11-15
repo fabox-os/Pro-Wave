@@ -73,6 +73,140 @@ fn use_soundfont_file(p: &mut Project, ti: usize, path: String) {
         bank: first.0,
         program: first.1,
     });
+    p.tracks[ti].sampler = None;
+}
+
+/// The Sampler's dials as inspector rows: dial, name, drag steps per unit and range in steps.
+pub(crate) type SamplerRow = (usize, &'static str, f32, (i32, i32));
+
+pub(crate) const SAMPLER_ROWS: [SamplerRow; prowave_engine::sampler::PARAMS] = [
+    (
+        prowave_engine::sampler::dial::LEVEL,
+        "Level:",
+        2.0,
+        (-48, 24),
+    ),
+    (
+        prowave_engine::sampler::dial::ATTACK,
+        "Attack:",
+        1.0,
+        (0, 2000),
+    ),
+    (
+        prowave_engine::sampler::dial::RELEASE,
+        "Release:",
+        1.0,
+        (0, 5000),
+    ),
+];
+
+/// The text of a Sampler dial at `steps`.
+fn sampler_text(dial: usize, steps: i32) -> String {
+    match dial {
+        prowave_engine::sampler::dial::LEVEL => format!("{:+.1} dB", steps as f32 / 2.0),
+        _ => format!("{steps} ms"),
+    }
+}
+
+/// The name of MIDI key `key` (60 is C3, as in Logic).
+fn key_name(key: u8) -> String {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    format!(
+        "{}{}",
+        NAMES[usize::from(key % 12)],
+        i32::from(key / 12) - 2
+    )
+}
+
+/// Makes the track play the Sampler with `source`, and not a SoundFont.
+fn use_sampler(p: &mut Project, ti: usize, source: crate::sampler_load::SamplerSource) {
+    p.tracks[ti].sampler = Some(crate::model::SamplerUse::new(source));
+    p.tracks[ti].soundfont = None;
+}
+
+/// The Sampler's rows under the instrument row: its three dials, and for a single audio file its
+/// root key and loop. Returns the changed Sampler, if the user changed it. `y` moves past the
+/// rows.
+fn sampler_rows(
+    ui: &Ui,
+    g: &Painter,
+    (left, vx, vw): (f32, f32, f32),
+    y: &mut f32,
+    current: &crate::model::SamplerUse,
+) -> Option<crate::model::SamplerUse> {
+    use crate::sampler_load::SamplerSource;
+    let mut next = current.clone();
+    let mut changed = false;
+    for (dial, name, per_unit, range) in SAMPLER_ROWS {
+        label(g, left, *y, tr(name), true);
+        let r = Rect::from_min_size(pos2(vx, *y + 2.0), vec2(vw, ROW_H - 4.0));
+        let steps = (current.params[dial] * per_unit).round() as i32;
+        let default = (prowave_engine::sampler::defaults()[dial] * per_unit).round() as i32;
+        if let Some(v) = drag_value(
+            ui,
+            g,
+            r,
+            &format!("sampler{dial}"),
+            steps,
+            range,
+            default,
+            sampler_text(dial, steps),
+            true,
+        ) {
+            next.params[dial] = v as f32 / per_unit;
+            changed = true;
+        }
+        *y += ROW_H;
+    }
+    if let SamplerSource::Audio { path, root, looped } = &current.source {
+        label(g, left, *y, tr("Root Key:"), true);
+        let r = Rect::from_min_size(pos2(vx, *y + 2.0), vec2(vw, ROW_H - 4.0));
+        if let Some(v) = drag_value(
+            ui,
+            g,
+            r,
+            "sampler_root",
+            i32::from(*root),
+            (0, 127),
+            60,
+            key_name(*root),
+            true,
+        ) {
+            next.source = SamplerSource::Audio {
+                path: path.clone(),
+                root: v.clamp(0, 127) as u8,
+                looped: *looped,
+            };
+            changed = true;
+        }
+        *y += ROW_H;
+        label(g, left, *y, tr("Loop:"), true);
+        let r = Rect::from_min_size(pos2(vx, *y + 2.0), vec2(vw, ROW_H - 4.0));
+        let text = if *looped { tr("On") } else { tr("Off") }.to_string();
+        if let Some(v) = drag_value(
+            ui,
+            g,
+            r,
+            "sampler_loop",
+            i32::from(*looped),
+            (0, 1),
+            0,
+            text,
+            true,
+        ) {
+            // The source is the same file: only its loop changes (the sound is made again).
+            next.source = SamplerSource::Audio {
+                path: path.clone(),
+                root: *root,
+                looped: v != 0,
+            };
+            changed = true;
+        }
+        *y += ROW_H;
+    }
+    changed.then_some(next)
 }
 
 fn gain_text(db: f32) -> String {
@@ -771,9 +905,11 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                 // The SoundFont instrument this track plays instead of its synth patch.
                 label(&g, left, y, tr("SoundFont:"), true);
                 let current = p.tracks[ti].soundfont.clone();
-                let shown = match &current {
-                    None => tr("None").to_string(),
-                    Some(sf) => soundfont_label(sf),
+                let sampler = p.tracks[ti].sampler.clone();
+                let shown = match (&current, &sampler) {
+                    (_, Some(s)) => format!("{} · {}", tr("Sampler"), s.source.name()),
+                    (None, None) => tr("None").to_string(),
+                    (Some(sf), None) => soundfont_label(sf),
                 };
                 let rect = Rect::from_min_size(pos2(vx, y + 2.0), vec2(vw, ROW_H - 4.0));
                 if let Some(resp) = popup(ui, &g, rect, "soundfont", &shown, true) {
@@ -796,7 +932,62 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                             }
                             ui.close();
                         }
-                        if let Some(sf) = current.as_ref() {
+                        ui.separator();
+                        ui.menu_button(tr("Sampler"), |ui| {
+                            use crate::sampler_load::SamplerSource;
+                            if ui.button(tr("Load SFZ Instrument…")).clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("SFZ", &["sfz", "SFZ"])
+                                    .pick_file()
+                                {
+                                    use_sampler(p, ti, SamplerSource::Sfz(path));
+                                }
+                                ui.close();
+                            }
+                            if ui.button(tr("Load EXS Instrument…")).clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("EXS", &["exs", "EXS"])
+                                    .pick_file()
+                                {
+                                    use_sampler(p, ti, SamplerSource::Exs(path));
+                                }
+                                ui.close();
+                            }
+                            if ui.button(tr("Load Audio File (Quick Sampler)…")).clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter(
+                                        "Audio",
+                                        &["wav", "aif", "aiff", "flac", "ogg", "mp3", "caf", "m4a"],
+                                    )
+                                    .pick_file()
+                                {
+                                    use_sampler(
+                                        p,
+                                        ti,
+                                        SamplerSource::Audio {
+                                            path,
+                                            root: 60,
+                                            looped: false,
+                                        },
+                                    );
+                                }
+                                ui.close();
+                            }
+                            if let Some(s) = &sampler {
+                                if let Some(e) = crate::sampler_load::error(s.source.path()) {
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(0xe0, 0x70, 0x60),
+                                        crate::i18n::trf("Cannot load: {}", &[&e]),
+                                    );
+                                }
+                                ui.separator();
+                                if ui.button(tr("Remove Sampler")).clicked() {
+                                    p.tracks[ti].sampler = None;
+                                    ui.close();
+                                }
+                            }
+                        });
+                        if let (Some(sf), None) = (current.as_ref(), sampler.as_ref()) {
                             if let Some(bank) = crate::soundfonts::loaded(&sf.path) {
                                 ui.separator();
                                 egui::ScrollArea::vertical()
@@ -825,6 +1016,11 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                     });
                 }
                 y += ROW_H;
+                if let Some(current) = p.tracks[ti].sampler.clone() {
+                    if let Some(next) = sampler_rows(ui, &g, (left, vx, vw), &mut y, &current) {
+                        p.tracks[ti].sampler = Some(next);
+                    }
+                }
             }
             for (t, v) in [
                 (tr("MIDI In Port:"), tr("All")),
@@ -1061,5 +1257,54 @@ mod tests {
             Some(19),
             "drawing the row changes nothing"
         );
+    }
+
+    #[test]
+    fn a_sampler_track_draws_its_rows_and_keeps_its_setting_and_the_helpers_name_things() {
+        use crate::model::SamplerUse;
+        use crate::sampler_load::SamplerSource;
+        assert_eq!(key_name(60), "C3");
+        assert_eq!(key_name(69), "A3");
+        assert_eq!(key_name(0), "C-2");
+        assert_eq!(key_name(127), "G8");
+        assert_eq!(
+            sampler_text(prowave_engine::sampler::dial::LEVEL, -5),
+            "-2.5 dB"
+        );
+        assert_eq!(
+            sampler_text(prowave_engine::sampler::dial::RELEASE, 80),
+            "80 ms"
+        );
+        for (dial, _, per_unit, (lo, hi)) in SAMPLER_ROWS {
+            let info = prowave_engine::sampler::DIALS[dial];
+            assert!((lo as f32 / per_unit - info.min).abs() < 1e-4, "{dial}");
+            assert!((hi as f32 / per_unit - info.max).abs() < 1e-4, "{dial}");
+        }
+        for source in [
+            SamplerSource::Audio {
+                path: "/s/pad.wav".into(),
+                root: 60,
+                looped: false,
+            },
+            SamplerSource::Sfz("/s/kit.sfz".into()),
+        ] {
+            let mut p = Project::empty();
+            p.tracks.clear();
+            let mut t = crate::model::Track::new("Samples", TrackKind::Instrument);
+            t.sampler = Some(SamplerUse::new(source));
+            let before = t.sampler.clone();
+            p.tracks.push(t);
+            p.selected_track = 0;
+            let mut s = UiState::new();
+            let meters = Meters::default();
+            let mut h = crate::ui_test::Harness::new(360.0, 900.0);
+            for _ in 0..3 {
+                h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+            }
+            assert_eq!(
+                p.tracks[0].sampler, before,
+                "drawing the rows changes nothing"
+            );
+        }
     }
 }

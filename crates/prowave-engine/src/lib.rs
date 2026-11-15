@@ -27,6 +27,8 @@ mod monitor;
 mod mtc;
 mod output;
 mod routing;
+pub mod sample_file;
+pub mod sampler;
 mod sf2;
 mod soundfont;
 mod synth;
