@@ -10,7 +10,7 @@
 //! against the project at the end: a region or track that was edited, moved, deleted or
 //! reordered meanwhile is not replaced (or exported) with audio it does not match.
 
-use prowave_engine::{write_wav, CaptureSink, Command, Engine};
+use prowave_engine::{write_flac, write_wav, CaptureSink, Command, Engine};
 use rtrb::{Consumer, RingBuffer};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -353,8 +353,12 @@ impl Bounce {
                     .to_string(),
             );
         }
-        write_wav(&self.path, &samples, self.sample_rate)
-            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        let written = if is_flac(&self.path) {
+            write_flac(&self.path, &samples, self.sample_rate)
+        } else {
+            write_wav(&self.path, &samples, self.sample_rate)
+        };
+        written.map_err(|e| format!("{}: {e}", self.path.display()))?;
         Ok(Some(Finished {
             path: self.path.clone(),
             placeable,
@@ -414,6 +418,12 @@ pub fn restore_solos(tracks: &mut [Track], saved: &[(String, bool)]) {
             t.solo = *solo;
         }
     }
+}
+
+/// Whether a bounce to `path` is a FLAC file (by its extension); anything else is a WAV file.
+pub fn is_flac(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("flac"))
 }
 
 /// `dir/stem.wav`, or `dir/stem 2.wav`, `stem 3.wav`… whichever is free. A bounce never
@@ -635,6 +645,15 @@ mod tests {
         let target = Target::track(&project, 0).unwrap();
         project.tracks.clear();
         assert!(!target.still_there(&project));
+    }
+
+    #[test]
+    fn only_a_flac_extension_makes_a_flac_bounce() {
+        assert!(is_flac(Path::new("mix.flac")));
+        assert!(is_flac(Path::new("/a/b/MIX.FLAC")));
+        assert!(!is_flac(Path::new("mix.wav")));
+        assert!(!is_flac(Path::new("flac")));
+        assert!(!is_flac(Path::new("mix.flac.wav")));
     }
 
     #[test]

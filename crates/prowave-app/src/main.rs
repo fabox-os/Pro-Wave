@@ -490,10 +490,17 @@ impl App {
         }
         let Some(path) = rfd::FileDialog::new()
             .add_filter("WAV", &["wav", "WAV"])
+            .add_filter("FLAC", &["flac", "FLAC"])
             .set_file_name(format!("{}.wav", self.project.name))
             .save_file()
         else {
             return;
+        };
+        // A name with no extension is a WAV file.
+        let path = if path.extension().is_none() {
+            path.with_extension("wav")
+        } else {
+            path
         };
         let Some(sync) = self.sync.as_mut() else {
             self.ui.status = Some("cannot bounce: there is no audio output".to_string());

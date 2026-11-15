@@ -19,6 +19,7 @@ mod core;
 mod disk;
 pub mod drum_machine;
 pub mod epiano;
+mod flac;
 mod flex;
 mod fx;
 mod gain_smoothing;
@@ -60,6 +61,7 @@ pub use crate::core::{
 pub use crate::disk::{
     ring_blocks_for, AudioError, AudioFile, DiskThread, RING_BLOCKS, RING_BLOCKS_MAX,
 };
+pub use crate::flac::{encode_flac, write_flac};
 pub use crate::flex::{
     detect_notes, hz_to_midi, pitch_track, shift_pitch, warp, write_wav, DetectedNote, FlexMode,
     PitchShift, WarpPoint, MAX_POINTS as MAX_FLEX_POINTS,
