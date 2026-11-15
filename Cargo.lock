@@ -3550,6 +3550,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-stretch"
+version = "0.1.0"
+
+[[package]]
 name = "prowave-vamp"
 version = "0.1.0"
 dependencies = [
