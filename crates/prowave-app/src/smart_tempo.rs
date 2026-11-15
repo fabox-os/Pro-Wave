@@ -117,6 +117,11 @@ fn start_with(p: &Project, s: &mut UiState, track: usize, region: usize, used: U
         s.status = Some(tr("Smart Tempo: this region has no recorded audio").into());
         return;
     };
+    // The analysis reads the whole recording, which a piece of a split does not play.
+    if audio.plays_part() {
+        s.status = Some(tr("This region plays only part of its recording, which this command cannot handle yet").into());
+        return;
+    }
     let jobs = &mut s.tracks.tempo_jobs;
     if jobs
         .iter()
@@ -162,8 +167,9 @@ pub fn start_all(p: &Project, s: &mut UiState) {
         .filter(|t| !t.mute)
         .flat_map(|t| t.regions.iter())
         .filter(|r| !r.params.mute)
+        // A piece of a split is left out: its file is read from the start, not from the piece.
         .filter_map(|r| {
-            let a = r.audio.as_ref()?;
+            let a = r.audio.as_ref().filter(|a| !a.plays_part())?;
             Some((a.file.clone(), map.seconds_at(p.region_start_beats(r))))
         })
         .collect();

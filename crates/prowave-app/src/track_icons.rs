@@ -453,6 +453,7 @@ fn external_midi(p: &Pen) {
 
 /// Folder: a grey-blue folder with a tab.
 fn folder(p: &Pen) {
+    // Purple, as the parent of a track stack is drawn in Logic.
     p.poly(
         &[
             (-15.0, -5.0),
@@ -462,16 +463,16 @@ fn folder(p: &Pen) {
             (15.0, -7.0),
             (15.0, -5.0),
         ],
-        rgb(0xa9, 0xae, 0xbd),
-        rgb(0x8a, 0x8f, 0x9f),
+        rgb(0xb3, 0x9d, 0xdb),
+        rgb(0x8f, 0x78, 0xb8),
     );
     p.rect(
         -15.0,
         -6.0,
         15.0,
         11.0,
-        rgb(0xc4, 0xc8, 0xd4),
-        rgb(0x7f, 0x84, 0x94),
+        rgb(0xcf, 0xc0, 0xe8),
+        rgb(0x7e, 0x66, 0xa6),
     );
 }
 

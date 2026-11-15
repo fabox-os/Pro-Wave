@@ -73,6 +73,16 @@ pub struct Block {
     pub data: [f32; BLOCK_FRAMES * 2],
 }
 
+/// The part of an audio file a streamed clip plays (Logic: a region that starts or ends inside
+/// its file, as the pieces of a split do). `start` is where the clip begins, in the file's own
+/// frames; `len` is how many frames play, or `None` for everything from `start` to the end.
+/// The default is the whole file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileSpan {
+    pub start: u64,
+    pub len: Option<u64>,
+}
+
 /// Audio-thread -> disk-thread seek request, packed as `gen << 48 | frame`.
 #[derive(Default)]
 pub struct ClipShared {
@@ -532,6 +542,8 @@ enum Msg {
         out_rate: u32,
         out_len: u64,
         edit: ClipEdit,
+        /// Where the clip starts in the file, in the file's frames (see [`FileSpan`]).
+        src_start: u64,
     },
     Quit,
 }
@@ -550,6 +562,8 @@ struct Stream {
     producer: Producer<Block>,
     shared: Arc<ClipShared>,
     ratio: f64,
+    /// The file frame the clip starts at; every read is offset by it.
+    src_start: u64,
     out_len: u64,
     gen: Option<u16>,
     out_frame: u64,
@@ -560,9 +574,14 @@ struct Stream {
 }
 
 impl Stream {
+    /// The file frame (fractional) that clip frame `out` plays, counted from the file's start.
+    fn src_pos(&self, out: f64) -> f64 {
+        self.src_start as f64 + out * self.ratio
+    }
+
     fn seek_out(&mut self, frame: u64) {
         self.out_frame = frame.min(self.out_len);
-        let s = (self.out_frame as f64 * self.ratio) as u64;
+        let s = self.src_pos(self.out_frame as f64) as u64;
         self.buf.clear();
         self.eof = false;
         match self.src.seek(s) {
@@ -623,13 +642,13 @@ impl Stream {
         if self.reverse && n > 0 {
             let first = self.out_len - self.out_frame - 1;
             let last = self.out_len - self.out_frame - n as u64;
-            let lo = (last as f64 * self.ratio).floor() as u64;
-            let hi = (first as f64 * self.ratio).floor() as u64 + 1;
+            let lo = self.src_pos(last as f64).floor() as u64;
+            let hi = self.src_pos(first as f64).floor() as u64 + 1;
             match self.ensure_reverse_window(lo, hi) {
                 Ok(()) => {
                     for i in 0..n {
                         let pos =
-                            (self.out_len - (self.out_frame + i as u64) - 1) as f64 * self.ratio;
+                            self.src_pos((self.out_len - (self.out_frame + i as u64) - 1) as f64);
                         let i0 = pos.floor() as u64;
                         let frac = (pos - i0 as f64) as f32;
                         let (l0, r0) = self.frame(i0);
@@ -644,7 +663,7 @@ impl Stream {
             return block;
         }
         for i in 0..n {
-            let pos = (self.out_frame + i as u64) as f64 * self.ratio;
+            let pos = self.src_pos((self.out_frame + i as u64) as f64);
             let i0 = pos.floor() as u64;
             let frac = (pos - i0 as f64) as f32;
             self.ensure(i0 + 1);
@@ -655,7 +674,7 @@ impl Stream {
         }
         self.out_frame += n as u64;
         // Drop source frames we will never read again.
-        let keep_from = ((self.out_frame as f64 * self.ratio).floor() as u64).saturating_sub(1);
+        let keep_from = (self.src_pos(self.out_frame as f64).floor() as u64).saturating_sub(1);
         if keep_from > self.buf_base {
             let drop_frames = ((keep_from - self.buf_base) as usize).min(self.buf.len() / 2);
             self.buf.drain(..drop_frames * 2);
@@ -787,8 +806,38 @@ impl DiskThread {
         edit: ClipEdit,
         ring_blocks: usize,
     ) -> AudioClip {
-        let out_len =
-            (file.frames as f64 * out_rate as f64 / file.sample_rate.max(1) as f64) as u64;
+        self.stream_span_with_ring(
+            file,
+            out_rate,
+            track,
+            start_beat,
+            edit,
+            ring_blocks,
+            FileSpan::default(),
+        )
+    }
+
+    /// [`DiskThread::stream_with_ring`] for the part of the file `span` says: the clip reads
+    /// from `span.start` (file frames) and plays `span.len` frames of it, or to the file's end.
+    /// The clip is as long as that part, so it stops where the region does.
+    // Eight arguments: each one is needed to make a clip, and none can be left out for the span.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stream_span_with_ring(
+        &self,
+        file: &AudioFile,
+        out_rate: u32,
+        track: u16,
+        start_beat: f64,
+        edit: ClipEdit,
+        ring_blocks: usize,
+        span: FileSpan,
+    ) -> AudioClip {
+        let src_start = span.start.min(file.frames);
+        let src_len = span
+            .len
+            .unwrap_or(file.frames - src_start)
+            .min(file.frames - src_start);
+        let out_len = (src_len as f64 * out_rate as f64 / file.sample_rate.max(1) as f64) as u64;
         let ring_blocks = ring_blocks.clamp(RING_BLOCKS, RING_BLOCKS_MAX);
         let (producer, consumer): (Producer<Block>, Consumer<Block>) = RingBuffer::new(ring_blocks);
         let shared = Arc::new(ClipShared::default());
@@ -800,6 +849,7 @@ impl DiskThread {
             out_rate,
             out_len,
             edit,
+            src_start,
         };
         if self.tx.send(msg).is_err() {
             tracing::error!("disk thread is not running");
@@ -827,6 +877,7 @@ fn handle(msg: Msg, streams: &mut Vec<Stream>) -> bool {
             out_rate,
             out_len,
             edit,
+            src_start,
         } => {
             if producer.is_abandoned() {
                 return true;
@@ -838,6 +889,7 @@ fn handle(msg: Msg, streams: &mut Vec<Stream>) -> bool {
                     idle_since: None,
                     producer,
                     shared,
+                    src_start,
                     out_len,
                     gen: None,
                     out_frame: 0,
@@ -979,6 +1031,7 @@ mod tests {
                 out_rate: SRC_RATE,
                 out_len: file.frames,
                 edit: ClipEdit::default(),
+                src_start: 0,
             })
             .unwrap();
         }
@@ -1013,6 +1066,7 @@ mod tests {
                 shared: Arc::new(ClipShared::default()),
                 out_rate: SRC_RATE,
                 edit: ClipEdit::default(),
+                src_start: 0,
             },
             &mut streams,
         ));
@@ -1083,10 +1137,15 @@ mod tests {
     }
 
     fn rig_with(edit: ClipEdit) -> Rig {
+        rig_span(edit, FileSpan::default())
+    }
+
+    /// A rig whose one clip plays only `span` of the sine file.
+    fn rig_span(edit: ClipEdit, span: FileSpan) -> Rig {
         let dir = tempfile::tempdir().unwrap();
         let file = AudioFile::open(write_sine_wav(dir.path())).unwrap();
         let disk = DiskThread::spawn();
-        let clip = disk.stream_with(&file, OUT_RATE, 0, 0.0, edit);
+        let clip = disk.stream_span_with_ring(&file, OUT_RATE, 0, 0.0, edit, RING_BLOCKS_MAX, span);
         let (mut tx, rx) = RingBuffer::new(64);
         let (gtx, grx) = RingBuffer::new(8);
         let shared = Arc::new(Shared::new());
@@ -1211,6 +1270,7 @@ mod tests {
                 producer,
                 shared: Arc::new(ClipShared::default()),
                 ratio,
+                src_start: 0,
                 out_len,
                 gen: None,
                 out_frame: 0,
@@ -1277,6 +1337,73 @@ mod tests {
         let middle = &out[(0.20 * OUT_RATE as f32) as usize..(0.30 * OUT_RATE as f32) as usize];
         assert!(middle.iter().any(|sample| sample.abs() > 0.1));
         assert!(out[out.len() - 1].abs() < 0.001);
+    }
+
+    /// The sine file's value at `secs` (see [`write_sine_wav`]).
+    fn sine_at(secs: f64) -> f32 {
+        (0.5 * (std::f64::consts::TAU * 440.0 * secs).sin()) as f32
+    }
+
+    /// The master level a new engine starts at: what the sine is heard at, times this.
+    const MASTER: f32 = 0.8;
+
+    #[test]
+    fn a_clip_with_a_start_offset_plays_from_that_point_in_the_file() {
+        // 0.3 s into the file, to the end.
+        let mut r = rig_span(
+            ClipEdit::default(),
+            FileSpan {
+                start: 13_230,
+                len: None,
+            },
+        );
+        prefetch(&mut r);
+        assert!(r.tx.push(Command::Play).is_ok());
+        let out = run(&mut r, 0.05);
+        for (i, &v) in out.iter().take(2000).enumerate() {
+            let want = MASTER * sine_at(0.3 + i as f64 / OUT_RATE as f64);
+            assert!((v - want).abs() < 0.01, "frame {i}: {v} vs {want}");
+        }
+        assert_eq!(r.shared.underruns.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_clip_with_a_length_stops_after_it() {
+        // 0.1 s of the file from 0.3 s: 4800 frames at 48 kHz.
+        let mut r = rig_span(
+            ClipEdit::default(),
+            FileSpan {
+                start: 13_230,
+                len: Some(4_410),
+            },
+        );
+        prefetch(&mut r);
+        assert!(r.tx.push(Command::Play).is_ok());
+        let out = run(&mut r, 0.2);
+        assert!(rms(&out[..4000]) > 0.2, "head rms {}", rms(&out[..4000]));
+        assert_eq!(rms(&out[5000..]), 0.0, "silent after the clip's length");
+    }
+
+    #[test]
+    fn a_reversed_clip_with_a_start_offset_reads_backwards_from_its_own_end() {
+        // 0.1 s from 0.3 s, reversed: the first sample is the one at 0.4 s.
+        let mut r = rig_span(
+            ClipEdit {
+                reverse: true,
+                ..ClipEdit::default()
+            },
+            FileSpan {
+                start: 13_230,
+                len: Some(4_410),
+            },
+        );
+        prefetch(&mut r);
+        assert!(r.tx.push(Command::Play).is_ok());
+        let out = run(&mut r, 0.1);
+        for (i, &v) in out.iter().take(1000).enumerate() {
+            let want = MASTER * sine_at(0.3 + (4_799 - i) as f64 / OUT_RATE as f64);
+            assert!((v - want).abs() < 0.01, "frame {i}: {v} vs {want}");
+        }
     }
 
     #[test]
@@ -1624,6 +1751,7 @@ mod tests {
         assert!(src.is_mapped());
         let mut stream = Stream {
             ratio: 1.0,
+            src_start: 0,
             out_len: 30_000,
             src,
             idle_since: None,

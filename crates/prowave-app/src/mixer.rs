@@ -22,6 +22,8 @@ use egui::{
 use std::collections::HashMap;
 
 const TOOLBAR_H: f32 = 30.0;
+/// The buses the Output menu lists (Logic's 256 are in the project; the menu shows the first).
+const MENU_BUSES: u16 = 32;
 const LABEL_W: f32 = 88.0;
 const GAP: f32 = 2.0;
 /// The strip's bottom block: the 2-point inset, the M/S buttons (26 points above the bottom)
@@ -86,7 +88,7 @@ pub struct MixerView {
     /// The Automation editor window.
     pub auto_editor: crate::automation::AutoEditor,
     /// Sends on Faders: the bus whose send levels the faders set.
-    pub sends_on_faders: Option<u8>,
+    pub sends_on_faders: Option<u16>,
     /// Edit > Copy Channel Strip.
     pub copied: Option<CopiedStrip>,
     /// The audio input device that the Input slots choose from.
@@ -738,7 +740,7 @@ fn send_slots(
             let mut picked = None;
             egui::Popup::menu(&resp).show(|ui| {
                 ui.set_min_width(110.0);
-                for b in 1..=8u8 {
+                for b in 1..=8u16 {
                     if ui.button(trf("Bus {}", &[&b])).clicked() {
                         picked = Some(b);
                         ui.close();
@@ -793,7 +795,7 @@ fn send_slot(
     }
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(130.0);
-        for b in 1..=8u8 {
+        for b in 1..=8u16 {
             if ui
                 .selectable_label(send.bus == Some(b), trf("Bus {}", &[&b]))
                 .clicked()
@@ -1429,7 +1431,7 @@ pub fn channel_strip(
         }
         _ => None,
     };
-    let send_db = |sends: &[SendSlot], bus: u8| {
+    let send_db = |sends: &[SendSlot], bus: u16| {
         let level = sends
             .iter()
             .find(|s| s.bus == Some(bus))
@@ -1588,7 +1590,7 @@ pub fn channel_strip(
 
 /// Sets the send to `bus` from a fader position in dB (a new send is made when needed, and
 /// one turned right down is taken away).
-fn set_send_level(sends: &mut Vec<SendSlot>, bus: u8, db: f32) {
+fn set_send_level(sends: &mut Vec<SendSlot>, bus: u16, db: f32) {
     let level = if db <= -59.5 {
         0.0
     } else {
@@ -1675,7 +1677,8 @@ fn output_slot(
             p.tracks[i].output = 0;
             ui.close();
         }
-        for bus in 1..=prowave_engine::MAX_BUSES as u8 {
+        // The first buses (a bus past them is set from the project or the send menus).
+        for bus in 1..=MENU_BUSES {
             if ui
                 .selectable_label(current == bus, trf("Bus {}", &[&bus]))
                 .clicked()
@@ -2092,7 +2095,7 @@ fn fit_toolbar(menus_end: f32, center: f32, right_end: f32, filters_w: f32) -> T
     }
 }
 
-fn draw_sends_on_faders(ui: &Ui, g: &egui::Painter, x: f32, cy: f32, bus: &mut Option<u8>) {
+fn draw_sends_on_faders(ui: &Ui, g: &egui::Painter, x: f32, cy: f32, bus: &mut Option<u16>) {
     const NS: &str = "mixer_toolbar";
     // Sends on Faders: the faders set the sends to a bus.
     g.text(
@@ -2123,7 +2126,7 @@ fn draw_sends_on_faders(ui: &Ui, g: &egui::Painter, x: f32, cy: f32, bus: &mut O
             *bus = None;
             ui.close();
         }
-        for b in 1..=8u8 {
+        for b in 1..=8u16 {
             if ui
                 .selectable_label(*bus == Some(b), trf("Bus {}", &[&b]))
                 .clicked()

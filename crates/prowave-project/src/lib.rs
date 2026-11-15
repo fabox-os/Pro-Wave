@@ -99,6 +99,10 @@ pub struct RegionDoc {
     pub comp: Vec<CompDoc>,
     /// Path inside the archive (`media/…`) for audio regions.
     pub audio: Option<String>,
+    /// Audio regions: where the sound starts in that file, in the file's own frames, and how
+    /// many frames it plays (none: to the end). Older files have neither: the whole file.
+    pub audio_start: u64,
+    pub audio_frames: Option<u64>,
     pub mute: bool,
     /// Playback quantize grid in beats.
     pub quantize: Option<f32>,
@@ -235,7 +239,7 @@ pub struct TrackDoc {
     pub velocity: i8,
     pub key_limit: (u8, u8),
     pub vel_limit: (u8, u8),
-    pub send_bus: Option<u8>,
+    pub send_bus: Option<u16>,
     pub send_level: f32,
     pub send_pre: bool,
     /// The effects of the channel strip, first to last (`inserts` has their names for older
@@ -263,6 +267,9 @@ pub struct TrackDoc {
     pub indent: u8,
     /// A `Folder` track whose tracks are hidden in the Tracks area.
     pub folded: bool,
+    /// An Aux strip that is the parent of a Summing Stack (its children send to its bus). Files
+    /// from before Summing Stacks have none.
+    pub summing_stack: bool,
     /// The `Vca` track (its index in `tracks`) that controls this track's level.
     pub vca: Option<usize>,
     /// External MIDI tracks: the MIDI output port (by name) and the channel, 1-16.
@@ -288,7 +295,10 @@ pub struct TrackDoc {
     pub input: u16,
     pub input_stereo: bool,
     /// The bus the track plays into; 0 is Stereo Out.
-    pub output: u8,
+    pub output: u16,
+    /// The bus an Aux track was made to listen to; 0 is the bus of its rank among the Aux
+    /// tracks.
+    pub aux_bus: u16,
     /// MIDI FX, first to last.
     pub midi_fx: Vec<MidiFxDoc>,
     /// The Groove Track, and the tracks that follow it.
@@ -420,7 +430,7 @@ impl Default for GroupDoc {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct SendDoc {
-    pub bus: u8,
+    pub bus: u16,
     pub level: f32,
     pub pre: bool,
 }
@@ -479,6 +489,7 @@ impl Default for TrackDoc {
             height: 1.0,
             indent: 0,
             folded: false,
+            summing_stack: false,
             vca: None,
             midi_port: None,
             midi_channel: 1,
@@ -494,6 +505,7 @@ impl Default for TrackDoc {
             input: 0,
             input_stereo: false,
             output: 0,
+            aux_bus: 0,
             midi_fx: Vec::new(),
             groove: false,
             follow_groove: false,
@@ -974,6 +986,23 @@ mod tests {
         load(&file, &out).unwrap();
         assert!(!dir.path().join("escape.txt").exists());
         assert!(!out.join("other").exists());
+    }
+
+    #[test]
+    fn a_region_saved_before_the_part_fields_plays_its_whole_file() {
+        // Files from before the split work have neither field: the defaults are the whole file.
+        let old: RegionDoc =
+            serde_json::from_str(r#"{"name":"Take","audio":"media/0_take.wav","len_bars":4.0}"#)
+                .unwrap();
+        assert_eq!((old.audio_start, old.audio_frames), (0, None));
+        let saved = RegionDoc {
+            audio_start: 5,
+            audio_frames: Some(9),
+            ..RegionDoc::default()
+        };
+        let back: RegionDoc =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!((back.audio_start, back.audio_frames), (5, Some(9)));
     }
 
     #[test]
