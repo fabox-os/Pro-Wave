@@ -566,13 +566,43 @@ fn tempo_key(p: &Project) -> TempoKey {
     (p.tempo, p.tempo_points(), p.sig, p.sig_changes.clone())
 }
 
+/// What Project Settings > Audio shows about the running output.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioInfo {
+    /// The output device's name.
+    pub device: String,
+    pub sample_rate: u32,
+    /// The callback size the stream gets, in frames: measured once the callbacks run, else the
+    /// size that was asked for, else `None`.
+    pub buffer_frames: Option<u32>,
+    /// The output latency the device reports, in microseconds, once the engine knows it.
+    pub output_latency_us: Option<u32>,
+}
+
+impl AudioInfo {
+    /// The output latency in milliseconds: one buffer, plus the device's reported delay when
+    /// it is known. `None` until the buffer size is known.
+    pub fn latency_ms(&self) -> Option<f32> {
+        let buffer = self.buffer_frames?;
+        let buffer_ms = buffer as f32 * 1000.0 / self.sample_rate.max(1) as f32;
+        let device_ms = self.output_latency_us.unwrap_or(0) as f32 / 1000.0;
+        Some(buffer_ms + device_ms)
+    }
+}
+
 impl EngineSync {
-    /// The output the engine plays on: the device's name and the sample rate.
-    pub fn audio_info(&self) -> (String, u32) {
-        (
-            self.engine.device_name().to_string(),
-            self.engine.sample_rate(),
-        )
+    /// The output the engine plays on: its device, sample rate and buffer size.
+    pub fn audio_info(&mut self) -> AudioInfo {
+        let (block, latency_us) = {
+            let state = self.engine.state();
+            (state.block_frames, state.output_latency_us)
+        };
+        AudioInfo {
+            device: self.engine.device_name().to_string(),
+            sample_rate: self.engine.sample_rate(),
+            buffer_frames: (block > 0).then_some(block).or(self.engine.buffer_frames()),
+            output_latency_us: (latency_us > 0).then_some(latency_us),
+        }
     }
 
     pub fn new(engine: Engine, p: &Project) -> Self {

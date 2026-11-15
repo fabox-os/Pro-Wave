@@ -228,6 +228,17 @@ impl AudioRecorder {
         self.capture.as_mut()?.take_monitor_feed()
     }
 
+    /// The output engine was replaced: the open input's monitoring feed went to the old one, so
+    /// the input is opened again and its feed goes to the new engine. Nothing is done while a
+    /// take is being recorded.
+    pub fn forget_input(&mut self) {
+        if self.takes.is_empty() {
+            self.capture = None;
+            self.failed = false;
+            self.levels.clear();
+        }
+    }
+
     /// Whether the input is open (the meters then need redrawing).
     pub fn listening(&self) -> bool {
         self.capture.is_some()

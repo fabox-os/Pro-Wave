@@ -6,6 +6,7 @@
 static ALLOC_GUARD: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 mod apple_loops;
+mod audio_prefs;
 mod audio_rec;
 mod automation;
 mod bench;
@@ -143,8 +144,18 @@ pub struct UiState {
     pub new_track: new_track_dialog::NewTrackDialog,
     /// Track > Create Track Stack…: the dialog choosing the kind of stack.
     pub stack_dialog: stack_dialog::StackDialog,
-    /// The audio output the engine plays on (name, sample rate), for Project Settings > Audio.
-    pub audio_info: Option<(String, u32)>,
+    /// The audio output the engine plays on, for Project Settings > Audio.
+    pub audio_info: Option<engine_sync::AudioInfo>,
+    /// The output device and buffer size the user chose (remembered in `audio.txt`).
+    pub audio_prefs: audio_prefs::AudioPrefs,
+    /// A new output choice from Project Settings > Audio, carried out by `App` after the window.
+    pub audio_request: Option<audio_prefs::AudioPrefs>,
+    /// The output devices and the buffer sizes the chosen device takes, read when the Audio
+    /// tab is opened.
+    pub audio_devices: Vec<prowave_engine::OutputDevice>,
+    pub audio_buffer_range: Option<(u32, u32)>,
+    /// The Audio tab was shown last frame, so its lists are read once per opening.
+    pub audio_tab_open: bool,
     /// Project Settings > MIDI: send MIDI panic on the next frame.
     pub midi_panic: bool,
     /// Event list > SysEx…: the message being typed, while its window is open.
@@ -266,6 +277,11 @@ impl UiState {
             new_track: Default::default(),
             stack_dialog: Default::default(),
             audio_info: None,
+            audio_prefs: audio_prefs::AudioPrefs::default(),
+            audio_request: None,
+            audio_devices: Vec::new(),
+            audio_buffer_range: None,
+            audio_tab_open: false,
             midi_panic: false,
             sysex_entry: None,
             transform: transform_ui::TransformView::default(),
@@ -309,6 +325,12 @@ impl UiState {
             drum_held: None,
             drum_error: None,
         }
+    }
+
+    /// Reads the system's output devices and the buffer sizes the chosen one takes.
+    pub fn refresh_audio_list(&mut self) {
+        self.audio_devices = prowave_engine::output_devices();
+        self.audio_buffer_range = prowave_engine::buffer_range(self.audio_prefs.device.as_deref());
     }
 
     /// After a project is replaced: drop editor state (selections, open regions) that indexes
@@ -367,6 +389,59 @@ struct App {
 }
 
 impl App {
+    /// Project Settings > Audio chose another output device or buffer size: the engine restarts
+    /// on it. Playback stops and the playhead stays where it was; the MIDI sender and the audio
+    /// input are started again on the new engine. Refused while recording or bouncing. If the
+    /// new output cannot be opened, the current one keeps playing.
+    fn restart_audio(&mut self, prefs: audio_prefs::AudioPrefs) {
+        if prefs == self.ui.audio_prefs {
+            return;
+        }
+        if self.bounce.is_some()
+            || self.region_bounce.is_some()
+            || self.ui.rec.active()
+            || self.ui.audio_rec.active()
+        {
+            self.ui.status = Some(
+                i18n::tr("Stop the recording or the bounce before changing the audio output.")
+                    .to_string(),
+            );
+            return;
+        }
+        let engine = match prowave_engine::Engine::start_on(prefs.device.as_deref(), prefs.buffer) {
+            Ok(engine) => engine,
+            Err(e) => {
+                tracing::warn!("audio output change refused: {e}");
+                self.ui.status = Some(i18n::trf(
+                    "Cannot use that audio output: {}. The current output keeps playing.",
+                    &[&e],
+                ));
+                return;
+            }
+        };
+        // The new engine starts stopped, so the transport stops here too; the playhead is kept.
+        if self.project.playing {
+            if let Some(old) = self.sync.as_mut() {
+                self.project.position_beats = old.engine.state().position_beats;
+            }
+            self.project.playing = false;
+            self.project.counting_in = false;
+        }
+        // The MIDI sender goes first: its Drop ends its thread before the old engine is dropped.
+        self.midi_out = None;
+        let mut sync = engine_sync::EngineSync::new(engine, &self.project);
+        self.midi_out = start_midi_out(&mut sync);
+        // Dropping the old engine stops its stream.
+        let _ = self.sync.replace(sync);
+        // The monitoring feed of an open input went to the old engine: the input is opened again.
+        self.ui.audio_rec.forget_input();
+        self.ui.audio_info = self.sync.as_mut().map(|s| s.audio_info());
+        self.ui.audio_buffer_range = prowave_engine::buffer_range(prefs.device.as_deref());
+        self.ui.audio_prefs = prefs;
+        self.ui.audio_prefs.save();
+        self.ui.audition.clear();
+    }
+
     /// File > Show in File Manager: opens the folder that holds the project file, with the
     /// project selected where the system supports it.
     fn reveal_project(&mut self) {
@@ -1369,10 +1444,14 @@ impl eframe::App for App {
         if std::mem::take(&mut self.ui.reveal_cmd) {
             self.reveal_project();
         }
-        if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
-            self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
+        // The Audio tab shows the running output, its buffer size included, so it is read each frame.
+        if self.ui.settings_tab == Some(project_settings::SettingsTab::Audio) {
+            self.ui.audio_info = self.sync.as_mut().map(|s| s.audio_info());
         }
         project_settings::show(&ctx, &mut self.project, &mut self.ui);
+        if let Some(prefs) = self.ui.audio_request.take() {
+            self.restart_audio(prefs);
+        }
         track_dialogs::show(&ctx, &mut self.project, &mut self.ui);
         new_track_dialog::show(&ctx, &mut self.project, &mut self.ui);
         stack_dialog::show(&ctx, &mut self.project, &mut self.ui);
@@ -1412,6 +1491,32 @@ fn top_bar(ui: &mut egui::Ui, p: &mut Project, s: &mut UiState) {
             .frame(frame)
             .show(ui, |ui| ui.horizontal(|ui| menus::status_line(ui, p, s)));
     }
+}
+
+/// Opens the output the saved choice asks for. A saved device that is gone, or will not start,
+/// gives the system's default output instead; the flag tells the caller that happened.
+fn open_output(
+    prefs: &audio_prefs::AudioPrefs,
+) -> Result<(prowave_engine::Engine, bool), prowave_engine::EngineError> {
+    match prowave_engine::Engine::start_on(prefs.device.as_deref(), prefs.buffer) {
+        Ok(engine) => Ok((engine, false)),
+        Err(e) if prefs.device.is_some() => {
+            tracing::warn!("saved audio output failed ({e}); using the system default");
+            prowave_engine::Engine::start_on(None, prefs.buffer).map(|engine| (engine, true))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The MIDI sender for one engine: it plays the engine's note, time code and clock queues out
+/// on the project's ports.
+fn start_midi_out(sync: &mut engine_sync::EngineSync) -> Option<midi_out::MidiOut> {
+    sync.take_midi_out()
+        .zip(sync.take_mtc_out())
+        .zip(sync.take_clock_out())
+        .map(|((notes, mtc), clock)| {
+            midi_out::MidiOut::start(midi_out::Queues { notes, mtc, clock })
+        })
 }
 
 /// Log to stderr; `RUST_LOG` overrides the default (warnings, plus info from ProWave; the
@@ -1786,17 +1891,20 @@ fn main() -> eframe::Result {
             };
             let mut audio_error = None;
             let mut midi_out = None;
-            let sync = match prowave_engine::Engine::start() {
-                Ok(e) => {
+            let prefs = audio_prefs::AudioPrefs::load();
+            let sync = match open_output(&prefs) {
+                Ok((e, fell_back)) => {
+                    if fell_back {
+                        audio_error = Some(
+                            i18n::tr(
+                                "The saved output device is not available; using the system default",
+                            )
+                            .to_string(),
+                        );
+                    }
                     let mut sync = engine_sync::EngineSync::new(e, &project);
                     if !measuring {
-                        midi_out = sync
-                            .take_midi_out()
-                            .zip(sync.take_mtc_out())
-                            .zip(sync.take_clock_out())
-                            .map(|((notes, mtc), clock)| {
-                                midi_out::MidiOut::start(midi_out::Queues { notes, mtc, clock })
-                            });
+                        midi_out = start_midi_out(&mut sync);
                     }
                     Some(sync)
                 }
@@ -1811,7 +1919,10 @@ fn main() -> eframe::Result {
                 saved: file_commands::content(&project),
                 history: undo::History::new(&project),
                 project,
-                ui: UiState::new(),
+                ui: UiState {
+                    audio_prefs: prefs,
+                    ..UiState::new()
+                },
                 sync,
                 bounce: None,
                 region_bounce: None,
