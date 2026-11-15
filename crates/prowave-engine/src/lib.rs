@@ -17,6 +17,7 @@ mod clock;
 mod convolver;
 mod core;
 mod disk;
+pub mod epiano;
 mod flex;
 mod fx;
 mod gain_smoothing;
