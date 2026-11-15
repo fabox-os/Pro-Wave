@@ -88,6 +88,8 @@ pub struct MixerView {
     pub copied: Option<CopiedStrip>,
     /// The audio input device that the Input slots choose from.
     pub inputs: crate::audio_rec::InputChoice,
+    /// The text in the Audio FX plug-in picker's search field (see `plugin_picker`).
+    pub picker_search: String,
 }
 
 /// A channel strip's effects, sends, level and pan, as Copy Channel Strip keeps them.
@@ -112,6 +114,7 @@ impl Default for MixerView {
             sends_on_faders: None,
             copied: None,
             inputs: crate::audio_rec::InputChoice::default(),
+            picker_search: String::new(),
         }
     }
 }
@@ -212,6 +215,9 @@ fn small_button(
     on_col: Color32,
 ) -> bool {
     let resp = ui.interact(r, id, Sense::click());
+    if let Some(text) = crate::tooltips::button_tip(label) {
+        resp.clone().on_hover_text(tr(text));
+    }
     g.rect_filled(r, 3.0, if on { on_col } else { SLOT_GRAY });
     let txt = if on && on_col == SOLO_ON {
         Color32::BLACK
@@ -806,13 +812,13 @@ fn send_slot(
     keep
 }
 
-/// The effects an Audio FX slot can hold, in the order of its menu.
-const FX_MENU: &[prowave_engine::FxKind] = &prowave_engine::FxKind::ALL;
-
 /// What the user chose in an Audio FX slot's menu.
 enum InsertAct {
     Add(prowave_engine::FxKind),
     Replace(prowave_engine::FxKind),
+    /// A LADSPA plug-in found on this computer.
+    AddPlugin(crate::plugins::PluginId),
+    ReplacePlugin(crate::plugins::PluginId),
     Remove,
     Bypass,
     Open,
@@ -894,28 +900,35 @@ fn insert_slot(
             });
             ui.separator();
             ui.menu_button(tr("Replace With"), |ui| {
-                for &kind in FX_MENU {
-                    if ui.selectable_label(kind == fx.kind, kind.name()).clicked() {
-                        act = Some(InsertAct::Replace(kind));
-                        ui.close();
-                    }
+                if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
+                    act = Some(insert_act(pick, true));
+                    v.picker_search.clear();
+                    ui.close();
                 }
             });
             if ui.button(tr("Remove")).clicked() {
                 act = Some(InsertAct::Remove);
                 ui.close();
             }
-        } else {
-            for &kind in FX_MENU {
-                if ui.button(kind.name()).clicked() {
-                    act = Some(InsertAct::Add(kind));
-                    ui.close();
-                }
-            }
+        } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
+            act = Some(insert_act(pick, false));
+            v.picker_search.clear();
+            ui.close();
         }
     });
     if let Some(act) = act {
         apply_insert(p, v, i, k, act);
+    }
+}
+
+/// What a picker choice does to the slot: add the effect there, or replace the one in it.
+fn insert_act(pick: crate::plugin_picker::Pick, replace: bool) -> InsertAct {
+    use crate::plugin_picker::Pick;
+    match (pick, replace) {
+        (Pick::Effect(kind), false) => InsertAct::Add(kind),
+        (Pick::Effect(kind), true) => InsertAct::Replace(kind),
+        (Pick::Plugin(id), false) => InsertAct::AddPlugin(id),
+        (Pick::Plugin(id), true) => InsertAct::ReplacePlugin(id),
     }
 }
 
@@ -939,8 +952,20 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
                 v.fx_window = Some((i, inserts.len() - 1));
             }
         }
+        InsertAct::AddPlugin(id) => {
+            if inserts.len() < prowave_engine::MAX_INSERTS {
+                inserts.push(Insert::new_plugin(id));
+                v.fx_window = Some((i, inserts.len() - 1));
+            }
+        }
         InsertAct::Replace(kind) if filled => {
             inserts[k] = Insert::new(kind);
+            if let Some(a) = auto.as_mut() {
+                a.insert_replaced(k);
+            }
+        }
+        InsertAct::ReplacePlugin(id) if filled => {
+            inserts[k] = Insert::new_plugin(id);
             if let Some(a) = auto.as_mut() {
                 a.insert_replaced(k);
             }
