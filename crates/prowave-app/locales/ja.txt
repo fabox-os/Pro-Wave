@@ -884,3 +884,4 @@ Remove Drum Machine = ドラムマシンを削除
 Tom = タム
 Cymbal = シンバル
 Rim Shot = リムショット
+This region plays only part of its recording, which this command cannot handle yet = このリージョンは録音の一部だけを再生するため、このコマンドはまだ扱えません

@@ -884,3 +884,4 @@ Remove Drum Machine = 移除鼓机
 Tom = 嗵鼓
 Cymbal = 镲片
 Rim Shot = 边击
+This region plays only part of its recording, which this command cannot handle yet = 此区域只播放其录音的一部分，此命令暂时还无法处理

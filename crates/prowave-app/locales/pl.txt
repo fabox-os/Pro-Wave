@@ -884,3 +884,4 @@ Remove Drum Machine = Usuń automat perkusyjny
 Tom = Tom
 Cymbal = Talerz
 Rim Shot = Rimshot
+This region plays only part of its recording, which this command cannot handle yet = Ten region odtwarza tylko część swojego nagrania, czego to polecenie jeszcze nie obsługuje

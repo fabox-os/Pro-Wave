@@ -59,7 +59,7 @@ pub use crate::core::{
     MAX_TRACKS,
 };
 pub use crate::disk::{
-    ring_blocks_for, AudioError, AudioFile, DiskThread, RING_BLOCKS, RING_BLOCKS_MAX,
+    ring_blocks_for, AudioError, AudioFile, DiskThread, FileSpan, RING_BLOCKS, RING_BLOCKS_MAX,
 };
 pub use crate::flac::{encode_flac, write_flac};
 pub use crate::flex::{

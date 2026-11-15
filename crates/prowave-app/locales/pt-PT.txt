@@ -884,3 +884,4 @@ Remove Drum Machine = Remover Drum Machine
 Tom = Tom
 Cymbal = Prato
 Rim Shot = Rimshot
+This region plays only part of its recording, which this command cannot handle yet = Esta região reproduz apenas uma parte da sua gravação, o que este comando ainda não consegue tratar

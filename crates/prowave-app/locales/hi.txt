@@ -884,3 +884,4 @@ Remove Drum Machine = ड्रम मशीन हटाएँ
 Tom = टॉम
 Cymbal = सिम्बल
 Rim Shot = रिम शॉट
+This region plays only part of its recording, which this command cannot handle yet = यह रीजन अपनी रिकॉर्डिंग का केवल एक हिस्सा चलाता है, जिसे यह कमांड अभी तक नहीं संभाल सकता

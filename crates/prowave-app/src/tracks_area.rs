@@ -1556,6 +1556,11 @@ fn start_normalize(p: &Project, s: &mut UiState, track: usize, region: usize) {
         s.status = Some(tr("Normalize: this region has no recorded audio").into());
         return;
     };
+    // The loudest sample is looked for in the whole file, which a piece does not play.
+    if audio.plays_part() {
+        s.status = Some(tr("This region plays only part of its recording, which this command cannot handle yet").into());
+        return;
+    }
     let jobs = &mut s.tracks.normalize_jobs;
     if jobs.iter().any(|j| (j.track, j.region) == (track, region)) {
         return;
@@ -2115,10 +2120,23 @@ fn draw_region(
         body.lerp_to_gamma(Color32::WHITE, if selected { 0.75 } else { 0.6 })
     };
     let edit = region.audio.is_some() || track.kind == TrackKind::Audio;
-    if let Some(peaks) = region.audio.as_ref().and_then(|a| a.peaks.get()) {
+    if let Some((a, peaks)) = region
+        .audio
+        .as_ref()
+        .and_then(|a| Some((a, a.peaks.get()?)))
+    {
         let gain = 10f32.powf(region.params.gain_db / 20.0);
         let full_x = (full.left(), full.width());
-        draw_peaks(g, inner, full_x, peaks, gain, region.params.reverse, ink);
+        // A piece of a split draws only the part of the file it plays.
+        draw_peaks(
+            g,
+            inner,
+            full_x,
+            a.peaks_part(peaks),
+            gain,
+            region.params.reverse,
+            ink,
+        );
     } else if region.audio.is_some() {
         g.line_segment(
             [
@@ -3926,9 +3944,8 @@ mod flex_marker_tests {
             controls: Vec::new(),
             folder: None,
             audio: Some(AudioRegion {
-                file,
-                peaks: Arc::new(OnceLock::new()),
                 flex: Some(flex),
+                ..AudioRegion::whole(file, Arc::new(OnceLock::new()))
             }),
             params: RegionParams::default(),
             generated: None,

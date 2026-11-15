@@ -205,6 +205,10 @@ pub fn set_mode(p: &mut Project, t: usize, r: usize, mode: FlexMode) {
     else {
         return;
     };
+    // A piece of a split cannot take Flex: its edit would be made from the whole recording.
+    if a.plays_part() {
+        return;
+    }
     match &mut a.flex {
         Some(f) => f.mode = mode,
         None => a.flex = Some(FlexEdit::new(a.file.clone(), mode)),
@@ -233,6 +237,11 @@ pub fn start(p: &Project, s: &mut UiState, t: usize, r: usize, command: Command)
         s.status = Some(tr("Flex: this region has no recorded audio").into());
         return;
     };
+    // Flex reads the whole recording, which a piece of a split does not play.
+    if a.plays_part() {
+        s.status = Some(tr("This region plays only part of its recording, which this command cannot handle yet").into());
+        return;
+    }
     if s.flex
         .tasks
         .iter()

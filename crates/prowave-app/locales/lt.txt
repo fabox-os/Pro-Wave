@@ -884,3 +884,4 @@ Remove Drum Machine = Pašalinti ritmų mašiną
 Tom = Tomas
 Cymbal = Lėkštė
 Rim Shot = Rimšotas
+This region plays only part of its recording, which this command cannot handle yet = Šis regionas groja tik dalį savo įrašo, o ši komanda dar negali to apdoroti

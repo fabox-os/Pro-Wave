@@ -3,7 +3,7 @@ use crate::core::{
     dsp_load, AudioClip, ClipEdit, Command, EngineCore, EngineState, Garbage, MidiOutEvent, Shared,
     StateReader,
 };
-use crate::disk::{AudioError, AudioFile, DiskThread};
+use crate::disk::{AudioError, AudioFile, DiskThread, FileSpan};
 use crate::mtc::MtcMessage;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
@@ -467,13 +467,35 @@ impl Engine {
         edit: ClipEdit,
         clips_in_song: usize,
     ) -> AudioClip {
-        self.disk.stream_with_ring(
+        self.stream_span_in(
+            file,
+            track,
+            start_beat,
+            edit,
+            clips_in_song,
+            FileSpan::default(),
+        )
+    }
+
+    /// [`Engine::stream_clip_in`] for the part of `file` that `span` says: the clip starts
+    /// `span.start` frames into the file and plays `span.len` of them (see [`FileSpan`]).
+    pub fn stream_span_in(
+        &self,
+        file: &AudioFile,
+        track: u16,
+        start_beat: f64,
+        edit: ClipEdit,
+        clips_in_song: usize,
+        span: FileSpan,
+    ) -> AudioClip {
+        self.disk.stream_span_with_ring(
             file,
             self.sample_rate,
             track,
             start_beat,
             edit,
             crate::disk::ring_blocks_for(clips_in_song),
+            span,
         )
     }
 

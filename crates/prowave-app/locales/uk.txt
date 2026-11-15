@@ -884,3 +884,4 @@ Remove Drum Machine = Прибрати драм-машину
 Tom = Том
 Cymbal = Тарілка
 Rim Shot = Римшот
+This region plays only part of its recording, which this command cannot handle yet = Цей регіон відтворює лише частину свого запису, з чим ця команда поки що не справляється

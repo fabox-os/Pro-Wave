@@ -884,3 +884,4 @@ Remove Drum Machine = Drum Machine entfernen
 Tom = Tom
 Cymbal = Becken
 Rim Shot = Rimshot
+This region plays only part of its recording, which this command cannot handle yet = Diese Region spielt nur einen Teil ihrer Aufnahme, den dieser Befehl noch nicht verarbeiten kann

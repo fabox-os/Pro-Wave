@@ -40,11 +40,7 @@ pub fn audio_region(file: AudioFile, ctx: &egui::Context) -> AudioRegion {
             Err(e) => tracing::warn!("waveform overview failed for {}: {e}", file.path.display()),
         });
     }
-    AudioRegion {
-        file,
-        peaks,
-        flex: None,
-    }
+    AudioRegion::whole(file, peaks)
 }
 
 /// Adds a new audio track with one region starting at the bar under the playhead.

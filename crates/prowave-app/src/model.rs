@@ -633,6 +633,63 @@ pub struct AudioRegion {
     pub peaks: Arc<OnceLock<Vec<(f32, f32)>>>,
     /// Flex Time and Flex Pitch: when set, `file` is the sound made from this edit.
     pub flex: Option<crate::flex_edit::FlexEdit>,
+    /// Where the region's sound starts in `file`, in the file's own frames: 0 for a region
+    /// that plays its file from the start. Split puts the right-hand piece further in.
+    pub start_frame: u64,
+    /// How many frames of the file the region plays from `start_frame`; `None` plays to the
+    /// end of the file (the case of every region that was not split).
+    pub len_frames: Option<u64>,
+}
+
+impl AudioRegion {
+    /// A region that plays `file` from its start to its end.
+    pub fn whole(file: AudioFile, peaks: Arc<OnceLock<Vec<(f32, f32)>>>) -> Self {
+        Self {
+            file,
+            peaks,
+            flex: None,
+            start_frame: 0,
+            len_frames: None,
+        }
+    }
+
+    /// The frames of the file the region plays: where it starts and how many (to the end of the
+    /// file when it is not cut short), kept inside the file.
+    pub fn part(&self) -> (u64, u64) {
+        let frames = self.file.frames;
+        let start = self.start_frame.min(frames);
+        (
+            start,
+            self.len_frames
+                .unwrap_or(frames - start)
+                .min(frames - start),
+        )
+    }
+
+    /// Whether the region plays only a piece of its file (as the parts of a split do).
+    pub fn plays_part(&self) -> bool {
+        self.part() != (0, self.file.frames)
+    }
+
+    /// The part of the file the engine streams for this region.
+    pub fn span(&self) -> prowave_engine::FileSpan {
+        prowave_engine::FileSpan {
+            start: self.start_frame,
+            len: self.len_frames,
+        }
+    }
+
+    /// The part of the file's overview (`peaks`, one entry per slice of the whole file) that
+    /// the region plays. The whole overview when the region plays the whole file.
+    pub fn peaks_part<'a>(&self, peaks: &'a [(f32, f32)]) -> &'a [(f32, f32)] {
+        let (start, len) = self.part();
+        let frames = self.file.frames.max(1) as f64;
+        let n = peaks.len() as f64;
+        let hi = (((start + len) as f64 / frames) * n).ceil() as usize;
+        let hi = hi.min(peaks.len());
+        let lo = ((start as f64 / frames) * n).floor() as usize;
+        &peaks[lo.min(hi)..hi]
+    }
 }
 
 #[derive(Clone)]
@@ -2532,11 +2589,10 @@ mod tests {
     fn test_audio() -> AudioRegion {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../prowave-engine/tests/fixtures");
-        AudioRegion {
-            file: prowave_engine::AudioFile::open(dir.join("tone.caf")).unwrap(),
-            peaks: Default::default(),
-            flex: None,
-        }
+        AudioRegion::whole(
+            prowave_engine::AudioFile::open(dir.join("tone.caf")).unwrap(),
+            Default::default(),
+        )
     }
 
     #[test]

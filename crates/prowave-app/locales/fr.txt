@@ -884,3 +884,4 @@ Remove Drum Machine = Retirer la boîte à rythmes
 Tom = Tom
 Cymbal = Cymbale
 Rim Shot = Rim shot
+This region plays only part of its recording, which this command cannot handle yet = Cette région ne joue qu'une partie de son enregistrement, que cette commande ne gère pas encore

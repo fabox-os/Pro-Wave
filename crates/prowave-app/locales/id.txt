@@ -884,3 +884,4 @@ Remove Drum Machine = Hapus Drum Machine
 Tom = Tom
 Cymbal = Simbal
 Rim Shot = Rim Shot
+This region plays only part of its recording, which this command cannot handle yet = Region ini hanya memutar sebagian dari rekamannya, yang belum bisa ditangani perintah ini

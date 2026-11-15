@@ -884,3 +884,4 @@ Remove Drum Machine = Poista rumpukone
 Tom = Tom
 Cymbal = Symbaali
 Rim Shot = Rimshot
+This region plays only part of its recording, which this command cannot handle yet = Tämä alue toistaa vain osan tallenteestaan, eikä tämä komento osaa vielä käsitellä sitä

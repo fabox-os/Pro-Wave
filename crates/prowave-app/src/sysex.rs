@@ -159,15 +159,14 @@ mod tests {
     #[test]
     fn a_message_is_refused_where_a_region_keeps_no_events_of_its_own() {
         let mut p = Project::demo();
-        p.tracks[0].regions[0].audio = Some(crate::model::AudioRegion {
-            file: prowave_engine::AudioFile::open(
+        p.tracks[0].regions[0].audio = Some(crate::model::AudioRegion::whole(
+            prowave_engine::AudioFile::open(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../prowave-engine/tests/fixtures/tone.caf"),
             )
             .unwrap(),
-            peaks: Default::default(),
-            flex: None,
-        });
+            Default::default(),
+        ));
         assert!(!insert(&mut p, 0, 0, &[0xf0, 0xf7]));
         assert_ne!(
             target(&p, Some((0, 0))),

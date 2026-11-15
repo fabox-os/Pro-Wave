@@ -99,6 +99,10 @@ pub struct RegionDoc {
     pub comp: Vec<CompDoc>,
     /// Path inside the archive (`media/…`) for audio regions.
     pub audio: Option<String>,
+    /// Audio regions: where the sound starts in that file, in the file's own frames, and how
+    /// many frames it plays (none: to the end). Older files have neither: the whole file.
+    pub audio_start: u64,
+    pub audio_frames: Option<u64>,
     pub mute: bool,
     /// Playback quantize grid in beats.
     pub quantize: Option<f32>,
@@ -968,6 +972,23 @@ mod tests {
         load(&file, &out).unwrap();
         assert!(!dir.path().join("escape.txt").exists());
         assert!(!out.join("other").exists());
+    }
+
+    #[test]
+    fn a_region_saved_before_the_part_fields_plays_its_whole_file() {
+        // Files from before the split work have neither field: the defaults are the whole file.
+        let old: RegionDoc =
+            serde_json::from_str(r#"{"name":"Take","audio":"media/0_take.wav","len_bars":4.0}"#)
+                .unwrap();
+        assert_eq!((old.audio_start, old.audio_frames), (0, None));
+        let saved = RegionDoc {
+            audio_start: 5,
+            audio_frames: Some(9),
+            ..RegionDoc::default()
+        };
+        let back: RegionDoc =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!((back.audio_start, back.audio_frames), (5, Some(9)));
     }
 
     #[test]

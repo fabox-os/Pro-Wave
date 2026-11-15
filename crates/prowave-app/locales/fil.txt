@@ -884,3 +884,4 @@ Remove Drum Machine = Alisin ang Drum Machine
 Tom = Tom
 Cymbal = Cymbal
 Rim Shot = Rim Shot
+This region plays only part of its recording, which this command cannot handle yet = Tumutugtog lang ang region na ito ng bahagi ng recording nito, at hindi pa ito kayang hawakan ng utos na ito

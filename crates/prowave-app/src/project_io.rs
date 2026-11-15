@@ -543,6 +543,8 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
                                 .collect(),
                         }
                     }),
+                    audio_start: r.audio.as_ref().map_or(0, |a| a.start_frame),
+                    audio_frames: r.audio.as_ref().and_then(|a| a.len_frames),
                     mute: r.params.mute,
                     quantize: r.params.quantize,
                     transpose: r.params.transpose,
@@ -726,6 +728,9 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
                         Some(f) => {
                             let mut a = audio_region(f.clone(), ctx);
                             a.flex = r.flex.as_ref().map(|d| flex_from_doc(d, f.clone()));
+                            // A region cut from its file plays the part it was saved with.
+                            a.start_frame = r.audio_start;
+                            a.len_frames = r.audio_frames;
                             Some(a)
                         }
                         None => continue,
@@ -1987,6 +1992,27 @@ pub(crate) mod tests {
         assert_eq!(f.rendered, 0);
         assert!(q.tracks[t].params.groove);
         assert!(q.tracks[0].params.follow_groove);
+    }
+
+    #[test]
+    fn the_part_of_a_file_that_a_split_region_plays_is_saved_and_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut p = Project::empty();
+        let wav = dir.path().join("take.wav");
+        write_wav(&wav);
+        crate::import::import_audio(&mut p, &wav, &ctx).unwrap();
+        let t = p.tracks.len() - 1;
+        {
+            let a = p.tracks[t].regions[0].audio.as_mut().unwrap();
+            a.start_frame = 1_000;
+            a.len_frames = Some(2_000);
+        }
+        let path = save_project(&p, &dir.path().join("split")).unwrap();
+        let (q, warnings) = open_project(&path, &ctx).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let a = q.tracks[t].regions[0].audio.as_ref().unwrap();
+        assert_eq!((a.start_frame, a.len_frames), (1_000, Some(2_000)));
     }
 
     #[test]

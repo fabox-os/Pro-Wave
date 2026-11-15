@@ -37,7 +37,8 @@ pub struct RegionContent {
     notes: Vec<Note>,
     controls: Vec<Control>,
     params: RegionParams,
-    audio: bool,
+    /// The audio region's part of its file (start frame, length), if it is one.
+    audio: Option<(u64, Option<u64>)>,
 }
 
 impl RegionContent {
@@ -49,7 +50,7 @@ impl RegionContent {
             notes: r.notes.clone(),
             controls: r.controls.clone(),
             params: r.params,
-            audio: r.audio.is_some(),
+            audio: r.audio.as_ref().map(|a| (a.start_frame, a.len_frames)),
         }
     }
 
@@ -61,7 +62,7 @@ impl RegionContent {
             && self.notes == r.notes
             && self.controls == r.controls
             && self.params == r.params
-            && self.audio == r.audio.is_some()
+            && self.audio == r.audio.as_ref().map(|a| (a.start_frame, a.len_frames))
     }
 }
 
