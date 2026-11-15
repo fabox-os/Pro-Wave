@@ -441,6 +441,12 @@ pub enum Command {
         track: u16,
         player: Option<Box<SfPlayer>>,
     },
+    /// Moves the dials of the Sampler on `track` while it plays (no allocation). Ignored when the
+    /// track's instrument is not a Sampler.
+    SetSamplerParams {
+        track: u16,
+        params: [f32; crate::sampler::PARAMS],
+    },
     /// Moves the dials of the Electric Piano on `track` while it plays (no allocation). Ignored
     /// when the track's instrument is not an Electric Piano.
     SetPianoParams {
@@ -1663,6 +1669,11 @@ impl EngineCore {
                         }
                     } else if let Some(p) = player {
                         let _ = self.trash.push(Garbage::SoundFont(p));
+                    }
+                }
+                Command::SetSamplerParams { track, params } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_sampler_params(params);
                     }
                 }
                 Command::SetPianoParams { track, params } => {

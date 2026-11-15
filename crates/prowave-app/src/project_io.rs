@@ -421,6 +421,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             soundfont: t.soundfont.as_ref().map(|s| s.path.clone()),
             soundfont_bank: t.soundfont.as_ref().map_or(0, |s| s.bank),
             soundfont_program: t.soundfont.as_ref().map_or(0, |s| s.program),
+            sampler: t.sampler.as_ref().map(sampler_doc),
             epiano: t.epiano.map(|e| e.params.to_vec()),
             icon: t.icon.map(|k| k.name().to_string()),
             input: match t.input {
@@ -806,6 +807,7 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             midi_program: t.midi_program.map(|p| p.min(127)),
             midi_bank: t.midi_bank.map(|b| b.min(16383)),
             soundfont: soundfont_of(t),
+            sampler: sampler_of(t),
             epiano: epiano_of(t),
             icon: t
                 .icon
@@ -1085,6 +1087,51 @@ fn soundfont_of(t: &TrackDoc) -> Option<crate::model::SoundFontUse> {
         path: path.to_string(),
         bank: t.soundfont_bank.min(128),
         program: t.soundfont_program.min(127),
+    })
+}
+
+/// A track's Sampler as the project file keeps it.
+fn sampler_doc(s: &crate::model::SamplerUse) -> prowave_project::SamplerDoc {
+    use crate::sampler_load::SamplerSource;
+    let (root_key, looped) = match &s.source {
+        SamplerSource::Audio { root, looped, .. } => (*root, *looped),
+        _ => (60, false),
+    };
+    prowave_project::SamplerDoc {
+        kind: s.source.kind().to_string(),
+        path: s.source.path().to_string_lossy().into_owned(),
+        root_key,
+        looped,
+        params: s.params.to_vec(),
+    }
+}
+
+/// The Sampler a saved track plays: nothing for an unknown kind or an empty path; the dials are
+/// put into range (missing ones start at their defaults).
+fn sampler_of(t: &TrackDoc) -> Option<crate::model::SamplerUse> {
+    use crate::sampler_load::SamplerSource;
+    let d = t.sampler.as_ref()?;
+    let path = std::path::PathBuf::from(d.path.trim());
+    if d.path.trim().is_empty() {
+        return None;
+    }
+    let source = match d.kind.as_str() {
+        "sfz" => SamplerSource::Sfz(path),
+        "exs" => SamplerSource::Exs(path),
+        "audio" => SamplerSource::Audio {
+            path,
+            root: d.root_key.min(127),
+            looped: d.looped,
+        },
+        _ => return None,
+    };
+    let mut params = prowave_engine::sampler::defaults();
+    for (slot, v) in params.iter_mut().zip(&d.params) {
+        *slot = *v;
+    }
+    Some(crate::model::SamplerUse {
+        source,
+        params: prowave_engine::sampler::clamp(params),
     })
 }
 
@@ -2376,5 +2423,74 @@ pub(crate) mod tests {
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(r.tracks[0].output, 0, "no such bus");
         assert_eq!(r.notes.len(), crate::side_panes::MAX_NOTES);
+    }
+
+    #[test]
+    fn a_sampler_is_saved_with_its_source_and_dials_and_odd_saves_are_handled() {
+        use crate::model::SamplerUse;
+        use crate::sampler_load::SamplerSource;
+        let mut p = Project::empty();
+        let mut dials = prowave_engine::sampler::defaults();
+        dials[prowave_engine::sampler::dial::ATTACK] = 250.0;
+        p.tracks[0].sampler = Some(SamplerUse {
+            source: SamplerSource::Audio {
+                path: "/s/pad.wav".into(),
+                root: 48,
+                looped: true,
+            },
+            params: dials,
+        });
+        let (mut doc, _) = to_doc(&p);
+        let saved = doc.tracks[0].sampler.clone().expect("saved");
+        assert_eq!(
+            (
+                saved.kind.as_str(),
+                saved.path.as_str(),
+                saved.root_key,
+                saved.looped
+            ),
+            ("audio", "/s/pad.wav", 48, true)
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].sampler, p.tracks[0].sampler);
+        for (kind, source) in [
+            ("sfz", SamplerSource::Sfz("/s/kit.sfz".into())),
+            ("exs", SamplerSource::Exs("/s/kit.exs".into())),
+        ] {
+            doc.tracks[0].sampler = Some(prowave_project::SamplerDoc {
+                kind: kind.into(),
+                path: "/s/kit.".to_string() + kind,
+                params: vec![99.0, 1e9],
+                ..Default::default()
+            });
+            let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+            let s = r.tracks[0].sampler.clone().expect("a sampler");
+            assert_eq!(s.source, source);
+            // Wild dials are clamped and missing ones start at their defaults.
+            assert_eq!(s.params[0], 12.0);
+            assert_eq!(s.params[1], 2000.0);
+            assert_eq!(s.params[2], prowave_engine::sampler::DIALS[2].default);
+        }
+        // An unknown kind, an empty path, or no sampler: none.
+        for bad in ["wavetable", ""] {
+            doc.tracks[0].sampler = Some(prowave_project::SamplerDoc {
+                kind: if bad.is_empty() {
+                    "sfz".into()
+                } else {
+                    bad.into()
+                },
+                path: if bad.is_empty() {
+                    "  ".into()
+                } else {
+                    "/s/x".into()
+                },
+                ..Default::default()
+            });
+            let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+            assert_eq!(r.tracks[0].sampler, None, "{bad:?}");
+        }
+        doc.tracks[0].sampler = None;
+        let (n, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(n.tracks[0].sampler, None);
     }
 }

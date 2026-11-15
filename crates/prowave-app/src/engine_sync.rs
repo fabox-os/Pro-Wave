@@ -1,6 +1,6 @@
 //! Bridges the UI project model to `prowave-engine` using only `Command`s (never direct mutation).
 use crate::model::TrackKind;
-use crate::model::{Insert, Project, Region, SoundFontUse, TempoPoint, Track};
+use crate::model::{Insert, Project, Region, SamplerUse, SoundFontUse, TempoPoint, Track};
 use crate::patches::synth_patch;
 use prowave_engine::{
     AutoLane, AutoTarget, Chain, Command, ControlEvent, Engine, Fx, InputSource, MonitorTrack,
@@ -52,6 +52,10 @@ pub struct EngineSync {
     patches: Vec<SynthPatch>,
     /// The SoundFont each track was last given (`None`: its synth patch), by track.
     soundfonts: Vec<Option<SoundFontUse>>,
+    /// The Sampler each track was last given, by track (`None`: none).
+    samplers: Vec<Option<SamplerUse>>,
+    /// Samplers being loaded off the UI thread, by track.
+    sampler_jobs: std::collections::HashMap<usize, SamplerJob>,
     /// The Electric Piano dials each track was last given (`None`: no Electric Piano), by track.
     pianos: Vec<Option<[f32; prowave_engine::epiano::PARAMS]>>,
     /// Which tracks the engine was told are external, by track.
@@ -95,6 +99,17 @@ fn ir_key(insert: &Insert) -> Vec<u32> {
 
 /// The key of the master bus in the Space Designer jobs (no track has this number).
 const MASTER_KEY: usize = usize::MAX;
+
+/// A Sampler being loaded on a background thread.
+struct SamplerJob {
+    source: crate::sampler_load::SamplerSource,
+    /// The dials it was built with.
+    params: [f32; prowave_engine::sampler::PARAMS],
+    rx: Option<std::sync::mpsc::Receiver<Result<prowave_engine::sampler::Sampler, String>>>,
+    ready: Option<prowave_engine::sampler::Sampler>,
+    /// It could not be loaded: not tried again until the source changes.
+    failed: bool,
+}
 
 /// A Space Designer response being made on a background thread. Settings that change while it
 /// runs wait in `next`; only the newest is made after it, so dragging a control does not queue
@@ -549,6 +564,8 @@ impl EngineSync {
             mixes: Vec::new(),
             patches: Vec::new(),
             soundfonts: Vec::new(),
+            samplers: Vec::new(),
+            sampler_jobs: std::collections::HashMap::new(),
             pianos: Vec::new(),
             externals: Vec::new(),
             controls: Vec::new(),
@@ -711,12 +728,25 @@ impl EngineSync {
         // changes. A file that cannot be played is logged and the track plays its synth patch.
         let sample_rate = self.engine.sample_rate() as f32;
         for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
-            let want = if t.kind == TrackKind::ExternalMidi {
-                None
-            } else {
-                t.soundfont.as_ref()
-            };
-            let want_piano = if t.kind == TrackKind::ExternalMidi {
+            let external = t.kind == TrackKind::ExternalMidi;
+            // A Sampler wins over an Electric Piano and a SoundFont: it is loaded in the
+            // background and handed over when ready; its dials move while it plays.
+            if let Some(sampler) = t.sampler.as_ref().filter(|_| !external) {
+                if !self.sync_sampler(i, sampler) {
+                    break;
+                }
+                if let Some(slot) = self.pianos.get_mut(i) {
+                    *slot = None;
+                }
+                continue;
+            }
+            // The Sampler was taken away: the engine still plays it, so what the track should
+            // play now (a piano, a SoundFont, or its synth patch) is sent even if it did not
+            // change.
+            let force = self.samplers.get_mut(i).is_some_and(|s| s.take().is_some());
+            self.sampler_jobs.remove(&i);
+            let want = if external { None } else { t.soundfont.as_ref() };
+            let want_piano = if external {
                 None
             } else {
                 t.epiano.map(|e| prowave_engine::epiano::clamp(e.params))
@@ -726,7 +756,7 @@ impl EngineSync {
                 Some(sent) => sent.as_ref() == want,
                 None => want.is_none(),
             } && sent_piano.is_some() == want_piano.is_some();
-            if same_sound {
+            if same_sound && !force {
                 // Only the Electric Piano's dials moved: they change while the notes ring.
                 if let (Some(dials), true) = (want_piano, sent_piano != want_piano) {
                     if !self.send(Command::SetPianoParams {
@@ -966,6 +996,106 @@ impl EngineSync {
         true
     }
 
+    /// Keeps track `i`'s Sampler in step with `want`: moves its dials when only they changed,
+    /// else loads the new instrument in the background and swaps it in when it is ready (the
+    /// old instrument plays until then; one that cannot be loaded is logged and the old one
+    /// stays). Returns false when the engine's queue was full.
+    fn sync_sampler(&mut self, i: usize, want: &SamplerUse) -> bool {
+        if self.samplers.len() <= i {
+            self.samplers.resize(i + 1, None);
+        }
+        if let Some(sent) = &self.samplers[i] {
+            if sent.source == want.source {
+                self.sampler_jobs.remove(&i);
+                if sent.params != want.params {
+                    let cmd = Command::SetSamplerParams {
+                        track: i as u16,
+                        params: want.params,
+                    };
+                    if !self.send(cmd) {
+                        return false;
+                    }
+                    self.samplers[i] = Some(want.clone());
+                }
+                return true;
+            }
+        }
+        if !self
+            .sampler_jobs
+            .get(&i)
+            .is_some_and(|j| j.source == want.source)
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (source, params) = (want.source.clone(), want.params);
+            let sr = self.engine.sample_rate() as f32;
+            let spawned = std::thread::Builder::new()
+                .name("sampler-load".into())
+                .spawn(move || {
+                    let loaded = crate::sampler_load::build_zones(&source)
+                        .map(|zones| prowave_engine::sampler::Sampler::new(zones, sr, params));
+                    let _ = tx.send(loaded);
+                });
+            self.sampler_jobs.insert(
+                i,
+                SamplerJob {
+                    source: want.source.clone(),
+                    params: want.params,
+                    rx: spawned.is_ok().then_some(rx),
+                    ready: None,
+                    failed: spawned.is_err(),
+                },
+            );
+        }
+        let Some(job) = self.sampler_jobs.get_mut(&i) else {
+            return true;
+        };
+        if job.failed {
+            // Not tried again until the source changes (the old instrument keeps playing).
+            return true;
+        }
+        if let Some(rx) = &job.rx {
+            match rx.try_recv() {
+                Ok(Ok(sampler)) => {
+                    job.ready = Some(sampler);
+                    job.rx = None;
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Sampler of track {}: {e}", i + 1);
+                    job.rx = None;
+                    job.failed = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => self.retry = true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    job.rx = None;
+                    job.failed = true;
+                }
+            }
+        }
+        let Some(job) = self.sampler_jobs.get_mut(&i) else {
+            return true;
+        };
+        if let Some(sampler) = job.ready.take() {
+            let (source, params) = (job.source.clone(), job.params);
+            let cmd = Command::SetTrackSoundFont {
+                track: i as u16,
+                player: Some(Box::new(SfPlayer::sampler(sampler))),
+            };
+            // A rejected command drops the loaded instrument with it; the next frame loads it
+            // again (the queue is only ever full for a moment).
+            if !self.send(cmd) {
+                self.sampler_jobs.remove(&i);
+                return false;
+            }
+            self.samplers[i] = Some(SamplerUse { source, params });
+            if self.soundfonts.len() <= i {
+                self.soundfonts.resize(i + 1, None);
+            }
+            self.soundfonts[i] = None;
+            self.sampler_jobs.remove(&i);
+        }
+        true
+    }
+
     /// A new chain's Space Designers start with a built-in response; the ones that play an
     /// impulse-response file get a job that reads it and swaps its response in.
     fn queue_file_irs(&mut self, key: usize, inserts: &[Insert]) {
@@ -1182,6 +1312,7 @@ mod tests {
             vca: None,
             midi_port: None,
             soundfont: None,
+            sampler: None,
             epiano: None,
             midi_channel: 1,
             midi_program: None,

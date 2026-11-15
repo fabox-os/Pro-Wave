@@ -52,6 +52,7 @@ mod project_settings;
 mod recent_files;
 mod recorder;
 mod region_edit;
+mod sampler_load;
 mod score;
 mod score_export;
 mod scripter;
