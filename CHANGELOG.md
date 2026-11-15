@@ -34,10 +34,6 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **15 effects per strip and 8 sends:** an Audio FX chain now holds 15 effects and a channel strip 8 sends, Logic's limits (they were 8 and 4). Older projects load unchanged; the mixer grows the insert and send rows as they are filled.
 
-✅ **REX2 loops, read:** the new `prowave-rex` crate opens a Propellerhead ReCycle/Reason `.rx2` (and `.rex`) loop: the IFF container, the preview and original tempo, the sample rate, channel count and frame count, the sliced waveform (the DWOP adaptive-predictor decoder), and each slice as a frame range with its mute, lock and selected flags. Damaged, truncated and hostile files are refused or reported in `warnings`; decoding stops when the bitstream ends instead of running on. The crate's writer produces files the reader decodes back, which is how both halves are tested (mono and stereo round trips, truncation at every offset, 2000 random inputs). `REX-FORMAT-SPEC.md` documents the layout and the codec. **Not yet:** an Import menu entry that puts a loop on a track (the crate is not wired into the app), and 24-bit files are decoded through the same 16-bit codec (the crate says so in `warnings`).
-✅ **Time stretching and pitch shifting:** the new `prowave-stretch` crate changes a region's duration without changing its pitch (WSOLA with a waveform-similarity search and Hann overlap-add) and shifts pitch without changing duration (stretch by the pitch ratio, then resample back). It works on interleaved audio with any channel count, using one alignment for all channels so stereo stays in step. Tests cover length and pitch on sine tones, stereo channels, and bounded output. It is an offline algorithm for now; Flex Time and the app are not wired to it yet.
-✅ **Compressed MusicXML (.mxl):** the new `prowave-mxl` crate opens a compressed MusicXML bundle, follows `META-INF/container.xml` to its root score (or falls back to the first XML entry), and returns the score text for `prowave-musicxml`. Entry count and uncompressed sizes are capped; UTF-16 scores are refused for now. It is not wired into the app's import menu yet.
-
 ✅ **Split and Join on audio, Pattern, Drummer and take-folder regions:** Edit > Split at Playhead and Join now work on every kind of region, as in Logic. An audio region splits into two regions that play the same file on: the right one starts reading the file at the cut, so the two sound like the one region (the fade is kept only on the outer edges). Join puts them back together when they are the next part of the same file, and an audio region can be split again. A Pattern or Drummer region keeps its settings on both sides, each with the notes it had on its side of the cut; Join keeps the settings when the pieces share them, and otherwise makes the joined region plain MIDI. A take folder splits into two folders, each take and the comp cut at the playhead, and joins take by take when both have the same number of takes. Each split and join is one undo step. Not done yet: Flex Time and Flex Pitch regions cannot be split or joined; a piece of a split audio region cannot take Flex, Smart Tempo or Normalize, which read the whole recording and say so; a MIDI note that crosses a cut ends there, so joining the pieces does not give its end back.
 ✅ **Vintage B3 organ:** the Library's Vintage B3 Organ patches now play an additive drawbar organ — nine drawbars (16' to 1'), percussion on the second or third harmonic, a key click and a Leslie rotor with chorale and tremolo speeds — instead of the two-oscillator approximation. Not done yet: a dedicated B3 panel, separate horn and rotor speeds, distortion, and drawbar automation.
 ✅ **Rename Project…:** **File > Project Management > Rename Project…** now opens Project Settings on its General tab, where the project's name is edited — the name the window title and a Save As default to. The entry used to be greyed out.
@@ -82,9 +78,59 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **Track stacks (Folder and Summing):** select two or more tracks (Shift-click or Command-click their headers) and choose **Track > Create Track Stack…**. Logic's dialog asks for a **Folder Stack** or a **Summing Stack**, with a Details panel. A folder stack is a track named Folder 1 with the picked tracks indented under it: its arrow folds them away, its volume scales every track inside, its M and S buttons act on all of them, and its lane shows a band with its name at both ends. A summing stack is a sub-mix: an Aux strip named Sub 1 that the picked tracks send their output to over an internal bus, its own channel strip, fader, pan and output included, taken from the top of the 256 buses so your own sends keep the low numbers. Release Track Stack undoes either kind, and deleting the parent removes only the parent. The stacks are saved with the project, older files load unchanged, and each one is one undo step. Not done yet: the Summing Stack's "can be saved as a patch" and its recording controls, both described in its Details text; the Mixer shows each track's own level, not the level the folder adds; the folder icon is purple and the bands are drawn, but neither has been checked by eye on a screen.
 
+✅ **Logic's Create New Track dialog and right-click MIDI regions:** the **+** above the track headers opens Create New Track, as in Logic: the four families (Software Instrument or External MIDI; Pattern or Pattern External MIDI; Drummer; Mic or Line or Guitar or Bass), a number of tracks, and Cancel and Create. Right-click an empty lane to **Create MIDI Region**, **Create Pattern Region** or **Create Drummer Region** where the menu was opened.
+
+✅ **One window design for the stock effects:** every effect window has the same frame, in Logic's plug-in-window style: its name, a family chip (EQ, Dynamics, Space, Time, Drive, Filter), Bypass and Reset, one picture of what the effect does (the EQ curve, a compressor's transfer curve with live gain reduction, the delay taps, the phaser notches and so on) and a rack of automatable knobs.
+
+✅ **Flex markers with the pointer:** on an audio region with Flex Time, drag a Flex marker to stretch the sound (the moment in the recording stays put and the moment it plays follows the pointer, between its neighbours), double-click the region to add a marker where the pointer is, and double-click a marker to remove it.
+
+✅ **Safer auto-updater:** the updater skips pre-releases, refuses a download larger than its limit before starting it, accepts only absolute paths for its helper (and only `<target>.new` for a file or folder install), keeps the downloaded file and tells you the exact command when a `.deb` or `.rpm` install could not be done, and recovers when a swap is interrupted.
+
+✅ **`prowave --screenshot <file.png>`:** opens the window without taking the focus, draws the demo song, saves one picture and exits. Measuring runs (`--bench`, `--layout-shots`, `--screenshot`) leave your settings alone.
+
+✅ **A Wayland-only build:** the X11 backend and accessibility support are now optional features (`--no-default-features` builds without them), the first step of issue #79 (OpenBSD without X11). The normal build is unchanged.
+
 ### Fixed
 
+✅ **Piano Roll no longer crashes when its panel is made very small:** the scrollbar thumbs were sized with a minimum larger than the bar, which stopped the program. They now keep their 24 px minimum when there is room and shrink to fit when there is not (thanks to Ethan Curtis).
+
 ✅ **Mixer on short windows:** on a 768-point-tall screen the Mixer panel was too short for a channel strip and cut off everything under the Pan knob. The panel is now never shorter than one whole strip (it follows the project's Audio FX slots and sends), and still no taller than the room there is.
+
+### New libraries, not in the app yet
+
+These read or run a format and have tests, but there is no menu or window for them yet.
+
+✅ **REX2 loops, read:** the new `prowave-rex` crate opens a Propellerhead ReCycle/Reason `.rx2` (and `.rex`) loop: the IFF container, the preview and original tempo, the sample rate, channel count and frame count, the sliced waveform (the DWOP adaptive-predictor decoder), and each slice as a frame range with its mute, lock and selected flags. Damaged, truncated and hostile files are refused or reported in `warnings`; decoding stops when the bitstream ends instead of running on. The crate's writer produces files the reader decodes back, which is how both halves are tested (mono and stereo round trips, truncation at every offset, 2000 random inputs). `REX-FORMAT-SPEC.md` documents the layout and the codec. **Not yet:** an Import menu entry that puts a loop on a track (the crate is not wired into the app), and 24-bit files are decoded through the same 16-bit codec (the crate says so in `warnings`).
+
+✅ **Time stretching and pitch shifting:** the new `prowave-stretch` crate changes a region's duration without changing its pitch (WSOLA with a waveform-similarity search and Hann overlap-add) and shifts pitch without changing duration (stretch by the pitch ratio, then resample back). It works on interleaved audio with any channel count, using one alignment for all channels so stereo stays in step. Tests cover length and pitch on sine tones, stereo channels, and bounded output. It is an offline algorithm for now; Flex Time and the app are not wired to it yet.
+
+✅ **Compressed MusicXML (.mxl):** the new `prowave-mxl` crate opens a compressed MusicXML bundle, follows `META-INF/container.xml` to its root score (or falls back to the first XML entry), and returns the score text for `prowave-musicxml`. Entry count and uncompressed sizes are capped; UTF-16 scores are refused for now. It is not wired into the app's import menu yet.
+
+✅ **Guitar Pro 7/8 scores (`prowave-guitarpro`):** reads a `.gp` file (a ZIP holding `score.gpif`): the score's metadata, tracks, measures and notes. Guitar Pro 6 `.gpx` is refused with a message asking for a `.gp` export, and the old binary `.gp3`, `.gp4` and `.gp5` are not read. Sizes and counts are capped and a damaged file is an error, never a crash (issue #71).
+
+✅ **Hydrogen sessions (`prowave-hydrogen-import`):** reads a `.h2song` file into a song (name, tempo, the drum kit's name), its instruments and its patterns as notes, the part of issue #81 that the drum kits did not cover.
+
+✅ **MusicXML scores (`prowave-musicxml`):** reads an uncompressed MusicXML `score-partwise` document into parts, measures (divisions, key, time signature, tempo) and notes (pitch, duration, voice, staff, chords and rests). The file is treated as untrusted input.
+
+✅ **Logic Pro `.logicx` bundles (`prowave-logicx-import`):** the first part of Logic project support: it finds the bundle (a `.logicx` package, or a folder holding exactly one), reads the active alternative and the Logic version from its property lists, and reads the envelope of the `ProjectData` file. Reading the tracks, regions and plug-ins, and importing them into a project, is not in 0.3.0 (see `LOGICX-FORMAT-SPEC.md`).
+
+✅ **Vamp analysis plug-ins (`prowave-vamp`):** loads Vamp analysers (the open format for tempo, beat, key and pitch analysis, issue #69) and runs them over blocks of audio, with their parameters, programs and outputs.
+
+✅ **DSSI synths (`prowave-dssi`):** loads DSSI plug-in libraries and reads their metadata (issue #64). The loader that runs plug-in code is off unless the crate's `in-process` feature is on.
+
+### Thank you
+
+0.3.0 came from these people:
+
+- **Fábio Soares (fabox-os)**: the project's lead; the engine, the app, the Pult EQ, Electric Piano, Sampler, Drum Machine, Musical Typing, Space Designer's own impulse responses, the LADSPA plug-in slots, FLAC bounce, the merges and the release.
+- **resname**: GarageBand audio import, Hydrogen drum kits, the Multi-Band Compressor, the bounce and export menus, Edit Groups, send automation, the plug-in picker, the Vintage B3 organ, Flex markers, the LADSPA host library and the readers and hosts listed under New libraries.
+- **Maxime Randazzo (RandazzoMaxime)**: CLAP, VST3 and Audio Unit plug-in hosting with the Plugin Manager, audio device and buffer size settings, and Split and Join with Track Stacks.
+- **Ethan Curtis (basilicon)**: the Piano Roll crash fix.
+
+And the people whose issues and reports shaped this release:
+
+- **Reaper10**, who asked for the drum machine, sampler, typing keyboard, electric piano, Pult EQ, LADSPA and DSSI hosting, impulse responses, REX2, Vamp, Hydrogen sessions, time stretching, notation and many more (issues #63 to #120).
+- **resname** (the plug-in picker, #90), **whodame** (OpenBSD and a pure Wayland build, #79) and **mernking** (Linux testing, #119).
 
 ### Still to do or test
 
