@@ -65,6 +65,7 @@ mod sysex;
 mod takes;
 mod tempo_track;
 mod theme;
+mod tooltips;
 mod track_dialogs;
 mod track_icons;
 mod tracks_area;
