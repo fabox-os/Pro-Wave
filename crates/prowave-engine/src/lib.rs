@@ -22,11 +22,14 @@ mod flex;
 mod fx;
 mod gain_smoothing;
 pub mod hydrogen;
+pub mod ir_file;
 #[cfg(not(target_arch = "wasm32"))]
 mod mapped;
 mod monitor;
 mod mtc;
 mod output;
+pub mod plugin;
+pub mod pult_eq;
 mod routing;
 mod sf2;
 mod soundfont;
@@ -43,8 +46,8 @@ pub use crate::capture::{
 };
 pub use crate::clock::{song_position, tick_index, ClockMessage, TICKS_PER_BEAT};
 pub use crate::convolver::{
-    ir_preview, ir_samples, ir_seconds, sd, volume_env, Convolver, BLOCK as CONVOLVER_BLOCK,
-    IR_NAMES, IR_PARAMS, MAX_IR_SECONDS,
+    ir_preview, ir_preview_with, ir_samples, ir_samples_with, ir_seconds, sd, volume_env,
+    Convolver, BLOCK as CONVOLVER_BLOCK, IR_NAMES, IR_PARAMS, MAX_IR_SECONDS,
 };
 pub use crate::core::{
     dsp_load, AudioClip, CaptureSink, ClipEdit, Command, ControlEvent, EngineCore, EngineState,
@@ -68,6 +71,7 @@ pub use crate::mtc::{
     MtcMessage,
 };
 pub use crate::output::{peak_of, Engine, EngineError};
+pub use crate::plugin::{BlockEffect, PLUGIN_BLOCK};
 pub use crate::routing::{
     curve_shape, lane_value, send_gain, AutoLane, AutoPoint, AutoTarget, Route, SendSpec,
     MAX_AUTO_POINTS, MAX_BUSES, MAX_SENDS,

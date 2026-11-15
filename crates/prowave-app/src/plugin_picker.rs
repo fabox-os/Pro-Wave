@@ -31,6 +31,8 @@ pub const CATEGORIES: [&str; 14] = [
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pick {
     Effect(FxKind),
+    /// A LADSPA plug-in found on this computer.
+    Plugin(crate::plugins::PluginId),
 }
 
 /// The category Logic files `kind` under.
@@ -40,10 +42,11 @@ pub fn category(kind: FxKind) -> &'static str {
         FxKind::Delay => "Delay",
         FxKind::Overdrive => "Distortion",
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => "Dynamics",
-        FxKind::ChannelEq | FxKind::MultiEq => "EQ",
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => "EQ",
         FxKind::Filter => "Filter",
         FxKind::Chorus | FxKind::Phaser => "Modulation",
         FxKind::Reverb => "Reverb",
+        FxKind::Plugin => "Specialized",
     }
 }
 
@@ -81,8 +84,18 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
                 });
             });
         }
+        picked = picked.or(plugin_menu(ui));
     } else {
         let mut any = false;
+        let query = search.trim().to_lowercase();
+        for info in crate::plugins::catalog().effects() {
+            if info.name.to_lowercase().contains(&query) {
+                any = true;
+                if ui.button(&info.name).clicked() {
+                    picked = Some(Pick::Plugin(crate::plugins::intern(&info.plugin_ref())));
+                }
+            }
+        }
         for kind in FxKind::ALL {
             if matches(kind, search) {
                 any = true;
@@ -95,6 +108,39 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
             ui.weak(tr("No plug-ins match"));
         }
     }
+    picked
+}
+
+/// The "LADSPA Plug-ins" submenu: the effects the scan found, by name. The first time it is
+/// drawn it starts the scan, which runs in the background.
+fn plugin_menu(ui: &mut Ui) -> Option<Pick> {
+    crate::plugins::ensure_scanned();
+    let mut picked = None;
+    ui.menu_button(tr("LADSPA Plug-ins"), |ui| {
+        let catalog = crate::plugins::catalog();
+        let mut any = false;
+        egui::ScrollArea::vertical()
+            .max_height(360.0)
+            .show(ui, |ui| {
+                for info in catalog.effects() {
+                    any = true;
+                    if ui.button(&info.name).clicked() {
+                        picked = Some(Pick::Plugin(crate::plugins::intern(&info.plugin_ref())));
+                        ui.close();
+                    }
+                }
+            });
+        if !any {
+            ui.add_enabled(
+                false,
+                egui::Label::new(if catalog.scanning || !catalog.scanned {
+                    tr("Scanning for plug-ins…")
+                } else {
+                    tr("No LADSPA plug-ins found")
+                }),
+            );
+        }
+    });
     picked
 }
 
