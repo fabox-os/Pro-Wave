@@ -1,0 +1,6 @@
+[package]
+name = "prowave-stretch"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: WSOLA time stretching and pitch shifting for audio regions"
+license = "GPL-3.0-or-later"

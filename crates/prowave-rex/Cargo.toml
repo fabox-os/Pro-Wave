@@ -1,0 +1,11 @@
+[package]
+name = "prowave-rex"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: REX2 loops (.rx2/.rex) - container, slices and the DWOP decoder"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3.27.0"
