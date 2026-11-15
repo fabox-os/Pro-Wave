@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use crate::drum_machine::DrumMachine;
 use crate::sampler::Sampler;
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 
@@ -88,6 +89,8 @@ pub struct SfPlayer {
     synth: Option<Synthesizer>,
     /// The Sampler, when this player is one (`SfPlayer::sampler`).
     sampler: Option<Box<Sampler>>,
+    /// The Drum Machine, when this player is one (`SfPlayer::drum_machine`).
+    drums: Option<Box<DrumMachine>>,
     channel: i32,
     sample_rate: i32,
 }
@@ -113,9 +116,30 @@ impl SfPlayer {
         Ok(Self {
             synth: Some(synth),
             sampler: None,
+            drums: None,
             channel,
             sample_rate: rate,
         })
+    }
+
+    /// A player that plays a [`DrumMachine`] (pads built off the audio thread, with their
+    /// samples) in place of a SoundFont.
+    pub fn drum_machine(drums: DrumMachine) -> Self {
+        Self {
+            synth: None,
+            sampler: None,
+            drums: Some(Box::new(drums)),
+            channel: 0,
+            sample_rate: 0,
+        }
+    }
+
+    /// New settings for one pad of the Drum Machine while it plays (nothing for any other
+    /// player). Allocation free.
+    pub fn set_drum_pad(&mut self, pad: usize, settings: crate::drum_machine::PadSettings) {
+        if let Some(d) = self.drums.as_mut() {
+            d.set_pad(pad, settings);
+        }
     }
 
     /// A player that plays a [`Sampler`] (zones built off the audio thread from SFZ, EXS or an
@@ -124,6 +148,7 @@ impl SfPlayer {
         Self {
             synth: None,
             sampler: Some(Box::new(sampler)),
+            drums: None,
             channel: 0,
             sample_rate: 0,
         }
@@ -148,6 +173,9 @@ impl SfPlayer {
         if let Some(s) = self.sampler.as_mut() {
             s.note_on(pitch, vel);
         }
+        if let Some(d) = self.drums.as_mut() {
+            d.note_on(pitch, vel);
+        }
         if let Some(s) = self.synth.as_mut() {
             s.note_on(self.channel, i32::from(pitch.min(127)), velocity);
         }
@@ -157,6 +185,9 @@ impl SfPlayer {
     pub fn note_off(&mut self, pitch: u8) {
         if let Some(s) = self.sampler.as_mut() {
             s.note_off(pitch);
+        }
+        if let Some(d) = self.drums.as_mut() {
+            d.note_off(pitch);
         }
         if let Some(s) = self.synth.as_mut() {
             s.note_off(self.channel, i32::from(pitch.min(127)));
@@ -168,6 +199,9 @@ impl SfPlayer {
         if let Some(s) = self.sampler.as_mut() {
             s.all_notes_off();
         }
+        if let Some(d) = self.drums.as_mut() {
+            d.all_notes_off();
+        }
         if let Some(s) = self.synth.as_mut() {
             s.note_off_all(false);
         }
@@ -177,6 +211,9 @@ impl SfPlayer {
     pub fn render(&mut self) -> (f32, f32) {
         if let Some(s) = self.sampler.as_mut() {
             return s.render();
+        }
+        if let Some(d) = self.drums.as_mut() {
+            return d.render();
         }
         let mut left = [0f32; 1];
         let mut right = [0f32; 1];

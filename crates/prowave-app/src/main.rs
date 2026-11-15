@@ -12,6 +12,7 @@ mod bench;
 mod bounce;
 mod clock_follow;
 mod clock_in;
+mod drum_kit;
 mod engine_sync;
 mod event_list;
 mod file_browser;

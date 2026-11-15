@@ -441,6 +441,13 @@ pub enum Command {
         track: u16,
         player: Option<Box<SfPlayer>>,
     },
+    /// New settings for pad `pad` of the Drum Machine on `track` while it plays (no allocation).
+    /// Ignored when the track's instrument is not a Drum Machine.
+    SetDrumPad {
+        track: u16,
+        pad: u8,
+        settings: crate::drum_machine::PadSettings,
+    },
     /// Moves the dials of the Sampler on `track` while it plays (no allocation). Ignored when the
     /// track's instrument is not a Sampler.
     SetSamplerParams {
@@ -1665,6 +1672,15 @@ impl EngineCore {
                         let _ = self.trash.push(Garbage::SoundFont(p));
                     }
                 }
+                Command::SetDrumPad {
+                    track,
+                    pad,
+                    settings,
+                } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_drum_pad(usize::from(pad), settings);
+                    }
+                }
                 Command::SetSamplerParams { track, params } => {
                     if let Some(Some(player)) = self.sf.get_mut(track as usize) {
                         player.set_sampler_params(params);
@@ -2771,6 +2787,59 @@ mod tests {
             "the note sounds: {first_half_second}"
         );
         assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+    }
+
+    #[test]
+    fn a_drum_machine_track_plays_its_pads_and_takes_new_pad_settings_while_playing() {
+        use crate::drum_machine::{default_kit, DrumMachine, PadKind};
+        let (mut e, mut tx, mut s) = rig();
+        let machine = DrumMachine::new(default_kit(), std::array::from_fn(|_| None), 48_000.0);
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(Box::new(SfPlayer::drum_machine(machine))),
+            })
+            .is_ok());
+        // The test song's note is middle C (60): no pad. Live notes on the kick's key sound.
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 36,
+                vel: 127,
+                track: 0
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 24_000 * 2];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+        let heard: f32 = buf.iter().map(|x| x.abs()).sum();
+        assert!(heard > 5.0, "the kick sounds: {heard}");
+        assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+        // A pad changes kind while it plays; a track with no drum machine ignores the command.
+        let mut pad = PadKind::Clap.settings();
+        pad.level_db = -3.0;
+        assert!(tx
+            .push(Command::SetDrumPad {
+                track: 0,
+                pad: 0,
+                settings: pad
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetDrumPad {
+                track: 7,
+                pad: 0,
+                settings: pad
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 36,
+                vel: 100,
+                track: 0
+            })
+            .is_ok());
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
     }
 
     #[test]

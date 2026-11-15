@@ -418,6 +418,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             soundfont_bank: t.soundfont.as_ref().map_or(0, |s| s.bank),
             soundfont_program: t.soundfont.as_ref().map_or(0, |s| s.program),
             sampler: t.sampler.as_ref().map(sampler_doc),
+            drums: t.drums.as_ref().map(drums_doc),
             icon: t.icon.map(|k| k.name().to_string()),
             input: match t.input {
                 InputSource::Mono(c) | InputSource::Stereo(c) => c,
@@ -811,6 +812,7 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             midi_bank: t.midi_bank.map(|b| b.min(16383)),
             soundfont: soundfont_of(t),
             sampler: sampler_of(t),
+            drums: drums_of(t),
             icon: t
                 .icon
                 .as_deref()
@@ -1090,6 +1092,57 @@ fn soundfont_of(t: &TrackDoc) -> Option<crate::model::SoundFontUse> {
         bank: t.soundfont_bank.min(128),
         program: t.soundfont_program.min(127),
     })
+}
+
+/// A track's Drum Machine as the project file keeps it.
+fn drums_doc(d: &crate::drum_kit::DrumsUse) -> prowave_project::DrumsDoc {
+    prowave_project::DrumsDoc {
+        pads: d
+            .pads
+            .iter()
+            .map(|p| prowave_project::PadDoc {
+                kind: p.settings.kind.name().to_string(),
+                tune: p.settings.tune,
+                decay: p.settings.decay,
+                tone: p.settings.tone,
+                level_db: p.settings.level_db,
+                pan: p.settings.pan,
+                choke: p.settings.choke,
+                sample: p.sample.as_ref().map(|s| s.to_string_lossy().into_owned()),
+            })
+            .collect(),
+    }
+}
+
+/// The Drum Machine a saved track plays: pads that are missing from the file start as the
+/// starting kit's, an unknown drum is the starting kit's pad too, and every setting is put into
+/// range.
+fn drums_of(t: &TrackDoc) -> Option<crate::drum_kit::DrumsUse> {
+    use prowave_engine::drum_machine::{PadKind, PadSettings};
+    let d = t.drums.as_ref()?;
+    let mut kit = crate::drum_kit::DrumsUse::new();
+    for (pad, saved) in kit.pads.iter_mut().zip(&d.pads) {
+        let Some(kind) = PadKind::from_name(&saved.kind) else {
+            continue;
+        };
+        pad.settings = PadSettings {
+            kind,
+            tune: saved.tune,
+            decay: saved.decay,
+            tone: saved.tone,
+            level_db: saved.level_db,
+            pan: saved.pan,
+            choke: saved.choke,
+        }
+        .clamped();
+        pad.sample = saved
+            .sample
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && kind == PadKind::Sample)
+            .map(std::path::PathBuf::from);
+    }
+    Some(kit)
 }
 
 /// A track's Sampler as the project file keeps it.

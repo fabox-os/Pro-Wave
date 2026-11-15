@@ -659,6 +659,9 @@ pub struct Track {
     /// The Sampler the track plays instead of its synth patch or SoundFont (it wins over a
     /// SoundFont): an SFZ or EXS instrument, or one audio file across the keyboard.
     pub sampler: Option<SamplerUse>,
+    /// The Drum Machine the track plays: sixteen pads on the keys 36 to 51 (it wins over the
+    /// Sampler and a SoundFont).
+    pub drums: Option<crate::drum_kit::DrumsUse>,
     /// The icon the user picked (Track > Assign Track Icon); `None` is the automatic one.
     pub icon: Option<crate::track_icons::IconKind>,
 }
@@ -736,6 +739,7 @@ impl Track {
             midi_port: None,
             soundfont: None,
             sampler: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,
@@ -953,6 +957,7 @@ impl Project {
             midi_port: None,
             soundfont: None,
             sampler: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,
@@ -1017,6 +1022,7 @@ impl Project {
             midi_port: None,
             soundfont: None,
             sampler: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,

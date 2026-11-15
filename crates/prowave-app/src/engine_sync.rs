@@ -1,4 +1,5 @@
 //! Bridges the UI project model to `prowave-engine` using only `Command`s (never direct mutation).
+use crate::drum_kit::DrumsUse;
 use crate::model::TrackKind;
 use crate::model::{Insert, Project, Region, SamplerUse, SoundFontUse, TempoPoint, Track};
 use crate::patches::synth_patch;
@@ -52,6 +53,10 @@ pub struct EngineSync {
     patches: Vec<SynthPatch>,
     /// The SoundFont each track was last given (`None`: its synth patch), by track.
     soundfonts: Vec<Option<SoundFontUse>>,
+    /// The Drum Machine each track was last given, by track (`None`: none).
+    drum_kits: Vec<Option<DrumsUse>>,
+    /// Drum machines being built off the UI thread, by track.
+    drum_jobs: std::collections::HashMap<usize, DrumJob>,
     /// The Sampler each track was last given, by track (`None`: none).
     samplers: Vec<Option<SamplerUse>>,
     /// Samplers being loaded off the UI thread, by track.
@@ -90,6 +95,12 @@ fn ir_key(params: &[f32; prowave_engine::MAX_FX_PARAMS]) -> Vec<u32> {
 
 /// The key of the master bus in the Space Designer jobs (no track has this number).
 const MASTER_KEY: usize = usize::MAX;
+
+/// A Drum Machine being built on a background thread.
+struct DrumJob {
+    kit: DrumsUse,
+    rx: Option<std::sync::mpsc::Receiver<prowave_engine::drum_machine::DrumMachine>>,
+}
 
 /// A Sampler being loaded on a background thread.
 struct SamplerJob {
@@ -538,6 +549,8 @@ impl EngineSync {
             mixes: Vec::new(),
             patches: Vec::new(),
             soundfonts: Vec::new(),
+            drum_kits: Vec::new(),
+            drum_jobs: std::collections::HashMap::new(),
             samplers: Vec::new(),
             sampler_jobs: std::collections::HashMap::new(),
             externals: Vec::new(),
@@ -702,6 +715,14 @@ impl EngineSync {
         let sample_rate = self.engine.sample_rate() as f32;
         for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
             let external = t.kind == TrackKind::ExternalMidi;
+            // A Drum Machine wins over a Sampler and a SoundFont; its sample pads are read in the
+            // background, and its pad settings move while it plays.
+            if let Some(drums) = t.drums.as_ref().filter(|_| !external) {
+                if !self.sync_drums(i, drums) {
+                    break;
+                }
+                continue;
+            }
             // A Sampler wins over a SoundFont: it is loaded in the background and handed over
             // when ready; its dials move while it plays.
             if let Some(sampler) = t.sampler.as_ref().filter(|_| !external) {
@@ -712,7 +733,12 @@ impl EngineSync {
             }
             // The Sampler was taken away: the engine still plays it, so what the track should
             // play now (a SoundFont, or its synth patch) is sent even if it did not change.
-            let force = self.samplers.get_mut(i).is_some_and(|s| s.take().is_some());
+            let drums_were = self
+                .drum_kits
+                .get_mut(i)
+                .is_some_and(|d| d.take().is_some());
+            self.drum_jobs.remove(&i);
+            let force = self.samplers.get_mut(i).is_some_and(|s| s.take().is_some()) || drums_were;
             self.sampler_jobs.remove(&i);
             let want = if external { None } else { t.soundfont.as_ref() };
             let unchanged = match self.soundfonts.get(i) {
@@ -933,6 +959,90 @@ impl EngineSync {
                 job.next = Some(w.params);
             }
             *have = *w;
+        }
+        true
+    }
+
+    /// Keeps track `i`'s Drum Machine in step with `want`: pad settings that changed move live;
+    /// a change in which pads play which sample files builds the kit again in the background
+    /// and swaps it in when it is ready (the old kit plays until then). Returns false when the
+    /// engine's queue was full.
+    fn sync_drums(&mut self, i: usize, want: &DrumsUse) -> bool {
+        if self.drum_kits.len() <= i {
+            self.drum_kits.resize(i + 1, None);
+        }
+        if let Some(sent) = self.drum_kits[i].clone() {
+            if sent.sample_pads() == want.sample_pads()
+                && sent
+                    .pads
+                    .iter()
+                    .map(|p| p.settings.kind)
+                    .eq(want.pads.iter().map(|p| p.settings.kind))
+            {
+                self.drum_jobs.remove(&i);
+                for (pad, (a, b)) in sent.pads.iter().zip(&want.pads).enumerate() {
+                    if a.settings != b.settings {
+                        let cmd = Command::SetDrumPad {
+                            track: i as u16,
+                            pad: pad as u8,
+                            settings: b.settings,
+                        };
+                        if !self.send(cmd) {
+                            return false;
+                        }
+                        if let Some(s) = self.drum_kits[i].as_mut() {
+                            s.pads[pad].settings = b.settings;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+        if !self.drum_jobs.get(&i).is_some_and(|j| j.kit == *want) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let kit = want.clone();
+            let sr = self.engine.sample_rate() as f32;
+            let spawned = std::thread::Builder::new()
+                .name("drum-kit-load".into())
+                .spawn(move || {
+                    let _ = tx.send(crate::drum_kit::build_machine(&kit, sr));
+                });
+            self.drum_jobs.insert(
+                i,
+                DrumJob {
+                    kit: want.clone(),
+                    rx: spawned.is_ok().then_some(rx),
+                },
+            );
+        }
+        let Some(job) = self.drum_jobs.get_mut(&i) else {
+            return true;
+        };
+        let machine = match job.rx.as_ref().map(std::sync::mpsc::Receiver::try_recv) {
+            Some(Ok(machine)) => Some(machine),
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                self.retry = true;
+                None
+            }
+            _ => None,
+        };
+        if let Some(machine) = machine {
+            let kit = job.kit.clone();
+            let cmd = Command::SetTrackSoundFont {
+                track: i as u16,
+                player: Some(Box::new(SfPlayer::drum_machine(machine))),
+            };
+            // A rejected command drops the built kit with it; the next frame builds it again.
+            if !self.send(cmd) {
+                self.drum_jobs.remove(&i);
+                return false;
+            }
+            self.drum_kits[i] = Some(kit);
+            if self.soundfonts.len() <= i {
+                self.soundfonts.resize(i + 1, None);
+            }
+            self.soundfonts[i] = None;
+            self.drum_jobs.remove(&i);
         }
         true
     }
@@ -1224,6 +1334,7 @@ mod tests {
             midi_port: None,
             soundfont: None,
             sampler: None,
+            drums: None,
             midi_channel: 1,
             midi_program: None,
             midi_bank: None,
