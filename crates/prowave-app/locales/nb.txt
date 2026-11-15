@@ -922,8 +922,6 @@ The plug-in scan has not finished, so a plug-in shown as not found may still be 
 the Logic Pro project has no track Pro Wave can import = Logic Pro-prosjektet har ingen spor som Pro Wave kan importere
 Only {} tracks fit in a Pro Wave project: the others are not imported = Bare {} spor får plass i et Pro Wave-prosjekt, de andre importeres ikke
 {}: the sampler's instrument files ({}) are not carried over = {}: samplerens instrumentfiler ({}) tas ikke med
-{}: the audio file {} is not in Media/Audio Files, so its region is skipped = {}: lydfilen {} finnes ikke i Media/Audio Files, så regionen hoppes over
-{}: cannot read {}: {} = {}: kan ikke lese {}: {}
 {}: the plug-in {} has no codes, so it is not carried over = {}: plug-in {} har ingen koder, så den tas ikke med
 {}: the instrument {} is not hosted yet, so the track keeps Pro Wave's default instrument = {}: instrumentet {} støttes ikke ennå, så sporet beholder Pro Waves standardinstrument
 {}: the plug-in {} is in a format Pro Wave does not know, so it is not carried over = {}: Pro Wave kjenner ikke formatet til plug-in {}, så den tas ikke med
@@ -932,3 +930,13 @@ Logic Pro Import = Logic Pro-import
 Not found on this computer = Ikke funnet på denne datamaskinen
 Stock plug-ins not carried over = Standard plug-ins ikke tatt med
 Other things not carried over = Annet som ikke ble tatt med
+
+the Logic Pro project's note times have no resolution, so its notes cannot be placed = notetidene i Logic Pro-prosjektet har ingen oppløsning, så notene kan ikke plasseres
+The volumes were not read from the Logic Pro project, so the tracks stay at 0 dB = Volumene ble ikke lest fra Logic Pro-prosjektet, så sporene står på 0 dB
+Mute, solo and plug-in bypass were not read from the Logic Pro project, so they are all off = Demping, solo og forbikobling av programtillegg ble ikke lest fra Logic Pro-prosjektet, så de er alle av
+The positions of the regions were not read from the Logic Pro project, so each one starts at bar 1 = Posisjonene til regionene ble ikke lest fra Logic Pro-prosjektet, så hver enkelt starter på takt 1
+The audio region {} names no file in the project, so it is skipped = Lydregionen {} nevner noen fil i prosjektet, så den hoppes over
+The audio region {} is not placed in the project, so it is skipped = Lydregionen {} er ikke plassert i prosjektet, så den hoppes over
+The audio file {} is not in Media, so it is skipped = Lydfilen {} finnes ikke i Media, så den hoppes over
+cannot read {}: {} = kan ikke lese {}: {}
+The audio file {} plays on no track that is imported, so it is on a track of its own = Lydfilen {} spilles ikke av noe importert spor, så den ligger på et eget spor

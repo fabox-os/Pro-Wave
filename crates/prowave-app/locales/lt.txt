@@ -922,8 +922,6 @@ The plug-in scan has not finished, so a plug-in shown as not found may still be 
 the Logic Pro project has no track Pro Wave can import = Logic Pro projekte nėra takelio, kurį Pro Wave galėtų importuoti
 Only {} tracks fit in a Pro Wave project: the others are not imported = Pro Wave projekte telpa tik {} takeliai, likusieji neimportuojami
 {}: the sampler's instrument files ({}) are not carried over = {}: samplerio instrumentų failai ({}) neperkeliami
-{}: the audio file {} is not in Media/Audio Files, so its region is skipped = {}: garso failo {} nėra aplanke Media/Audio Files, todėl jo sritis praleidžiama
-{}: cannot read {}: {} = {}: nepavyksta perskaityti {}: {}
 {}: the plug-in {} has no codes, so it is not carried over = {}: papildinys {} neturi kodų, todėl neperkeliamas
 {}: the instrument {} is not hosted yet, so the track keeps Pro Wave's default instrument = {}: instrumentas {} dar nepalaikomas, todėl takelis lieka su numatytuoju Pro Wave instrumentu
 {}: the plug-in {} is in a format Pro Wave does not know, so it is not carried over = {}: Pro Wave nepažįsta papildinio {} formato, todėl jis neperkeliamas
@@ -932,3 +930,13 @@ Logic Pro Import = Logic Pro importas
 Not found on this computer = Šiame kompiuteryje nerasta
 Stock plug-ins not carried over = Standartiniai papildiniai neperkelti
 Other things not carried over = Kiti dalykai neperkelti
+
+the Logic Pro project's note times have no resolution, so its notes cannot be placed = Logic Pro projekto natų laikai neturi skiriamosios gebos, todėl jo natų negalima išdėstyti
+The volumes were not read from the Logic Pro project, so the tracks stay at 0 dB = Garsumai iš Logic Pro projekto nebuvo nuskaityti, todėl takeliai lieka 0 dB
+Mute, solo and plug-in bypass were not read from the Logic Pro project, so they are all off = Nutildymas, solo ir įskiepių apėjimas iš Logic Pro projekto nebuvo nuskaityti, todėl visi yra išjungti
+The positions of the regions were not read from the Logic Pro project, so each one starts at bar 1 = Sričių padėtys iš Logic Pro projekto nebuvo nuskaitytos, todėl kiekviena prasideda nuo 1 takto
+The audio region {} names no file in the project, so it is skipped = Garso sritis {} projekte nenurodo jokio failo, todėl ji praleidžiama
+The audio region {} is not placed in the project, so it is skipped = Garso sritis {} projekte nepadėta, todėl ji praleidžiama
+The audio file {} is not in Media, so it is skipped = Garso failo {} nėra aplanke Media, todėl jis praleidžiamas
+cannot read {}: {} = negalima skaityti {}: {}
+The audio file {} plays on no track that is imported, so it is on a track of its own = Garso failas {} negroja në jokiame importuotame takelyje, todėl jis yra atskirame takelyje

@@ -922,8 +922,6 @@ The plug-in scan has not finished, so a plug-in shown as not found may still be 
 the Logic Pro project has no track Pro Wave can import = walang track sa proyektong Logic Pro na maiimport ng Pro Wave
 Only {} tracks fit in a Pro Wave project: the others are not imported = {} track lang ang kasya sa proyektong Pro Wave; hindi na-import ang iba
 {}: the sampler's instrument files ({}) are not carried over = {}: hindi kasama ang mga instrument file ng sampler ({})
-{}: the audio file {} is not in Media/Audio Files, so its region is skipped = {}: wala sa Media/Audio Files ang audio file na {}, kaya nilaktawan ang region nito
-{}: cannot read {}: {} = {}: hindi mabasa ang {}: {}
 {}: the plug-in {} has no codes, so it is not carried over = {}: walang codes ang plug-in na {}, kaya hindi ito kasama
 {}: the instrument {} is not hosted yet, so the track keeps Pro Wave's default instrument = {}: hindi pa suportado ang instrument na {}; mananatili sa track ang default na instrument ng Pro Wave
 {}: the plug-in {} is in a format Pro Wave does not know, so it is not carried over = {}: hindi kilala ng Pro Wave ang format ng plug-in na {}, kaya hindi ito kasama
@@ -932,3 +930,13 @@ Logic Pro Import = Logic Pro Import
 Not found on this computer = Hindi nahanap sa computer na ito
 Stock plug-ins not carried over = Stock plug-in na hindi kasama
 Other things not carried over = Iba pang hindi kasama
+
+the Logic Pro project's note times have no resolution, so its notes cannot be placed = walang resolution ang mga oras ng nota ng proyekto ng Logic Pro, kaya hindi mailagay ang mga nota nito
+The volumes were not read from the Logic Pro project, so the tracks stay at 0 dB = Hindi nabasa ang mga volume mula sa proyekto ng Logic Pro, kaya nasa 0 dB ang mga track
+Mute, solo and plug-in bypass were not read from the Logic Pro project, so they are all off = Hindi nabasa ang mute, solo at bypass ng plug-in mula sa proyekto ng Logic Pro, kaya nakapatay ang lahat ng ito
+The positions of the regions were not read from the Logic Pro project, so each one starts at bar 1 = Hindi nabasa ang mga posisyon ng mga region mula sa proyekto ng Logic Pro, kaya nagsisimula ang bawat isa sa bar 1
+The audio region {} names no file in the project, so it is skipped = Walang file sa proyekto ang audio region na {}, kaya nilaktawan ito
+The audio region {} is not placed in the project, so it is skipped = Hindi nakalagay sa proyekto ang audio region na {}, kaya nilaktawan ito
+The audio file {} is not in Media, so it is skipped = Wala sa Media ang audio file na {}, kaya nilaktawan ito
+cannot read {}: {} = hindi mabasa ang {}: {}
+The audio file {} plays on no track that is imported, so it is on a track of its own = Walang inaangkat na track na tumutugtog ng audio file na {}, kaya nasa sarili itong track
