@@ -57,6 +57,18 @@ impl DrumsUse {
         }
     }
 
+    /// The name a pad shows, translated (a sample pad shows its file's name).
+    pub fn pad_label(&self, pad: usize) -> String {
+        match self.pads.get(pad) {
+            Some(PadUse {
+                settings,
+                sample: Some(_),
+            }) if settings.kind == PadKind::Sample => self.pad_name(pad),
+            Some(p) => crate::i18n::tr(p.settings.kind.name()).to_string(),
+            None => String::new(),
+        }
+    }
+
     /// The pads that play a sample, with their files: what has to be read before the kit can be
     /// swapped in. Two kits with the same list differ only in settings, which move live.
     pub fn sample_pads(&self) -> Vec<(usize, PathBuf)> {

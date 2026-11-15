@@ -2427,4 +2427,75 @@ pub(crate) mod tests {
         let (n, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(n.tracks[0].sampler, None);
     }
+
+    #[test]
+    fn a_drum_machine_is_saved_pad_by_pad_and_odd_saves_are_put_right() {
+        use crate::drum_kit::DrumsUse;
+        use prowave_engine::drum_machine::PadKind;
+        let mut kit = DrumsUse::new();
+        kit.pads[1].settings = PadKind::Sample.settings();
+        kit.pads[1].settings.tune = -3.0;
+        kit.pads[1].sample = Some("/kits/snap.wav".into());
+        kit.pads[6].settings.choke = 4;
+        kit.pads[0].settings.level_db = -4.5;
+        let mut p = Project::empty();
+        p.tracks[0].drums = Some(kit.clone());
+        let (mut doc, _) = to_doc(&p);
+        let saved = doc.tracks[0].drums.clone().expect("saved");
+        assert_eq!(saved.pads.len(), 16);
+        assert_eq!(
+            (saved.pads[1].kind.as_str(), saved.pads[1].sample.as_deref()),
+            ("Sample", Some("/kits/snap.wav"))
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(
+            q.tracks[0].drums,
+            Some(kit),
+            "the kit comes back as it was saved"
+        );
+        // A short list keeps the rest of the starting kit; an unknown drum is the starting
+        // kit's pad; wild numbers are put into range; a sample path on a synthesized pad is
+        // dropped.
+        doc.tracks[0].drums = Some(prowave_project::DrumsDoc {
+            pads: vec![
+                prowave_project::PadDoc {
+                    kind: "Tom".into(),
+                    tune: 99.0,
+                    decay: f32::NAN,
+                    tone: -1.0,
+                    level_db: 1e9,
+                    pan: 5.0,
+                    choke: 200,
+                    sample: Some("/x.wav".into()),
+                },
+                prowave_project::PadDoc {
+                    kind: "Tuba".into(),
+                    tune: 5.0,
+                    ..Default::default()
+                },
+            ],
+        });
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        let k = r.tracks[0].drums.clone().expect("a kit");
+        let s0 = k.pads[0].settings;
+        assert_eq!(
+            (s0.kind, s0.tune, s0.decay, s0.tone, s0.level_db, s0.pan),
+            (PadKind::Tom, 12.0, 1.0, 0.0, 6.0, 1.0)
+        );
+        assert_eq!(s0.choke, prowave_engine::drum_machine::MAX_CHOKE);
+        assert_eq!(k.pads[0].sample, None, "only a sample pad has a file");
+        assert_eq!(
+            k.pads[1],
+            DrumsUse::new().pads[1],
+            "an unknown drum is the starting pad"
+        );
+        assert_eq!(
+            k.pads[2],
+            DrumsUse::new().pads[2],
+            "a missing pad is the starting pad"
+        );
+        doc.tracks[0].drums = None;
+        let (n, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(n.tracks[0].drums, None);
+    }
 }

@@ -13,6 +13,7 @@ mod bounce;
 mod clock_follow;
 mod clock_in;
 mod drum_kit;
+mod drum_machine_ui;
 mod engine_sync;
 mod event_list;
 mod file_browser;
@@ -209,6 +210,12 @@ pub struct UiState {
     pub can_redo: bool,
     /// Mix > Edit Groups… window is open.
     pub show_groups: bool,
+    /// The track whose Drum Machine window is open, the selected pad, the pad being held by the
+    /// mouse, and why the last sample could not be used.
+    pub show_drum_machine: Option<usize>,
+    pub drum_pad: usize,
+    pub drum_held: Option<usize>,
+    pub drum_error: Option<String>,
 }
 
 impl UiState {
@@ -283,6 +290,10 @@ impl UiState {
             can_undo: false,
             can_redo: false,
             show_groups: false,
+            show_drum_machine: None,
+            drum_pad: 0,
+            drum_held: None,
+            drum_error: None,
         }
     }
 
@@ -1318,6 +1329,7 @@ impl eframe::App for App {
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
         group_editor::show(&ctx, &mut self.project, &mut self.ui);
+        drum_machine_ui::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
         self.track_history(&ctx);

@@ -20,8 +20,14 @@ const SELECT: Color32 = Color32::from_rgb(0xff, 0x9f, 0x40);
 
 /// The name of MIDI key `key` (60 is C3, as in Logic).
 fn key_name(key: u8) -> String {
-    const NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-    format!("{}{}", NAMES[usize::from(key % 12)], i32::from(key / 12) - 2)
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    format!(
+        "{}{}",
+        NAMES[usize::from(key % 12)],
+        i32::from(key / 12) - 2
+    )
 }
 
 /// The window, while `UiState::show_drum_machine` names a track that has a Drum Machine.
@@ -69,7 +75,8 @@ fn pads(ui: &mut Ui, kit: &DrumsUse, s: &mut UiState, ti: usize) {
         ui.horizontal(|ui| {
             for col in 0..4 {
                 let pad = row * 4 + col;
-                let (rect, resp) = ui.allocate_exact_size(vec2(PAD_W, PAD_H), Sense::click_and_drag());
+                let (rect, resp) =
+                    ui.allocate_exact_size(vec2(PAD_W, PAD_H), Sense::click_and_drag());
                 let down = resp.is_pointer_button_down_on();
                 if down && s.drum_held != Some(pad) {
                     release(s);
@@ -97,7 +104,14 @@ fn draw_pad(ui: &Ui, rect: Rect, kit: &DrumsUse, pad: usize, selected: bool, dow
     g.rect_stroke(
         rect,
         6.0,
-        Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { SELECT } else { Color32::from_gray(0x22) }),
+        Stroke::new(
+            if selected { 2.0 } else { 1.0 },
+            if selected {
+                SELECT
+            } else {
+                Color32::from_gray(0x22)
+            },
+        ),
         StrokeKind::Inside,
     );
     g.text(
@@ -130,7 +144,11 @@ fn draw_pad(ui: &Ui, rect: Rect, kit: &DrumsUse, pad: usize, selected: bool, dow
 fn editor(ui: &mut Ui, kit: &mut DrumsUse, s: &mut UiState) {
     let pad = s.drum_pad.min(PADS - 1);
     let selected = &mut kit.pads[pad];
-    ui.label(format!("{} · {}", key_name(key_of(pad)), kit_label(selected)));
+    ui.label(format!(
+        "{} · {}",
+        key_name(key_of(pad)),
+        kit_label(selected)
+    ));
     egui::Grid::new("drum_pad_settings")
         .num_columns(2)
         .spacing([10.0, 6.0])
@@ -141,7 +159,9 @@ fn editor(ui: &mut Ui, kit: &mut DrumsUse, s: &mut UiState) {
                 .selected_text(tr(old.name()))
                 .show_ui(ui, |ui| {
                     for kind in PadKind::ALL {
-                        if ui.selectable_label(kind == old, tr(kind.name())).clicked() && kind != old {
+                        if ui.selectable_label(kind == old, tr(kind.name())).clicked()
+                            && kind != old
+                        {
                             selected.settings = kind.settings();
                         }
                     }
@@ -152,7 +172,10 @@ fn editor(ui: &mut Ui, kit: &mut DrumsUse, s: &mut UiState) {
                 ui.horizontal(|ui| {
                     if ui.button(tr("Load Sample…")).clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Audio", &["wav", "aif", "aiff", "flac", "ogg", "mp3", "caf", "m4a"])
+                            .add_filter(
+                                "Audio",
+                                &["wav", "aif", "aiff", "flac", "ogg", "mp3", "caf", "m4a"],
+                            )
                             .pick_file()
                         {
                             match crate::drum_kit::check_sample(&path) {
@@ -166,8 +189,15 @@ fn editor(ui: &mut Ui, kit: &mut DrumsUse, s: &mut UiState) {
                     }
                     if let Some(path) = &selected.sample {
                         let missing = crate::drum_kit::error(path).is_some();
-                        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                        ui.label(if missing { format!("{name} · {}", tr("missing")) } else { name });
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        ui.label(if missing {
+                            format!("{name} · {}", tr("missing"))
+                        } else {
+                            name
+                        });
                     }
                 });
                 ui.end_row();
@@ -178,31 +208,46 @@ fn editor(ui: &mut Ui, kit: &mut DrumsUse, s: &mut UiState) {
             ui.add(egui::Slider::new(&mut st.tune, -12.0..=12.0).suffix(" st"));
             ui.end_row();
             ui.label(if sample { tr("Length") } else { tr("Decay") });
-            ui.add(egui::Slider::new(&mut st.decay, 0.2..=4.0).logarithmic(true).suffix(" x"));
+            ui.add(
+                egui::Slider::new(&mut st.decay, 0.2..=4.0)
+                    .logarithmic(true)
+                    .suffix(" x"),
+            );
             ui.end_row();
             ui.label(tr("Tone"));
-            ui.add(egui::Slider::new(&mut st.tone, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
+            ui.add(
+                egui::Slider::new(&mut st.tone, 0.0..=1.0)
+                    .custom_formatter(|v, _| format!("{:.0} %", v * 100.0)),
+            );
             ui.end_row();
             ui.label(tr("Level"));
             ui.add(egui::Slider::new(&mut st.level_db, -24.0..=6.0).suffix(" dB"));
             ui.end_row();
             ui.label(tr("Pan"));
-            ui.add(egui::Slider::new(&mut st.pan, -1.0..=1.0).custom_formatter(|v, _| format!("{:+.0}", v * 100.0)));
+            ui.add(
+                egui::Slider::new(&mut st.pan, -1.0..=1.0)
+                    .custom_formatter(|v, _| format!("{:+.0}", v * 100.0)),
+            );
             ui.end_row();
             ui.label(tr("Choke Group"));
             let mut choke = i32::from(st.choke);
-            ui.add(egui::Slider::new(&mut choke, 0..=i32::from(MAX_CHOKE)).custom_formatter(|v, _| {
-                if v < 0.5 {
-                    tr("None").to_string()
-                } else {
-                    format!("{v:.0}")
-                }
-            }));
+            ui.add(
+                egui::Slider::new(&mut choke, 0..=i32::from(MAX_CHOKE)).custom_formatter(|v, _| {
+                    if v < 0.5 {
+                        tr("None").to_string()
+                    } else {
+                        format!("{v:.0}")
+                    }
+                }),
+            );
             st.choke = choke.clamp(0, i32::from(MAX_CHOKE)) as u8;
             ui.end_row();
         });
     if let Some(e) = &s.drum_error {
-        ui.colored_label(Color32::from_rgb(0xe0, 0x70, 0x60), crate::i18n::trf("Cannot use that sample: {}", &[e]));
+        ui.colored_label(
+            Color32::from_rgb(0xe0, 0x70, 0x60),
+            crate::i18n::trf("Cannot use that sample: {}", &[e]),
+        );
     }
     ui.add_space(4.0);
     if ui.button(tr("Reset Kit")).clicked() {
@@ -213,9 +258,10 @@ fn editor(ui: &mut Ui, kit: &mut DrumsUse, s: &mut UiState) {
 /// The selected pad's name for the line above its settings.
 fn kit_label(pad: &crate::drum_kit::PadUse) -> String {
     match (&pad.sample, pad.settings.kind) {
-        (Some(p), PadKind::Sample) => p
-            .file_name()
-            .map_or_else(|| tr("Sample").to_string(), |n| n.to_string_lossy().into_owned()),
+        (Some(p), PadKind::Sample) => p.file_name().map_or_else(
+            || tr("Sample").to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
         (_, kind) => tr(kind.name()).to_string(),
     }
 }
@@ -281,12 +327,23 @@ mod tests {
         let mut played = false;
         'scan: for y in (300..700).step_by(20) {
             for x in (30..300).step_by(20) {
-                h.press(egui::pos2(x as f32, y as f32), |ui| show(ui.ctx(), &mut p, &mut s));
-                if s.audition.iter().any(|a| matches!(a, Audition::On { pitch: 36, .. })) {
+                h.press(
+                    egui::pos2(x as f32, y as f32),
+                    egui::PointerButton::Primary,
+                    |ui| show(ui.ctx(), &mut p, &mut s),
+                );
+                if s.audition
+                    .iter()
+                    .any(|a| matches!(a, Audition::On { pitch: 36, .. }))
+                {
                     played = true;
                     break 'scan;
                 }
-                h.release(egui::pos2(x as f32, y as f32), |ui| show(ui.ctx(), &mut p, &mut s));
+                h.release(
+                    egui::pos2(x as f32, y as f32),
+                    egui::PointerButton::Primary,
+                    |ui| show(ui.ctx(), &mut p, &mut s),
+                );
                 s.audition.clear();
                 s.drum_held = None;
             }
@@ -294,9 +351,17 @@ mod tests {
         assert!(played, "pressing the kick pad plays key 36");
         assert_eq!(s.drum_pad, 0);
         assert_eq!(s.drum_held, Some(0));
-        h.release(egui::pos2(0.0, 0.0), |ui| show(ui.ctx(), &mut p, &mut s));
+        h.release(egui::pos2(0.0, 0.0), egui::PointerButton::Primary, |ui| {
+            show(ui.ctx(), &mut p, &mut s)
+        });
         h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s));
-        assert!(s.audition.iter().any(|a| matches!(a, Audition::Off { pitch: 36 })), "{:?}", s.audition);
+        assert!(
+            s.audition
+                .iter()
+                .any(|a| matches!(a, Audition::Off { pitch: 36 })),
+            "{:?}",
+            s.audition
+        );
         assert_eq!(s.drum_held, None);
     }
 }
