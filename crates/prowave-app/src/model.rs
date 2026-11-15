@@ -222,6 +222,11 @@ pub struct Insert {
     pub kind: prowave_engine::FxKind,
     pub bypass: bool,
     pub params: [f32; prowave_engine::MAX_FX_PARAMS],
+    /// For a Space Designer set to `IR Type` 2: the impulse-response file it plays.
+    pub ir_file: Option<crate::ir_files::IrFileId>,
+    /// For a `Plug-in` effect: the LADSPA plug-in (its settings in `params` are positions from
+    /// 0 to 1 along each control's range).
+    pub plugin: Option<crate::plugins::PluginId>,
 }
 
 impl Insert {
@@ -231,11 +236,33 @@ impl Insert {
             kind,
             bypass: false,
             params: kind.defaults(),
+            ir_file: None,
+            plugin: None,
         }
     }
 
+    /// A new effect that is the LADSPA plug-in `plugin`, with the plug-in's default settings.
+    pub fn new_plugin(plugin: crate::plugins::PluginId) -> Self {
+        Self {
+            kind: prowave_engine::FxKind::Plugin,
+            bypass: false,
+            params: crate::plugins::default_params(plugin),
+            ir_file: None,
+            plugin: Some(plugin),
+        }
+    }
+
+    /// The effect's kind name; for a plug-in see [`Insert::label`].
     pub fn name(&self) -> &'static str {
         self.kind.name()
+    }
+
+    /// What the strip's slot and the effect window show: the plug-in's own name for a plug-in.
+    pub fn label(&self) -> String {
+        match self.plugin {
+            Some(id) => crate::plugins::name(id),
+            None => self.kind.name().to_string(),
+        }
     }
 }
 
@@ -656,8 +683,49 @@ pub struct Track {
     pub midi_fx: Vec<crate::midi_fx::FxSlot>,
     /// A SoundFont (`.sf2`) instrument the track plays instead of its synth patch.
     pub soundfont: Option<SoundFontUse>,
+    /// The Sampler the track plays instead of its synth patch or SoundFont (it wins over a
+    /// SoundFont): an SFZ or EXS instrument, or one audio file across the keyboard.
+    pub sampler: Option<SamplerUse>,
+    /// The physically modelled Electric Piano the track plays instead of its synth patch or
+    /// SoundFont (it wins over a SoundFont).
+    pub epiano: Option<EPianoUse>,
+    /// The Drum Machine the track plays: sixteen pads on the keys 36 to 51 (it wins over the
+    /// Sampler and a SoundFont).
+    pub drums: Option<crate::drum_kit::DrumsUse>,
     /// The icon the user picked (Track > Assign Track Icon); `None` is the automatic one.
     pub icon: Option<crate::track_icons::IconKind>,
+}
+
+/// The Sampler on a track: where its sounds come from, and its dials (see
+/// `prowave_engine::sampler::dial`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SamplerUse {
+    pub source: crate::sampler_load::SamplerSource,
+    pub params: [f32; prowave_engine::sampler::PARAMS],
+}
+
+impl SamplerUse {
+    /// A Sampler for `source` with the dials at their start values.
+    pub fn new(source: crate::sampler_load::SamplerSource) -> Self {
+        Self {
+            source,
+            params: prowave_engine::sampler::defaults(),
+        }
+    }
+}
+
+/// The Electric Piano on a track: its dials (see `prowave_engine::epiano::dial`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EPianoUse {
+    pub params: [f32; prowave_engine::epiano::PARAMS],
+}
+
+impl Default for EPianoUse {
+    fn default() -> Self {
+        Self {
+            params: prowave_engine::epiano::defaults(),
+        }
+    }
 }
 
 /// A SoundFont instrument on a track: the `.sf2` file and the preset played from it.
@@ -714,6 +782,9 @@ impl Track {
             vca: None,
             midi_port: None,
             soundfont: None,
+            sampler: None,
+            epiano: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,
@@ -930,6 +1001,9 @@ impl Project {
             vca: None,
             midi_port: None,
             soundfont: None,
+            sampler: None,
+            epiano: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,
@@ -993,6 +1067,9 @@ impl Project {
             vca: None,
             midi_port: None,
             soundfont: None,
+            sampler: None,
+            epiano: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,

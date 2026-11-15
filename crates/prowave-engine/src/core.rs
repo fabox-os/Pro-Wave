@@ -450,6 +450,25 @@ pub enum Command {
         track: u16,
         player: Option<Box<SfPlayer>>,
     },
+    /// New settings for pad `pad` of the Drum Machine on `track` while it plays (no allocation).
+    /// Ignored when the track's instrument is not a Drum Machine.
+    SetDrumPad {
+        track: u16,
+        pad: u8,
+        settings: crate::drum_machine::PadSettings,
+    },
+    /// Moves the dials of the Sampler on `track` while it plays (no allocation). Ignored when the
+    /// track's instrument is not a Sampler.
+    SetSamplerParams {
+        track: u16,
+        params: [f32; crate::sampler::PARAMS],
+    },
+    /// Moves the dials of the Electric Piano on `track` while it plays (no allocation). Ignored
+    /// when the track's instrument is not an Electric Piano.
+    SetPianoParams {
+        track: u16,
+        params: [f32; crate::epiano::PARAMS],
+    },
     /// The effects of a channel strip (Logic: Audio FX slots), made off the audio thread. The
     /// strip's old effects come back through the garbage queue; their tails stop.
     SetInserts {
@@ -1690,6 +1709,25 @@ impl EngineCore {
                         let _ = self.trash.push(Garbage::SoundFont(p));
                     }
                 }
+                Command::SetDrumPad {
+                    track,
+                    pad,
+                    settings,
+                } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_drum_pad(usize::from(pad), settings);
+                    }
+                }
+                Command::SetSamplerParams { track, params } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_sampler_params(params);
+                    }
+                }
+                Command::SetPianoParams { track, params } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_piano_params(params);
+                    }
+                }
                 Command::SetInserts { track, chain } => {
                     let t = track as usize;
                     if t < MAX_TRACKS {
@@ -2794,6 +2832,59 @@ mod tests {
     }
 
     #[test]
+    fn a_drum_machine_track_plays_its_pads_and_takes_new_pad_settings_while_playing() {
+        use crate::drum_machine::{default_kit, DrumMachine, PadKind};
+        let (mut e, mut tx, mut s) = rig();
+        let machine = DrumMachine::new(default_kit(), std::array::from_fn(|_| None), 48_000.0);
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(Box::new(SfPlayer::drum_machine(machine))),
+            })
+            .is_ok());
+        // The test song's note is middle C (60): no pad. Live notes on the kick's key sound.
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 36,
+                vel: 127,
+                track: 0
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 24_000 * 2];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+        let heard: f32 = buf.iter().map(|x| x.abs()).sum();
+        assert!(heard > 5.0, "the kick sounds: {heard}");
+        assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+        // A pad changes kind while it plays; a track with no drum machine ignores the command.
+        let mut pad = PadKind::Clap.settings();
+        pad.level_db = -3.0;
+        assert!(tx
+            .push(Command::SetDrumPad {
+                track: 0,
+                pad: 0,
+                settings: pad
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetDrumPad {
+                track: 7,
+                pad: 0,
+                settings: pad
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 36,
+                vel: 100,
+                track: 0
+            })
+            .is_ok());
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
     fn a_live_pitch_bend_changes_a_soundfont_note_and_other_controllers_are_accepted() {
         let crossings = |bend: Option<u16>| {
             let (mut e, mut tx, _s) = rig();
@@ -2924,6 +3015,48 @@ mod tests {
             out.pop().is_err(),
             "track 1 is not external: nothing goes out"
         );
+    }
+
+    #[test]
+    fn an_electric_piano_track_plays_its_notes_and_takes_new_dials_while_playing() {
+        let (mut e, mut tx, mut s) = rig();
+        let piano = SfPlayer::electric_piano(crate::epiano::defaults(), 48_000.0);
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(Box::new(piano)),
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetSong(Box::new(Song::new(
+                vec![note(0.0, 1.0)],
+                vec![TrackMix::default()]
+            ))))
+            .is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 48_000 * 2];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+        let first: f32 = buf[..48_000].iter().map(|x| x.abs()).sum();
+        assert!(first > 1.0, "the piano sounds: {first}");
+        assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+        // New dials arrive while it plays; a track with no piano ignores them.
+        let mut dials = crate::epiano::defaults();
+        dials[crate::epiano::dial::BARK] = 1.0;
+        assert!(tx
+            .push(Command::SetPianoParams {
+                track: 0,
+                params: dials
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetPianoParams {
+                track: 5,
+                params: dials
+            })
+            .is_ok());
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
     }
 
     #[test]

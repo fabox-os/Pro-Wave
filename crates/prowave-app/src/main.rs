@@ -12,6 +12,8 @@ mod bench;
 mod bounce;
 mod clock_follow;
 mod clock_in;
+mod drum_kit;
+mod drum_machine_ui;
 mod engine_sync;
 mod event_list;
 mod file_browser;
@@ -26,6 +28,7 @@ mod groups;
 mod i18n;
 mod import;
 mod inspector;
+mod ir_files;
 mod library;
 mod marker_track;
 mod menus;
@@ -44,12 +47,15 @@ mod note_edit;
 mod patches;
 mod pattern;
 mod piano_roll;
+mod plugin_manager;
 mod plugin_picker;
+mod plugins;
 mod project_io;
 mod project_settings;
 mod recent_files;
 mod recorder;
 mod region_edit;
+mod sampler_load;
 mod score;
 mod score_export;
 mod scripter;
@@ -210,6 +216,14 @@ pub struct UiState {
     pub show_groups: bool,
     /// Musical Typing: the computer keyboard as a MIDI keyboard (Window > Show Musical Typing).
     pub typing: musical_typing::MusicalTyping,
+    /// Window > Plugin Manager is open.
+    pub show_plugin_manager: bool,
+    /// The track whose Drum Machine window is open, the selected pad, the pad being held by the
+    /// mouse, and why the last sample could not be used.
+    pub show_drum_machine: Option<usize>,
+    pub drum_pad: usize,
+    pub drum_held: Option<usize>,
+    pub drum_error: Option<String>,
 }
 
 impl UiState {
@@ -285,6 +299,11 @@ impl UiState {
             can_redo: false,
             show_groups: false,
             typing: musical_typing::MusicalTyping::new(),
+            show_plugin_manager: false,
+            show_drum_machine: None,
+            drum_pad: 0,
+            drum_held: None,
+            drum_error: None,
         }
     }
 
@@ -1355,6 +1374,8 @@ impl eframe::App for App {
             .get(self.project.selected_track)
             .map(|t| t.name.clone());
         musical_typing::show(&ctx, &mut self.ui.typing, typed.as_deref());
+        plugin_manager::show(&ctx, &mut self.ui);
+        drum_machine_ui::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
         self.track_history(&ctx);
@@ -1630,11 +1651,23 @@ fn print_help() {
         "  --layout-shots <folder>   save pictures of the layout at four window sizes, then exit"
     );
     println!("  --screenshot <file.png>   save one picture of the window, then exit");
+    println!("  --scan-ladspa <file>      list the plug-ins in a LADSPA library, then exit (the");
+    println!("                            Plugin Manager reads each library in a child process)");
     println!();
     println!("A .prowave path opens that project; other paths are imported as audio files.");
 }
 
 fn main() -> eframe::Result {
+    // The Plugin Manager reads each plug-in library in a copy of this program, so a plug-in
+    // that crashes or hangs does not take the app with it: print what is in it and go.
+    {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        if let [_, flag, path] = args.as_slice() {
+            if flag == "--scan-ladspa" {
+                std::process::exit(plugins::scan_main(std::path::Path::new(path)));
+            }
+        }
+    }
     bench::mark_start();
     // Started by an update that is waiting for the program to close: put the update in place.
     if updater::run_helper_if_requested() {

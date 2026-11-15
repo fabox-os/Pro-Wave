@@ -148,6 +148,13 @@ struct Inner {
 unsafe impl Send for Inner {}
 unsafe impl Sync for Inner {}
 
+/// The path of the small C plug-in the tests of this crate load (a `gain` and a generator), or
+/// `None` when the build had no C compiler. Other crates' tests use it to load a real LADSPA
+/// library.
+pub fn test_fixture_path() -> Option<&'static str> {
+    option_env!("LADSPA_FIXTURE")
+}
+
 /// What a port carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PortKind {
@@ -253,6 +260,7 @@ pub struct Instance {
     handle: *mut c_void,
     connect_port: unsafe extern "C" fn(*mut c_void, c_ulong, *mut f32),
     run: unsafe extern "C" fn(*mut c_void, c_ulong),
+    activate: Option<unsafe extern "C" fn(*mut c_void)>,
     deactivate: Option<unsafe extern "C" fn(*mut c_void)>,
     cleanup: Option<unsafe extern "C" fn(*mut c_void)>,
     audio_in: Vec<usize>,
@@ -365,6 +373,7 @@ impl Instance {
             handle,
             connect_port,
             run,
+            activate: descriptor.activate,
             deactivate: descriptor.deactivate,
             cleanup: descriptor.cleanup,
             audio_in,
@@ -434,6 +443,19 @@ impl Instance {
             .ok_or(Error::BadPort(port))?;
         self.values[slot] = value.clamp(min, max);
         Ok(())
+    }
+
+    /// Clears the plug-in's memory (reverb tails, delay lines): `deactivate`, then `activate`,
+    /// which is how LADSPA says to reset an instance. The control values stay.
+    pub fn reset(&mut self) {
+        if let Some(deactivate) = self.deactivate {
+            // SAFETY: the plug-in's own callback for this live handle.
+            unsafe { deactivate(self.handle) };
+        }
+        if let Some(activate) = self.activate {
+            // SAFETY: as above.
+            unsafe { activate(self.handle) };
+        }
     }
 
     /// The current value of control `port` (input or output).

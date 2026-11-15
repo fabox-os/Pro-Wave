@@ -515,6 +515,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         // Mix > Edit Groups…: with no group yet it still opens, to make the first one.
         "Edit Groups…" => true,
         "Show Musical Typing" => true,
+        "Plugin Manager" => true,
         // Opens the Space Designer on the selected track (adding one when it has none). The
         // mastering presets go on the Stereo Out strip (the master bus).
         "Show" => p
@@ -705,6 +706,7 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
                 s.typing.release_all();
             }
         }
+        "Plugin Manager" => s.show_plugin_manager = true,
         "Select All" => s.tracks.select_all(p),
         "Join" => crate::region_edit::join_selected(p, &mut s.tracks),
         "Show Mixer" | "Mixer" => {
@@ -1276,7 +1278,7 @@ mod tests {
                     p.header_hidden.len(),
                     s.track_dialog.is_some(),
                     p.tracks.get(p.selected_track).is_some_and(|t| t.rec),
-                    (s.show_groups, s.typing.open)
+                    (s.show_groups, s.typing.open, s.show_plugin_manager)
                 ),
                 (
                     s.tracks.show_tempo,
