@@ -151,8 +151,8 @@ impl Fft {
         if re.len() < n || im.len() < n {
             return;
         }
-        for i in 0..n {
-            let j = self.rev[i] as usize;
+        for (i, &r) in self.rev.iter().enumerate().take(n) {
+            let j = r as usize;
             if j > i {
                 re.swap(i, j);
                 im.swap(i, j);
@@ -293,8 +293,15 @@ pub fn volume_env(params: &[f32], t: f32) -> f32 {
 
 /// The response the settings in `params` make, at `sr`: stereo frames, not yet normalised for
 /// the convolver. Longer than [`MAX_IR_SECONDS`] is cut.
-#[allow(clippy::manual_memcpy)]
 pub fn ir_samples(params: &[f32], sr: f32) -> Vec<[f32; 2]> {
+    ir_samples_with(params, sr, None)
+}
+
+/// [`ir_samples`] with the response of an impulse-response file (already at `sr`) for the
+/// settings that choose one (`IR Type` 2). Without the file, or with an empty one, the built-in
+/// response chosen by `IR` is used.
+#[allow(clippy::manual_memcpy)]
+pub fn ir_samples_with(params: &[f32], sr: f32, file: Option<&[[f32; 2]]>) -> Vec<[f32; 2]> {
     // Settings that are not finite count as zero, so a damaged project cannot make a NaN IR.
     let clean: Vec<f32> = params
         .iter()
@@ -305,8 +312,19 @@ pub fn ir_samples(params: &[f32], sr: f32) -> Vec<[f32; 2]> {
         return vec![[0.0; 2]; 64];
     }
     let sr = sr.clamp(8_000.0, 384_000.0);
-    let synth = params[sd::IR_TYPE] >= 0.5;
-    let mut ir = if synth {
+    let kind = params[sd::IR_TYPE].round() as i32;
+    let synth = kind == 1;
+    let mut ir = if kind == 2 && file.is_some_and(|f| f.len() >= 2) {
+        let mut ir = file.map_or_else(Vec::new, <[[f32; 2]]>::to_vec);
+        ir.truncate((MAX_IR_SECONDS * sr) as usize);
+        for f in ir.iter_mut() {
+            *f = [
+                if f[0].is_finite() { f[0] } else { 0.0 },
+                if f[1].is_finite() { f[1] } else { 0.0 },
+            ];
+        }
+        ir
+    } else if synth {
         synth_ir(
             params[sd::LENGTH].clamp(0.1, 10.0),
             params[sd::DENSITY].clamp(0.0, 1.0),
@@ -462,7 +480,17 @@ pub fn ir_samples(params: &[f32], sr: f32) -> Vec<[f32; 2]> {
 
 /// Min and max of the response in `bins` stretches, over its length in seconds, for drawing.
 pub fn ir_preview(params: &[f32], sr: f32, bins: usize) -> (Vec<(f32, f32)>, f32) {
-    let ir = ir_samples(params, sr);
+    ir_preview_with(params, sr, bins, None)
+}
+
+/// [`ir_preview`] for settings that may choose an impulse-response file (at `sr`).
+pub fn ir_preview_with(
+    params: &[f32],
+    sr: f32,
+    bins: usize,
+    file: Option<&[[f32; 2]]>,
+) -> (Vec<(f32, f32)>, f32) {
+    let ir = ir_samples_with(params, sr, file);
     let bins = bins.max(1);
     let secs = ir.len() as f32 / sr.max(1.0);
     let peak = ir
@@ -569,7 +597,13 @@ impl Convolver {
 
     /// Makes the convolver for the settings in `params`.
     pub fn for_params(params: &[f32], sr: f32) -> Self {
-        let mut c = Self::new(&ir_samples(params, sr));
+        Self::for_params_with(params, sr, None)
+    }
+
+    /// Makes the convolver for the settings in `params`, with the response of an
+    /// impulse-response file (already at `sr`) when they choose one.
+    pub fn for_params_with(params: &[f32], sr: f32, file: Option<&[[f32; 2]]>) -> Self {
+        let mut c = Self::new(&ir_samples_with(params, sr, file));
         c.fade_left = 256;
         c
     }
@@ -934,5 +968,129 @@ mod tests {
             assert!(ir.len() as f32 <= MAX_IR_SECONDS * sr + 1.0);
             assert!(ir.iter().all(|f| f[0].is_finite() && f[1].is_finite()));
         }
+    }
+
+    /// Settings that choose an impulse-response file, with the envelopes out of the way.
+    fn file_params() -> [f32; 32] {
+        let mut p = defaults();
+        p[sd::IR_TYPE] = 2.0;
+        p[sd::VOLUME_ENV] = 0.0;
+        p[sd::FILTER_ENV] = 0.0;
+        p[sd::LENGTH] = 5.0;
+        p
+    }
+
+    /// A response that is a single click `at` frames in (at 48 kHz) and a quieter one later.
+    fn clicks(at: usize) -> Vec<[f32; 2]> {
+        let mut v = vec![[0.0f32; 2]; 24_000];
+        v[at] = [1.0, 0.5];
+        v[at + 4_000] = [0.25, 0.25];
+        v
+    }
+
+    #[test]
+    fn a_chosen_file_replaces_the_built_in_response_and_no_file_falls_back_to_it() {
+        let p = file_params();
+        let with = ir_samples_with(&p, 48_000.0, Some(&clicks(1_000)));
+        let peak = with
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1[0].abs().total_cmp(&b.1[0].abs()))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        // The click is where the file put it (the end fade and the DC removal do not move it).
+        assert_eq!(peak, 1_000);
+        // The same settings with no file (a missing one) play the built-in response chosen
+        // by IR, which is not a click.
+        let without = ir_samples_with(&p, 48_000.0, None);
+        assert_ne!(with, without);
+        let mut p0 = p;
+        p0[sd::IR_TYPE] = 0.0;
+        assert_eq!(
+            without,
+            ir_samples(&p0, 48_000.0),
+            "the fallback is the built-in IR"
+        );
+        // A file that is too short to be a response is ignored too.
+        assert_eq!(ir_samples_with(&p, 48_000.0, Some(&[[1.0, 1.0]])), without);
+    }
+
+    #[test]
+    fn the_file_response_is_normalised_and_the_offset_length_and_reverse_act_on_it() {
+        let mut p = file_params();
+        let power = |ir: &[[f32; 2]]| {
+            ir.iter()
+                .map(|f| f64::from(f[0] * f[0] + f[1] * f[1]) * 0.5)
+                .sum::<f64>()
+        };
+        let ir = ir_samples_with(&p, 48_000.0, Some(&clicks(1_000)));
+        assert!((power(&ir) - 1.0).abs() < 0.05, "{}", power(&ir));
+        // IR Offset: the response starts later into itself.
+        p[sd::IR_OFFSET] = 0.01; // 480 frames
+        let late = ir_samples_with(&p, 48_000.0, Some(&clicks(1_000)));
+        let at = late.iter().position(|f| f[0].abs() > 0.5).unwrap_or(0);
+        assert!(at.abs_diff(520) < 3, "{at}");
+        // Length cuts it: a click 4000 frames after the first is gone with 0.1 s.
+        p[sd::IR_OFFSET] = 0.0;
+        p[sd::LENGTH] = 0.1;
+        let cut = ir_samples_with(&p, 48_000.0, Some(&clicks(1_000)));
+        assert_eq!(cut.len(), 4_800);
+        // Reverse turns it round: the loud click comes last.
+        p[sd::LENGTH] = 5.0;
+        p[sd::REVERSE] = 1.0;
+        let rev = ir_samples_with(&p, 48_000.0, Some(&clicks(1_000)));
+        let loud = rev
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1[0].abs().total_cmp(&b.1[0].abs()))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        assert!(
+            loud > rev.len() / 2 - 5_000 && loud + 100 < rev.len(),
+            "{loud} of {}",
+            rev.len()
+        );
+    }
+
+    #[test]
+    fn a_convolver_made_from_a_file_plays_the_file_s_response() {
+        let p = file_params();
+        let mut conv = Convolver::for_params_with(&p, 48_000.0, Some(&clicks(300)));
+        let mut out = Vec::new();
+        for i in 0..8_000 {
+            out.push(conv.tick(if i == 0 { 1.0 } else { 0.0 }, 0.0).0);
+        }
+        // The response is delayed by the convolver's block, so the click arrives at its own
+        // position plus one block.
+        let peak = out
+            .iter()
+            .enumerate()
+            .skip(256)
+            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        assert_eq!(peak, 300 + BLOCK, "the click comes through at its place");
+        assert!(out.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn hostile_file_data_never_makes_a_nan_response() {
+        let p = file_params();
+        let mut bad = clicks(500);
+        bad[10] = [f32::NAN, f32::INFINITY];
+        bad[11] = [f32::NEG_INFINITY, 1e30];
+        let ir = ir_samples_with(&p, 48_000.0, Some(&bad));
+        assert!(ir.iter().all(|f| f[0].is_finite() && f[1].is_finite()));
+        // A file longer than the limit is cut, and an absurd IR Type is a known one.
+        let long = vec![[0.1f32; 2]; 48_000 * 30];
+        let cut = ir_samples_with(&p, 48_000.0, Some(&long));
+        assert!(cut.len() <= (MAX_IR_SECONDS * 48_000.0) as usize);
+        let mut q = file_params();
+        q[sd::IR_TYPE] = 7.0;
+        assert!(!ir_samples_with(&q, 48_000.0, Some(&clicks(100))).is_empty());
+        // The preview works from a file too.
+        let (bins, secs) = ir_preview_with(&p, 48_000.0, 64, Some(&clicks(100)));
+        assert_eq!(bins.len(), 64);
+        assert!(secs > 0.1);
     }
 }

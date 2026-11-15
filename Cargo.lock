@@ -3435,8 +3435,11 @@ dependencies = [
  "midir",
  "muda",
  "prowave-engine",
+ "prowave-exs",
  "prowave-garageband-import",
+ "prowave-ladspa",
  "prowave-project",
+ "prowave-sfz",
  "rfd",
  "rhai",
  "rtrb",
@@ -3451,6 +3454,14 @@ dependencies = [
  "winit",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "prowave-dssi"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -3469,6 +3480,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-exs"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "prowave-garageband-import"
 version = "0.1.0"
 dependencies = [
@@ -3483,6 +3501,13 @@ version = "0.1.0"
 dependencies = [
  "quick-xml 0.42.0",
  "zip",
+]
+
+[[package]]
+name = "prowave-hydrogen-import"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.42.0",
 ]
 
 [[package]]
@@ -3508,6 +3533,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-mxl"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.42.0",
+ "zip",
+]
+
+[[package]]
 name = "prowave-project"
 version = "0.1.0"
 dependencies = [
@@ -3522,6 +3555,24 @@ name = "prowave-rex"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+]
+
+[[package]]
+name = "prowave-sfz"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
+name = "prowave-stretch"
+version = "0.1.0"
+
+[[package]]
+name = "prowave-vamp"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.8.9",
 ]
 
 [[package]]

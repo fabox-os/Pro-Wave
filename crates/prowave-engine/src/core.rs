@@ -419,6 +419,15 @@ pub enum Command {
     },
     /// Releases a live pitch only on its instrument track, like Logic's per-track MIDI
     /// routing. Other tracks and timeline notes are unaffected; unknown tracks are ignored.
+    /// A controller played live on `track` (computer keyboard, a bend or modulation control): a
+    /// controller `number` 0-127 with a 7-bit `value`, or [`crate::PITCH_BEND_CONTROL`] with a
+    /// 14-bit one. It reaches an external instrument as MIDI and a SoundFont instrument as the
+    /// same message; the other instruments ignore it.
+    LiveControl {
+        track: u16,
+        number: u8,
+        value: u16,
+    },
     NoteOffTrack {
         pitch: u8,
         track: u16,
@@ -440,6 +449,25 @@ pub enum Command {
     SetTrackSoundFont {
         track: u16,
         player: Option<Box<SfPlayer>>,
+    },
+    /// New settings for pad `pad` of the Drum Machine on `track` while it plays (no allocation).
+    /// Ignored when the track's instrument is not a Drum Machine.
+    SetDrumPad {
+        track: u16,
+        pad: u8,
+        settings: crate::drum_machine::PadSettings,
+    },
+    /// Moves the dials of the Sampler on `track` while it plays (no allocation). Ignored when the
+    /// track's instrument is not a Sampler.
+    SetSamplerParams {
+        track: u16,
+        params: [f32; crate::sampler::PARAMS],
+    },
+    /// Moves the dials of the Electric Piano on `track` while it plays (no allocation). Ignored
+    /// when the track's instrument is not an Electric Piano.
+    SetPianoParams {
+        track: u16,
+        params: [f32; crate::epiano::PARAMS],
     },
     /// The effects of a channel strip (Logic: Audio FX slots), made off the audio thread. The
     /// strip's old effects come back through the garbage queue; their tails stop.
@@ -1620,6 +1648,28 @@ impl EngineCore {
                 }
                 Command::NoteOff { pitch } => self.live_note_off(pitch, None),
                 Command::NoteOffTrack { pitch, track } => self.live_note_off(pitch, Some(track)),
+                Command::LiveControl {
+                    track,
+                    number,
+                    value,
+                } => {
+                    if self
+                        .track_external
+                        .get(track as usize)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        // The pitch bend is event number 128 on the timeline too.
+                        self.send_control(ControlEvent {
+                            beat: 0.0,
+                            track,
+                            number,
+                            value,
+                        });
+                    } else if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.control(number, value);
+                    }
+                }
                 Command::SetTrackExternal { track, external } => {
                     if let Some(slot) = self.track_external.get_mut(track as usize) {
                         let was = std::mem::replace(slot, external);
@@ -1657,6 +1707,25 @@ impl EngineCore {
                         }
                     } else if let Some(p) = player {
                         let _ = self.trash.push(Garbage::SoundFont(p));
+                    }
+                }
+                Command::SetDrumPad {
+                    track,
+                    pad,
+                    settings,
+                } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_drum_pad(usize::from(pad), settings);
+                    }
+                }
+                Command::SetSamplerParams { track, params } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_sampler_params(params);
+                    }
+                }
+                Command::SetPianoParams { track, params } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_piano_params(params);
                     }
                 }
                 Command::SetInserts { track, chain } => {
@@ -2760,6 +2829,234 @@ mod tests {
             "the note sounds: {first_half_second}"
         );
         assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+    }
+
+    #[test]
+    fn a_drum_machine_track_plays_its_pads_and_takes_new_pad_settings_while_playing() {
+        use crate::drum_machine::{default_kit, DrumMachine, PadKind};
+        let (mut e, mut tx, mut s) = rig();
+        let machine = DrumMachine::new(default_kit(), std::array::from_fn(|_| None), 48_000.0);
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(Box::new(SfPlayer::drum_machine(machine))),
+            })
+            .is_ok());
+        // The test song's note is middle C (60): no pad. Live notes on the kick's key sound.
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 36,
+                vel: 127,
+                track: 0
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 24_000 * 2];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+        let heard: f32 = buf.iter().map(|x| x.abs()).sum();
+        assert!(heard > 5.0, "the kick sounds: {heard}");
+        assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+        // A pad changes kind while it plays; a track with no drum machine ignores the command.
+        let mut pad = PadKind::Clap.settings();
+        pad.level_db = -3.0;
+        assert!(tx
+            .push(Command::SetDrumPad {
+                track: 0,
+                pad: 0,
+                settings: pad
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetDrumPad {
+                track: 7,
+                pad: 0,
+                settings: pad
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::NoteOn {
+                pitch: 36,
+                vel: 100,
+                track: 0
+            })
+            .is_ok());
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn a_live_pitch_bend_changes_a_soundfont_note_and_other_controllers_are_accepted() {
+        let crossings = |bend: Option<u16>| {
+            let (mut e, mut tx, _s) = rig();
+            assert!(tx
+                .push(Command::SetSong(Box::new(Song::new(
+                    vec![],
+                    vec![TrackMix::default()]
+                ))))
+                .is_ok());
+            assert!(tx
+                .push(Command::SetTrackSoundFont {
+                    track: 0,
+                    player: Some(sine_player(48_000.0)),
+                })
+                .is_ok());
+            if let Some(value) = bend {
+                assert!(tx
+                    .push(Command::LiveControl {
+                        track: 0,
+                        number: crate::PITCH_BEND_CONTROL,
+                        value,
+                    })
+                    .is_ok());
+            }
+            // Modulation, the sustain pedal and a controller past the range are all accepted.
+            for (number, value) in [(1u8, 100u16), (64, 127), (200, 5)] {
+                assert!(tx
+                    .push(Command::LiveControl {
+                        track: 0,
+                        number,
+                        value
+                    })
+                    .is_ok());
+            }
+            assert!(tx
+                .push(Command::NoteOn {
+                    pitch: 69,
+                    vel: 100,
+                    track: 0
+                })
+                .is_ok());
+            let mut buf = vec![0.0f32; 24_000 * 2];
+            e.process(&mut buf);
+            assert!(buf.iter().all(|x| x.is_finite()));
+            let left: Vec<f32> = buf.chunks(2).map(|f| f[0]).collect();
+            left[2_000..]
+                .windows(2)
+                .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+                .count()
+        };
+        let centre = crossings(None);
+        let up = crossings(Some(16383));
+        let down = crossings(Some(0));
+        // A sine font's pitch bend range is two semitones: about 12 % up and 11 % down.
+        assert!(up as f32 > centre as f32 * 1.08, "{up} vs {centre}");
+        assert!((down as f32) < centre as f32 * 0.94, "{down} vs {centre}");
+        // A track with no player, or one past the limit, ignores it.
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx
+            .push(Command::LiveControl {
+                track: 3,
+                number: 1,
+                value: 50
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::LiveControl {
+                track: u16::MAX,
+                number: 128,
+                value: 9_000
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn a_live_controller_on_an_external_track_goes_out_as_midi() {
+        let (mut e, mut tx, _s) = rig();
+        let Some(mut out) = e.take_midi_out_reader() else {
+            panic!("the MIDI out queue");
+        };
+        assert!(tx
+            .push(Command::SetTrackExternal {
+                track: 0,
+                external: true
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::LiveControl {
+                track: 0,
+                number: crate::PITCH_BEND_CONTROL,
+                value: 12_000
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::LiveControl {
+                track: 0,
+                number: 1,
+                value: 90
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::LiveControl {
+                track: 1,
+                number: 1,
+                value: 90
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        let Ok(first) = out.pop() else {
+            panic!("the bend");
+        };
+        assert_eq!(
+            (first.controller, first.pitch, first.value, first.track),
+            (true, 128, 12_000, 0)
+        );
+        let Ok(second) = out.pop() else {
+            panic!("the modulation");
+        };
+        assert_eq!(
+            (second.controller, second.pitch, second.value),
+            (true, 1, 90)
+        );
+        assert!(
+            out.pop().is_err(),
+            "track 1 is not external: nothing goes out"
+        );
+    }
+
+    #[test]
+    fn an_electric_piano_track_plays_its_notes_and_takes_new_dials_while_playing() {
+        let (mut e, mut tx, mut s) = rig();
+        let piano = SfPlayer::electric_piano(crate::epiano::defaults(), 48_000.0);
+        assert!(tx
+            .push(Command::SetTrackSoundFont {
+                track: 0,
+                player: Some(Box::new(piano)),
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetSong(Box::new(Song::new(
+                vec![note(0.0, 1.0)],
+                vec![TrackMix::default()]
+            ))))
+            .is_ok());
+        assert!(tx.push(Command::Play).is_ok());
+        let mut buf = vec![0.0f32; 48_000 * 2];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+        let first: f32 = buf[..48_000].iter().map(|x| x.abs()).sum();
+        assert!(first > 1.0, "the piano sounds: {first}");
+        assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+        // New dials arrive while it plays; a track with no piano ignores them.
+        let mut dials = crate::epiano::defaults();
+        dials[crate::epiano::dial::BARK] = 1.0;
+        assert!(tx
+            .push(Command::SetPianoParams {
+                track: 0,
+                params: dials
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::SetPianoParams {
+                track: 5,
+                params: dials
+            })
+            .is_ok());
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
     }
 
     #[test]

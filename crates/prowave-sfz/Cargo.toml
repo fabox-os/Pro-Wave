@@ -1,0 +1,11 @@
+[package]
+name = "prowave-sfz"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: SFZ sampler instrument reading (the Sampler's import format)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3.27.0"

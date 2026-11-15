@@ -58,7 +58,8 @@ enum Family {
 
 fn family(kind: FxKind) -> (Family, &'static str, Color32) {
     match kind {
-        FxKind::ChannelEq | FxKind::MultiEq => (Family::Eq, "EQ", EQ_BLUE),
+        FxKind::Plugin => (Family::Filter, "LADSPA", FILTER_TEAL),
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => (Family::Eq, "EQ", EQ_BLUE),
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => {
             (Family::Dynamics, "Dynamics", DYN_AMBER)
         }
@@ -71,7 +72,7 @@ fn family(kind: FxKind) -> (Family, &'static str, Color32) {
 
 fn window_width(kind: FxKind) -> f32 {
     match kind {
-        FxKind::ChannelEq | FxKind::MultiEq => 632.0,
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => 632.0,
         FxKind::Amp => AMP_W + 28.0,
         FxKind::MultiComp => 604.0,
         _ => 560.0,
@@ -126,9 +127,9 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
     }
     let mut open = true;
     let title = if master {
-        format!("{} · {}", tr("Stereo Out"), insert.name())
+        format!("{} · {}", tr("Stereo Out"), insert.label())
     } else {
-        format!("{} · {}", p.tracks[ti].name, insert.name())
+        format!("{} · {}", p.tracks[ti].name, insert.label())
     };
     let beat = p.position_beats;
     let mut edited = insert;
@@ -154,6 +155,8 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
                     ui.add_space(10.0);
                     if edited.kind == FxKind::Amp {
                         amp_faceplate(ui, &mut edited, track, slot, beat, &mut edits);
+                    } else if edited.kind == FxKind::Plugin {
+                        plugin_rack(ui, &edited, track, slot, beat, accent, &mut edits);
                     } else {
                         knob_rack(ui, &mut edited, track, slot, beat, accent, &mut edits);
                     }
@@ -183,7 +186,7 @@ fn header(
             ui.horizontal(|ui| {
                 ui.label(RichText::new(family_name).size(9.5).color(accent));
                 ui.label(RichText::new("·").size(10.0).color(FAINT));
-                ui.label(RichText::new(edited.kind.name()).size(13.5).color(TXT));
+                ui.label(RichText::new(edited.label()).size(13.5).color(TXT));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .add(
@@ -225,7 +228,9 @@ fn header(
 fn visual(ui: &mut Ui, insert: &Insert, reduction: f32, beat: f64, accent: Color32) {
     let params = insert.kind.clamp_params(insert.params);
     match insert.kind {
-        FxKind::ChannelEq | FxKind::MultiEq => eq_curve(ui, insert.kind, &params, accent),
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => {
+            eq_curve(ui, insert.kind, &params, accent)
+        }
         FxKind::Compressor | FxKind::Gate | FxKind::Limiter => {
             transfer_curve(ui, insert.kind, &params, reduction, accent)
         }
@@ -235,7 +240,7 @@ fn visual(ui: &mut Ui, insert: &Insert, reduction: f32, beat: f64, accent: Color
         FxKind::Phaser => phaser_panel(ui, &params, beat, accent),
         FxKind::Overdrive => drive_panel(ui, &params, accent),
         FxKind::Filter => filter_panel(ui, &params, accent),
-        FxKind::Amp | FxKind::Reverb => {}
+        FxKind::Amp | FxKind::Reverb | FxKind::Plugin => {}
     }
 }
 
@@ -263,11 +268,105 @@ fn knob_rack(
                 .unwrap_or(insert.params[k]);
             let locked = played.is_some() || !automation::editable(track, target);
             let automated = !track.auto.lane(target).is_empty();
-            let change = param_knob(ui, info, value, locked, automated, accent, insert.kind);
+            let change = param_knob(
+                ui,
+                info,
+                value,
+                locked,
+                automated,
+                accent,
+                insert.kind,
+                None,
+            );
             if let Some((value, ended)) = change {
                 edits.push(Edit {
                     param: k,
                     value,
+                    ended,
+                });
+            }
+        }
+    });
+}
+
+/// The names of a plug-in's controls as `&'static str`, for [`ParamInfo`]: each distinct name is
+/// kept once for the life of the program (a plug-in has a few dozen at most).
+fn static_name(name: &str) -> &'static str {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let mut map = NAMES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = map.get(name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    map.insert(name.to_string(), leaked);
+    leaked
+}
+
+/// The knobs of a LADSPA effect: one for each control input, in the plug-in's own name and
+/// range (a toggle shows On or Off, a whole-number control steps). The settings are kept as
+/// positions from 0 to 1, so automation lanes work like those of the built-in effects.
+fn plugin_rack(
+    ui: &mut Ui,
+    insert: &Insert,
+    track: &Track,
+    slot: usize,
+    beat: f64,
+    accent: Color32,
+    edits: &mut Vec<Edit>,
+) {
+    let Some(id) = insert.plugin else {
+        return;
+    };
+    let Some(info) = crate::plugins::info(id) else {
+        ui.label(tr(
+            "This plug-in is not on this computer; the sound passes through.",
+        ));
+        return;
+    };
+    if info.controls.is_empty() {
+        ui.label(tr("This plug-in has no settings."));
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for (k, c) in info.controls.iter().enumerate() {
+            let target = AutoTarget::Fx {
+                slot: slot as u8,
+                param: k as u8,
+            };
+            let played = track.auto.played(target, beat);
+            let norm = played.unwrap_or(insert.params[k]);
+            let value = c.at_norm(norm);
+            let locked = played.is_some() || !automation::editable(track, target);
+            let automated = !track.auto.lane(target).is_empty();
+            let (lo, hi) = c.range();
+            let knob = ParamInfo {
+                name: static_name(&c.name),
+                min: lo,
+                max: hi,
+                default: c.clamp(c.default),
+                unit: "",
+                log: c.log && lo > 0.0,
+            };
+            let text = |v: f32| c.text(c.clamp(v));
+            let change = param_knob(
+                ui,
+                &knob,
+                value,
+                locked,
+                automated,
+                accent,
+                FxKind::Plugin,
+                Some(&text),
+            );
+            if let Some((v, ended)) = change {
+                edits.push(Edit {
+                    param: k,
+                    value: c.to_norm(v),
                     ended,
                 });
             }
@@ -285,6 +384,7 @@ fn param_knob(
     automated: bool,
     accent: Color32,
     kind: FxKind,
+    text: Option<&dyn Fn(f32) -> String>,
 ) -> Option<(f32, bool)> {
     let mut change = None;
     ui.allocate_ui_with_layout(vec2(94.0, 74.0), Layout::top_down(Align::Center), |ui| {
@@ -328,10 +428,13 @@ fn param_knob(
         }
         let v = change.map_or(value, |(v, _)| v);
         ui.label(
-            RichText::new(param_text(kind, info, v))
-                .monospace()
-                .size(9.5)
-                .color(if locked { FAINT } else { TXT }),
+            RichText::new(match text {
+                Some(f) => f(v),
+                None => param_text(kind, info, v),
+            })
+            .monospace()
+            .size(9.5)
+            .color(if locked { FAINT } else { TXT }),
         );
     });
     change
@@ -342,6 +445,11 @@ fn param_text(kind: FxKind, info: &ParamInfo, v: f32) -> String {
     if kind == FxKind::Filter && info.name == "Mode" {
         return ["Low Pass", "High Pass", "Band Pass"][(v.round() as usize).min(2)].to_string();
     }
+    if kind == FxKind::PultEq {
+        if let Some(text) = pult_text(info.name, v) {
+            return text;
+        }
+    }
     if matches!(info.name, "Amp" | "Cabinet") {
         return format!("{:.0}", v + 1.0);
     }
@@ -349,6 +457,27 @@ fn param_text(kind: FxKind, info: &ParamInfo, v: f32) -> String {
         return if v >= 0.5 { "On".into() } else { "Off".into() };
     }
     knob_text(info, v)
+}
+
+/// Pult EQ's selectors by name (the knob stops at whole positions): the mode, and the frequency
+/// of each selector; its dials run 0 to 10 like the hardware's.
+fn pult_text(name: &str, v: f32) -> Option<String> {
+    use prowave_engine::pult_eq::{atten_freq_hz, high_freq_hz, low_freq_hz, mode_name};
+    let hz = |f: f32| {
+        if f >= 1000.0 {
+            format!("{} kHz", f / 1000.0)
+        } else {
+            format!("{f} Hz")
+        }
+    };
+    match name {
+        "Mode" => Some(tr(mode_name(v)).to_string()),
+        "Low Freq" => Some(hz(low_freq_hz(v))),
+        "High Freq" => Some(hz(high_freq_hz(v))),
+        "Atten Freq" => Some(hz(atten_freq_hz(v))),
+        "Input" | "Output" => None,
+        _ => Some(format!("{v:.1}")),
+    }
 }
 
 /// Draws an arc between two angles (radians, screen space) around `c`.
@@ -418,7 +547,16 @@ fn finish(
         }
     }
     if ti == crate::mixer::MASTER_STRIP {
-        // No automation lanes on the Stereo Out strip.
+        // No automation lanes on the Stereo Out strip: a knob moves the setting itself.
+        if let Some(ins) = p.master_inserts.get_mut(slot) {
+            for e in &edits {
+                if let Some(info) = ins.kind.params().get(e.param) {
+                    if e.value.is_finite() {
+                        ins.params[e.param] = e.value.clamp(info.min, info.max);
+                    }
+                }
+            }
+        }
         if !open {
             s.mixer.fx_window = None;
         }
@@ -1288,6 +1426,126 @@ mod tests {
         }
         assert_eq!(s.mixer.fx_window, Some((0, 0)));
         assert_eq!(p.tracks[0].inserts[0], Insert::new(FxKind::Reverb));
+    }
+
+    #[test]
+    fn a_knob_of_a_stereo_out_effect_moves_its_setting() {
+        let mut p = Project::empty();
+        p.master_inserts = vec![Insert::new(FxKind::Compressor)];
+        let mut s = UiState::new();
+        let insert = p.master_inserts[0];
+        let edit = |param, value| Edit {
+            param,
+            value,
+            ended: true,
+        };
+        finish(
+            &mut p,
+            &mut s,
+            crate::mixer::MASTER_STRIP,
+            0,
+            insert,
+            insert,
+            // Out of range, not finite, or a parameter the effect does not have.
+            vec![
+                edit(0, -30.0),
+                edit(1, 1000.0),
+                edit(2, f32::NAN),
+                edit(30, 1.0),
+            ],
+            true,
+        );
+        let infos = FxKind::Compressor.params();
+        let after = p.master_inserts[0];
+        assert_eq!(after.params[0], -30.0);
+        assert_eq!(after.params[1], infos[1].max);
+        assert_eq!(after.params[2], insert.params[2]);
+    }
+
+    #[test]
+    fn a_ladspa_effect_window_draws_a_missing_plugin_and_a_real_one() {
+        let mut p = Project::empty();
+        let gone = crate::plugins::intern(&crate::plugins::PluginRef {
+            library: "/nowhere/ui.so".into(),
+            label: "gone".into(),
+            unique_id: 1,
+            name: "Gone Plugin".into(),
+        });
+        p.tracks[0].inserts = vec![Insert::new_plugin(gone)];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)), "it stays open");
+        assert_eq!(p.tracks[0].inserts[0].label(), "Gone Plugin");
+        // A plug-in the catalogue knows draws its controls.
+        let known = crate::plugins::PluginInfo {
+            library: "/plugins/ui_known.so".into(),
+            index: 0,
+            unique_id: 2,
+            label: "known".into(),
+            name: "Known Plugin".into(),
+            maker: "m".into(),
+            audio_in: 1,
+            audio_out: 1,
+            controls: vec![crate::plugins::ControlInfo {
+                name: "Drive".into(),
+                port: 0,
+                min: 0.0,
+                max: 10.0,
+                default: 5.0,
+                toggled: false,
+                integer: false,
+                log: false,
+            }],
+            latency_port: None,
+        };
+        let id = crate::plugins::intern(&known.plugin_ref());
+        crate::plugins::set_catalog(crate::plugins::Catalog {
+            plugins: vec![known],
+            scanned: true,
+            ..Default::default()
+        });
+        p.tracks[0].inserts = vec![Insert::new_plugin(id)];
+        assert_eq!(
+            p.tracks[0].inserts[0].params[0], 0.5,
+            "the default is half way"
+        );
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(p.tracks[0].inserts[0].label(), "Known Plugin");
+    }
+
+    #[test]
+    fn the_pult_eq_window_draws_names_its_selectors_and_survives_a_save() {
+        let mut p = Project::empty();
+        let mut ins = Insert::new(FxKind::PultEq);
+        ins.params[prowave_engine::pult_eq::idx::LOW_BOOST] = 6.0;
+        ins.params[prowave_engine::pult_eq::idx::HIGH_FREQ] = 6.0;
+        p.tracks[0].inserts = vec![ins];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)));
+        assert_eq!(pult_text("Mode", 1.0).as_deref(), Some("Stereo"));
+        assert_eq!(pult_text("Low Freq", 3.0).as_deref(), Some("100 Hz"));
+        assert_eq!(pult_text("High Freq", 6.0).as_deref(), Some("16 kHz"));
+        assert_eq!(pult_text("Low Boost", 6.0).as_deref(), Some("6.0"));
+        assert_eq!(pult_text("Output", 1.0), None);
+        // It is saved by name and opens again with the same settings.
+        let (doc, _) = crate::project_io::to_doc(&p);
+        assert_eq!(doc.tracks[0].fx[0].kind, "Pult EQ");
+        let (back, _) =
+            crate::project_io::from_doc(&doc, std::path::Path::new("."), &egui::Context::default());
+        assert_eq!(back.tracks[0].inserts, p.tracks[0].inserts);
     }
 
     #[test]
