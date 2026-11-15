@@ -823,3 +823,7 @@ Loop Browser = Оглядач лупів
 File Browser = Оглядач файлів
 Record Enable: arm the track for recording = Готовність до запису: підготувати доріжку до запису
 Input Monitoring: hear the input of the track = Моніторинг входу: чути вхід доріжки
+Musical Typing = Музична клавіатура
+Modulation = Модуляція
+sustain = сустейн
+Show Musical Typing = Показати музичну клавіатуру

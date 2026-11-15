@@ -419,6 +419,15 @@ pub enum Command {
     },
     /// Releases a live pitch only on its instrument track, like Logic's per-track MIDI
     /// routing. Other tracks and timeline notes are unaffected; unknown tracks are ignored.
+    /// A controller played live on `track` (computer keyboard, a bend or modulation control): a
+    /// controller `number` 0-127 with a 7-bit `value`, or [`crate::PITCH_BEND_CONTROL`] with a
+    /// 14-bit one. It reaches an external instrument as MIDI and a SoundFont instrument as the
+    /// same message; the other instruments ignore it.
+    LiveControl {
+        track: u16,
+        number: u8,
+        value: u16,
+    },
     NoteOffTrack {
         pitch: u8,
         track: u16,
@@ -1620,6 +1629,28 @@ impl EngineCore {
                 }
                 Command::NoteOff { pitch } => self.live_note_off(pitch, None),
                 Command::NoteOffTrack { pitch, track } => self.live_note_off(pitch, Some(track)),
+                Command::LiveControl {
+                    track,
+                    number,
+                    value,
+                } => {
+                    if self
+                        .track_external
+                        .get(track as usize)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        // The pitch bend is event number 128 on the timeline too.
+                        self.send_control(ControlEvent {
+                            beat: 0.0,
+                            track,
+                            number,
+                            value,
+                        });
+                    } else if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.control(number, value);
+                    }
+                }
                 Command::SetTrackExternal { track, external } => {
                     if let Some(slot) = self.track_external.get_mut(track as usize) {
                         let was = std::mem::replace(slot, external);
@@ -2760,6 +2791,139 @@ mod tests {
             "the note sounds: {first_half_second}"
         );
         assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
+    }
+
+    #[test]
+    fn a_live_pitch_bend_changes_a_soundfont_note_and_other_controllers_are_accepted() {
+        let crossings = |bend: Option<u16>| {
+            let (mut e, mut tx, _s) = rig();
+            assert!(tx
+                .push(Command::SetSong(Box::new(Song::new(
+                    vec![],
+                    vec![TrackMix::default()]
+                ))))
+                .is_ok());
+            assert!(tx
+                .push(Command::SetTrackSoundFont {
+                    track: 0,
+                    player: Some(sine_player(48_000.0)),
+                })
+                .is_ok());
+            if let Some(value) = bend {
+                assert!(tx
+                    .push(Command::LiveControl {
+                        track: 0,
+                        number: crate::PITCH_BEND_CONTROL,
+                        value,
+                    })
+                    .is_ok());
+            }
+            // Modulation, the sustain pedal and a controller past the range are all accepted.
+            for (number, value) in [(1u8, 100u16), (64, 127), (200, 5)] {
+                assert!(tx
+                    .push(Command::LiveControl {
+                        track: 0,
+                        number,
+                        value
+                    })
+                    .is_ok());
+            }
+            assert!(tx
+                .push(Command::NoteOn {
+                    pitch: 69,
+                    vel: 100,
+                    track: 0
+                })
+                .is_ok());
+            let mut buf = vec![0.0f32; 24_000 * 2];
+            e.process(&mut buf);
+            assert!(buf.iter().all(|x| x.is_finite()));
+            let left: Vec<f32> = buf.chunks(2).map(|f| f[0]).collect();
+            left[2_000..]
+                .windows(2)
+                .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+                .count()
+        };
+        let centre = crossings(None);
+        let up = crossings(Some(16383));
+        let down = crossings(Some(0));
+        // A sine font's pitch bend range is two semitones: about 12 % up and 11 % down.
+        assert!(up as f32 > centre as f32 * 1.08, "{up} vs {centre}");
+        assert!((down as f32) < centre as f32 * 0.94, "{down} vs {centre}");
+        // A track with no player, or one past the limit, ignores it.
+        let (mut e, mut tx, _s) = rig();
+        assert!(tx
+            .push(Command::LiveControl {
+                track: 3,
+                number: 1,
+                value: 50
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::LiveControl {
+                track: u16::MAX,
+                number: 128,
+                value: 9_000
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn a_live_controller_on_an_external_track_goes_out_as_midi() {
+        let (mut e, mut tx, _s) = rig();
+        let Some(mut out) = e.take_midi_out_reader() else {
+            panic!("the MIDI out queue");
+        };
+        assert!(tx
+            .push(Command::SetTrackExternal {
+                track: 0,
+                external: true
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::LiveControl {
+                track: 0,
+                number: crate::PITCH_BEND_CONTROL,
+                value: 12_000
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::LiveControl {
+                track: 0,
+                number: 1,
+                value: 90
+            })
+            .is_ok());
+        assert!(tx
+            .push(Command::LiveControl {
+                track: 1,
+                number: 1,
+                value: 90
+            })
+            .is_ok());
+        let mut buf = vec![0.0f32; 512];
+        e.process(&mut buf);
+        let Ok(first) = out.pop() else {
+            panic!("the bend");
+        };
+        assert_eq!(
+            (first.controller, first.pitch, first.value, first.track),
+            (true, 128, 12_000, 0)
+        );
+        let Ok(second) = out.pop() else {
+            panic!("the modulation");
+        };
+        assert_eq!(
+            (second.controller, second.pitch, second.value),
+            (true, 1, 90)
+        );
+        assert!(
+            out.pop().is_err(),
+            "track 1 is not external: nothing goes out"
+        );
     }
 
     #[test]

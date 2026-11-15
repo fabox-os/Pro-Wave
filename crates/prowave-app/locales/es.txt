@@ -823,3 +823,7 @@ Loop Browser = Explorador de loops
 File Browser = Explorador de archivos
 Record Enable: arm the track for recording = Armar para grabar: preparar la pista para grabar
 Input Monitoring: hear the input of the track = Monitorización de entrada: oír la entrada de la pista
+Musical Typing = Escritura musical
+Modulation = Modulación
+sustain = sostenido
+Show Musical Typing = Mostrar escritura musical

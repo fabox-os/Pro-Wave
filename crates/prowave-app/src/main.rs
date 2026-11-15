@@ -37,6 +37,7 @@ mod midi_out;
 mod mixer;
 mod model;
 mod mtc_in;
+mod musical_typing;
 mod native_menu;
 mod new_track_dialog;
 mod note_edit;
@@ -207,6 +208,8 @@ pub struct UiState {
     pub can_redo: bool,
     /// Mix > Edit Groups… window is open.
     pub show_groups: bool,
+    /// Musical Typing: the computer keyboard as a MIDI keyboard (Window > Show Musical Typing).
+    pub typing: musical_typing::MusicalTyping,
 }
 
 impl UiState {
@@ -281,6 +284,7 @@ impl UiState {
             can_undo: false,
             can_redo: false,
             show_groups: false,
+            typing: musical_typing::MusicalTyping::new(),
         }
     }
 
@@ -916,6 +920,9 @@ impl App {
         if let Some(midi) = self.midi.as_mut() {
             midi.poll(&mut input);
         }
+        // The computer keyboard, when Musical Typing is on, makes the same live notes.
+        self.ui.typing.read_keys(ctx);
+        input.extend(self.ui.typing.take());
         let p = &mut self.project;
         let s = &mut self.ui;
         let track = s.rec.target().map_or(p.selected_track, |(t, _)| t);
@@ -934,11 +941,23 @@ impl App {
                     track: track.min(usize::from(u16::MAX)) as u16,
                 },
                 recorder::LiveNote::Off { pitch } => piano_roll::Audition::Off { pitch },
-                // The engine has no sustain pedal, bend or pressure for the keys yet: they are
-                // only recorded.
-                recorder::LiveNote::Sustain { .. }
-                | recorder::LiveNote::Bend { .. }
-                | recorder::LiveNote::Pressure { .. } => continue,
+                // Bend and modulation reach a SoundFont or an external instrument as they are
+                // played (and are recorded).
+                recorder::LiveNote::Bend { val } => piano_roll::Audition::Control {
+                    track: track.min(usize::from(u16::MAX)) as u16,
+                    number: prowave_engine::PITCH_BEND_CONTROL,
+                    value: val,
+                },
+                recorder::LiveNote::Modulation { val } => piano_roll::Audition::Control {
+                    track: track.min(usize::from(u16::MAX)) as u16,
+                    number: recorder::MODULATION_WHEEL,
+                    value: u16::from(val),
+                },
+                // The engine has no sustain pedal or pressure for the keys yet: they are only
+                // recorded.
+                recorder::LiveNote::Sustain { .. } | recorder::LiveNote::Pressure { .. } => {
+                    continue
+                }
             });
         }
         // Record on an audio track is the audio recorder's (see `record_audio`).
@@ -1263,6 +1282,20 @@ impl eframe::App for App {
                     piano_roll::Audition::Off { pitch } => {
                         Some(prowave_engine::Command::NoteOff { pitch })
                     }
+                    piano_roll::Audition::Control { track, .. }
+                        if usize::from(track) >= prowave_engine::MAX_TRACKS =>
+                    {
+                        None
+                    }
+                    piano_roll::Audition::Control {
+                        track,
+                        number,
+                        value,
+                    } => Some(prowave_engine::Command::LiveControl {
+                        track,
+                        number,
+                        value,
+                    }),
                 };
                 if cmd.is_some_and(|cmd| !sync.engine.send(cmd)) {
                     break;
@@ -1316,6 +1349,12 @@ impl eframe::App for App {
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
         group_editor::show(&ctx, &mut self.project, &mut self.ui);
+        let typed = self
+            .project
+            .tracks
+            .get(self.project.selected_track)
+            .map(|t| t.name.clone());
+        musical_typing::show(&ctx, &mut self.ui.typing, typed.as_deref());
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
         self.track_history(&ctx);

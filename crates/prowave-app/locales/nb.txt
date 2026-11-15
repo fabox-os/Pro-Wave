@@ -823,3 +823,7 @@ Loop Browser = Loop-nettleser
 File Browser = Filnettleser
 Record Enable: arm the track for recording = Opptaksklar: gjør sporet klart for opptak
 Input Monitoring: hear the input of the track = Inngangsmonitorering: hør inngangen til sporet
+Musical Typing = Musical Typing
+Modulation = Modulasjon
+sustain = sustain
+Show Musical Typing = Vis Musical Typing
