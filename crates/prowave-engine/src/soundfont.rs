@@ -14,6 +14,9 @@ use crate::epiano::EPiano;
 use crate::sampler::Sampler;
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 
+/// The `number` of a live pitch bend in [`SfPlayer::control`] and `Command::LiveControl`.
+pub const PITCH_BEND_CONTROL: u8 = 128;
+
 /// The largest SoundFont accepted, in bytes. The General MIDI banks are about 150 MB.
 pub const MAX_SOUNDFONT_BYTES: usize = 512 * 1024 * 1024;
 
@@ -225,6 +228,28 @@ impl SfPlayer {
         }
         if let Some(s) = self.synth.as_mut() {
             s.note_off(self.channel, i32::from(pitch.min(127)));
+        }
+    }
+
+    /// A live controller change: `number` 0-127 is a MIDI controller with a 7-bit `value`
+    /// (1 is the modulation wheel, 64 the sustain pedal), [`PITCH_BEND_CONTROL`] is the pitch
+    /// bend with a 14-bit `value` (8192 is the centre). Allocation free.
+    pub fn control(&mut self, number: u8, value: u16) {
+        // Only a SoundFont player takes controllers; the Sampler, Electric Piano and Drum
+        // Machine ignore them.
+        let Some(synth) = self.synth.as_mut() else {
+            return;
+        };
+        if number == PITCH_BEND_CONTROL {
+            let v = i32::from(value.min(16383));
+            synth.process_midi_message(self.channel, 0xE0, v & 0x7f, v >> 7);
+        } else if number < 128 {
+            synth.process_midi_message(
+                self.channel,
+                0xB0,
+                i32::from(number),
+                i32::from(value.min(127)),
+            );
         }
     }
 
