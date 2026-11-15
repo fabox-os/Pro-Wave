@@ -244,8 +244,9 @@ arrangement (48 busy voices, filtered saw/square + vibrato, drums, metronome, te
   Sound, a real GPU and the GPU fallbacks have not been tried by a tester.
 - **More than 1024 tracks:** the engine mixes 1024 tracks; tracks after that are kept in the
   project but not played.
-- **Plug-in slots** (CLAP / VST3 / AU) are not hosted yet; the Audio FX slots hold Pro Wave's
-  own effects.
+- **Plug-ins** (CLAP / VST3 / AU): effects are hosted in the Audio FX slots, each in a process
+  of its own on macOS and Linux. Instruments are not hosted; the plug-ins' own windows are
+  macOS only, and on Windows plug-ins still run inside Pro Wave.
 - The synth approximates instrument families; there are no sampled instruments, and the
   Amp Designer is a model, not a captured amplifier (no impulse-response cabinets yet).
 - Cut/Copy/Paste of regions and many menu items are still shown **disabled** (not implemented).

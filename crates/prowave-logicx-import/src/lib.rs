@@ -8,16 +8,24 @@
 //! alternative and the Logic version. This reader resolves both save shapes, follows the active
 //! alternative, and reads the two plists.
 //!
-//! `ProjectData` is a chunk-based binary with mixed endianness and no index; reading the
-//! musical content (tracks, regions, plug-ins and Session Player state) is the next step.
-//! For now the reader validates its four-byte signature (`23 47 C0 AB`) and size, and reports
-//! the size so an importer can budget for the scan. The full layout is described in
-//! `LOGICX-FORMAT-SPEC.md`.
+//! `ProjectData` is a chunk-based binary with mixed endianness and no index. [`read`] checks its
+//! signature and size and reports them. [`read_full`] also decodes the channel strips, the
+//! plug-ins (Audio Units with their state, stock plug-ins, the Sampler's instrument file) and
+//! the MIDI and audio regions, where the reader can decode them. The layouts are described in
+//! `LOGICX-FORMAT-SPEC.md`, under "What the real file shows".
 //!
 //! A project is untrusted input: both plists and `ProjectData` are capped before they are read,
 //! and every file is canonicalised and must stay inside the bundle, so a symlink in a downloaded
-//! project cannot point the reader at another file.
+//! project cannot point the reader at another file. `ProjectData` is read through a byte cap,
+//! and every scan bounds-checks each read, so a corrupt file gives an [`Error`], never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+
+mod model;
+mod project_data;
+
+pub use model::{
+    AudioRegion, FullProject, MidiNote, MidiRegion, PluginFormat, PluginSlot, Track, TrackKind,
+};
 
 use plist::{Dictionary, Value};
 use std::fmt;
@@ -72,6 +80,12 @@ pub enum Error {
     Plist { path: String, message: String },
     /// `ProjectData` does not begin with Logic's signature.
     BadProjectData,
+    /// `ProjectData` is shorter than its own root header says: the file was cut short.
+    Truncated {
+        path: String,
+        expected: u64,
+        actual: u64,
+    },
     /// A file the layout names resolves outside the bundle (through a symlink).
     OutsideBundle { path: String },
     /// The file system returned an error.
@@ -86,6 +100,14 @@ impl fmt::Display for Error {
             Self::TooLarge { path, limit } => write!(f, "{path} is larger than {limit} bytes"),
             Self::Plist { path, message } => write!(f, "{path}: {message}"),
             Self::BadProjectData => f.write_str("ProjectData does not have Logic's signature"),
+            Self::Truncated {
+                path,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "{path} is truncated: it holds {actual} bytes where its header declares {expected}"
+            ),
             Self::OutsideBundle { path } => write!(f, "{path} resolves outside the bundle"),
             Self::Io(e) => write!(f, "{e}"),
         }
@@ -119,6 +141,70 @@ pub fn read(path: &Path) -> Result<Project, Error> {
         logic_version,
         project_data_bytes,
     })
+}
+
+/// Reads a Logic project and decodes its channel strips, plug-ins and regions, from the active
+/// alternative's `ProjectData`. The metadata in [`FullProject::info`] is what [`read`] returns.
+///
+/// Errors when the bundle does not read, or when `ProjectData` is truncated or not a Logic
+/// file. A strip or plug-in the scanners do not recognise is left out, not an error.
+pub fn read_full(path: &Path) -> Result<FullProject, Error> {
+    let info = read(path)?;
+    let bundle = locate_bundle(path)?;
+    let alternative_dir = bundle
+        .join("Alternatives")
+        .join(format!("{:03}", info.alternative));
+    let project_data = alternative_dir.join("ProjectData");
+    let bytes = read_project_data(&bundle, &project_data)?;
+    let metadata = read_plist(&bundle, &alternative_dir.join("MetaData.plist"))?;
+    let audio_files = string_list(&metadata, "AudioFiles");
+    let assembly =
+        project_data::assemble(&bytes, &project_data.display().to_string(), &audio_files)?;
+    Ok(FullProject {
+        info,
+        tracks: assembly.tracks,
+        unassigned_plugins: assembly.unassigned,
+        audio_regions: assembly.audio_regions,
+        audio_files: assembly.audio_files,
+        ticks_per_quarter: TICKS_PER_QUARTER,
+    })
+}
+
+/// The ticks per quarter note of every tick value. See [`FullProject::ticks_per_quarter`].
+const TICKS_PER_QUARTER: u32 = 960;
+
+/// The strings of an array in a plist (such as `AudioFiles`), in order; other entries are
+/// skipped.
+fn string_list(dictionary: &Dictionary, key: &str) -> Vec<String> {
+    match lookup(dictionary, key) {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(|value| match value {
+                Value::String(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Reads `ProjectData` whole, after the envelope checks and within the size cap.
+fn read_project_data(bundle: &Path, path: &Path) -> Result<Vec<u8>, Error> {
+    let shown = path.display().to_string();
+    check_project_data(bundle, path)?;
+    let file = std::fs::File::open(path).map_err(|e| Error::Io(format!("{shown}: {e}")))?;
+    let mut bytes = Vec::new();
+    // Reading one byte past the cap shows the file grew after its size was checked.
+    file.take(MAX_PROJECT_DATA_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| Error::Io(format!("{shown}: {e}")))?;
+    if bytes.len() > MAX_PROJECT_DATA_BYTES {
+        return Err(Error::TooLarge {
+            path: shown,
+            limit: MAX_PROJECT_DATA_BYTES,
+        });
+    }
+    Ok(bytes)
 }
 
 /// The bundle directory: either the path itself, or the single `.logicx` inside a folder.

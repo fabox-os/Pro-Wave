@@ -299,6 +299,27 @@ pub struct InsertDoc {
     pub kind: String,
     pub bypass: bool,
     pub params: Vec<f32>,
+    /// A hosted plug-in (CLAP, VST3, Audio Unit) instead of one of Pro Wave's effects; `kind`
+    /// is then its name and `params` is empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginDoc>,
+}
+
+/// A hosted plug-in in an effect slot: which one, and its own state.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct PluginDoc {
+    /// "CLAP", "VST3" or "Audio Unit".
+    pub format: String,
+    /// What names the plug-in in its format: a CLAP id, a VST3 class id, an Audio Unit's codes.
+    pub id: String,
+    pub name: String,
+    pub vendor: String,
+    /// The plug-in's file when it was saved (empty for an Audio Unit); another computer may
+    /// have it elsewhere, so `format` and `id` are what find it.
+    pub path: String,
+    /// The plug-in's state as it gave it, in hexadecimal (empty: none).
+    pub state: String,
 }
 
 /// The automation lane of one effect parameter.

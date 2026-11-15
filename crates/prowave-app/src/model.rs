@@ -222,6 +222,9 @@ pub struct Insert {
     pub kind: prowave_engine::FxKind,
     pub bypass: bool,
     pub params: [f32; prowave_engine::MAX_FX_PARAMS],
+    /// A hosted plug-in (CLAP, VST3, Audio Unit): its number in `crate::plugins`, or 0 for one
+    /// of Pro Wave's own effects. The plug-in keeps its own settings; `params` is unused.
+    pub plugin: u32,
 }
 
 impl Insert {
@@ -231,11 +234,24 @@ impl Insert {
             kind,
             bypass: false,
             params: kind.defaults(),
+            plugin: 0,
+        }
+    }
+
+    /// The hosted plug-in with number `plugin` in `crate::plugins`.
+    pub fn hosted(plugin: u32) -> Self {
+        Self {
+            plugin,
+            ..Self::new(prowave_engine::FxKind::External)
         }
     }
 
     pub fn name(&self) -> &'static str {
-        self.kind.name()
+        if self.plugin != 0 {
+            crate::plugins::name(self.plugin)
+        } else {
+            self.kind.name()
+        }
     }
 }
 

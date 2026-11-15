@@ -59,8 +59,8 @@ pub use crate::flex::{
     PitchShift, WarpPoint, MAX_POINTS as MAX_FLEX_POINTS,
 };
 pub use crate::fx::{
-    eq_response_db, response_db, Chain, Fx, FxKind, ParamInfo, Pdc, AMP_CABS, AMP_MODELS,
-    MAX_FX_PARAMS, MAX_INSERTS,
+    eq_response_db, response_db, Chain, ExternalFx, Fx, FxKind, ParamInfo, Pdc, AMP_CABS,
+    AMP_MODELS, EXTERNAL_BLOCK, MAX_FX_PARAMS, MAX_INSERTS,
 };
 pub use crate::monitor::{InputFeed, MonitorTrack, MAX_MONITORS};
 pub use crate::mtc::{

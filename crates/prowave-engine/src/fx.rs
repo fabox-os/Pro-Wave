@@ -31,6 +31,9 @@ pub enum FxKind {
     Limiter,
     MultiEq,
     Amp,
+    /// A third-party plug-in (CLAP, VST3, Audio Unit): see [`ExternalFx`] and [`Fx::external`].
+    /// It is not in [`FxKind::ALL`]: the host lists those plug-ins, not the engine.
+    External,
     /// Pult EQ: a Pultec-style tube equaliser (see [`crate::pult_eq`]).
     PultEq,
 }
@@ -466,6 +469,7 @@ impl FxKind {
             FxKind::Limiter => "Limiter",
             FxKind::MultiEq => "Multi-Band EQ",
             FxKind::Amp => "Amp Designer",
+            FxKind::External => "Plug-in",
             FxKind::PultEq => "Pult EQ",
         }
     }
@@ -522,6 +526,7 @@ impl FxKind {
             FxKind::Limiter => &LIMIT_PARAMS,
             FxKind::MultiEq => &MULTI_PARAMS,
             FxKind::Amp => &AMP_PARAMS,
+            FxKind::External => &[],
             FxKind::PultEq => &PULT_PARAMS,
         }
     }
@@ -1069,7 +1074,87 @@ enum State {
     Drive(DriveState),
     Filter([Biquad; 2]),
     Amp(Box<AmpState>),
+    External(Box<ExternalState>),
     PultEq(Box<PultState>),
+}
+
+/// The block a third-party plug-in works on, in samples. The engine runs its effects one sample
+/// at a time, so an [`ExternalFx`] gets its sound in blocks of this size and is this late.
+pub const EXTERNAL_BLOCK: usize = 64;
+
+/// A third-party plug-in the engine can run in an effect slot (Logic: an Audio Units plug-in).
+/// `prowave-plugin-host` makes these from CLAP, VST3 and Audio Unit plug-ins; the engine only
+/// sees this trait, so it has no native code of its own and still builds for the browser.
+///
+/// Every method but [`ExternalFx::boxed_clone`] is called on the audio thread: no allocation,
+/// no lock, no system call.
+pub trait ExternalFx: Send {
+    /// One block in place: `left` and `right` have the same length, [`EXTERNAL_BLOCK`].
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]);
+    /// Automation: moves parameter `index` to position `norm` (0..=1) along its range.
+    fn set_param_norm(&mut self, index: usize, norm: f32);
+    /// The plug-in's own delay in samples (its look-ahead), without the block's.
+    fn latency_samples(&self) -> usize;
+    /// Clears the plug-in's memory (tails, filter state).
+    fn reset(&mut self);
+    /// Another handle on the same plug-in, for a rebuilt chain. Called off the audio thread;
+    /// only one handle is ever played at a time.
+    fn boxed_clone(&self) -> Box<dyn ExternalFx>;
+}
+
+/// An [`ExternalFx`] with the block it is filling: the sample at `pos` is the plug-in's output
+/// from the last block until the new input replaces it.
+struct ExternalState {
+    plug: Option<Box<dyn ExternalFx>>,
+    buf: [[f32; EXTERNAL_BLOCK]; 2],
+    pos: usize,
+}
+
+impl ExternalState {
+    fn new(plug: Option<Box<dyn ExternalFx>>) -> Self {
+        Self {
+            plug,
+            buf: [[0.0; EXTERNAL_BLOCK]; 2],
+            pos: 0,
+        }
+    }
+
+    #[inline]
+    fn tick(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let Some(plug) = self.plug.as_mut() else {
+            return (l, r);
+        };
+        let pos = self.pos.min(EXTERNAL_BLOCK - 1);
+        let out = (self.buf[0][pos], self.buf[1][pos]);
+        self.buf[0][pos] = l;
+        self.buf[1][pos] = r;
+        self.pos = pos + 1;
+        if self.pos == EXTERNAL_BLOCK {
+            let [left, right] = &mut self.buf;
+            plug.process(left, right);
+            self.pos = 0;
+        }
+        out
+    }
+}
+
+impl Clone for ExternalState {
+    fn clone(&self) -> Self {
+        Self {
+            plug: self.plug.as_ref().map(|p| p.boxed_clone()),
+            buf: self.buf,
+            pos: self.pos,
+        }
+    }
+}
+
+impl std::fmt::Debug for ExternalState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExternalState")
+            .field("loaded", &self.plug.is_some())
+            .field("pos", &self.pos)
+            .finish()
+    }
 }
 
 /// One effect with its state. Make it with [`Fx::new`] off the audio thread.
@@ -1134,6 +1219,7 @@ impl Fx {
             FxKind::Limiter => State::Limiter(Box::new(LimiterState::new(sr))),
             FxKind::MultiEq => State::MultiEq([[Biquad::unity(); 6]; 2]),
             FxKind::Amp => State::Amp(Box::new(AmpState::new())),
+            FxKind::External => State::External(Box::new(ExternalState::new(None))),
             FxKind::PultEq => State::PultEq(Box::new(PultState::new())),
         };
         let mut fx = Self {
@@ -1145,6 +1231,15 @@ impl Fx {
             state,
         };
         fx.set(params, bypass);
+        fx
+    }
+
+    /// A third-party plug-in as an effect of the chain (Logic: an Audio Units plug-in in an
+    /// Audio FX slot). The plug-in works on blocks of [`EXTERNAL_BLOCK`] samples, so it adds that
+    /// much delay to its own; both are in [`Fx::latency_samples`].
+    pub fn external(plug: Box<dyn ExternalFx>, bypass: bool, sample_rate: f32) -> Self {
+        let mut fx = Self::new(FxKind::External, [0.0; MAX_FX_PARAMS], bypass, sample_rate);
+        fx.state = State::External(Box::new(ExternalState::new(Some(plug))));
         fx
     }
 
@@ -1208,6 +1303,10 @@ impl Fx {
     pub fn latency_samples(&self) -> usize {
         if self.bypass {
             0
+        } else if let State::External(s) = &self.state {
+            s.plug
+                .as_ref()
+                .map_or(0, |p| EXTERNAL_BLOCK + p.latency_samples())
         } else {
             self.kind.latency_samples(self.sr)
         }
@@ -1645,6 +1744,7 @@ impl Fx {
                     (dr * s.gain).clamp(-ceiling, ceiling),
                 )
             }
+            State::External(s) => s.tick(l, r),
         };
         // A bad sample (NaN, infinity) never travels on: it becomes silence and the
         // effect's memory is dropped by the caller's next reset.
@@ -1723,6 +1823,13 @@ impl Fx {
                 s.dc_in = [0.0; 2];
                 s.dc_out = [0.0; 2];
             }
+            State::External(s) => {
+                s.buf = [[0.0; EXTERNAL_BLOCK]; 2];
+                s.pos = 0;
+                if let Some(p) = s.plug.as_mut() {
+                    p.reset();
+                }
+            }
         }
     }
 }
@@ -1774,7 +1881,11 @@ impl Chain {
     /// the parameter's range.
     pub fn set_param_norm(&mut self, slot: usize, param: usize, norm: f32) {
         if let Some(fx) = self.fx.get_mut(slot) {
-            if let Some(info) = fx.kind().params().get(param) {
+            if let State::External(s) = &mut fx.state {
+                if let Some(p) = s.plug.as_mut() {
+                    p.set_param_norm(param, norm);
+                }
+            } else if let Some(info) = fx.kind().params().get(param) {
                 fx.set_param(param, info.from_norm(norm));
             }
         }
@@ -2475,5 +2586,102 @@ mod tests {
         let mut none = Pdc::new(0, 0);
         assert_eq!(none.delay_before(0.5, 0.25), (0.5, 0.25));
         assert_eq!(Pdc::new(usize::MAX, 0).lengths().0, 192_000);
+    }
+
+    use std::sync::atomic::Ordering;
+
+    /// What the stand-in plug-in saw: its blocks, and its last parameter move as
+    /// `index * 1000 + position in thousandths` (0: none).
+    #[derive(Default)]
+    struct Seen {
+        blocks: std::sync::atomic::AtomicUsize,
+        moved: std::sync::atomic::AtomicUsize,
+    }
+
+    /// A stand-in plug-in: doubles the sound and notes what it is asked.
+    struct Doubler(std::sync::Arc<Seen>);
+
+    impl ExternalFx for Doubler {
+        fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+            assert_eq!((left.len(), right.len()), (EXTERNAL_BLOCK, EXTERNAL_BLOCK));
+            left.iter_mut().chain(right).for_each(|s| *s *= 2.0);
+            self.0.blocks.fetch_add(1, Ordering::Relaxed);
+        }
+        fn set_param_norm(&mut self, index: usize, norm: f32) {
+            let coded = index * 1000 + (norm * 1000.0) as usize;
+            self.0.moved.store(coded, Ordering::Relaxed);
+        }
+        fn latency_samples(&self) -> usize {
+            10
+        }
+        fn reset(&mut self) {}
+        fn boxed_clone(&self) -> Box<dyn ExternalFx> {
+            Box::new(Doubler(self.0.clone()))
+        }
+    }
+
+    #[test]
+    fn an_external_plug_in_gets_whole_blocks_and_is_one_block_late() {
+        let seen = std::sync::Arc::new(Seen::default());
+        let plug = Box::new(Doubler(seen.clone()));
+        let mut chain = Chain::new(vec![Fx::external(plug, false, 48_000.0)]);
+        assert_eq!(chain.fx[0].kind(), FxKind::External);
+        assert_eq!(chain.latency_samples(), EXTERNAL_BLOCK + 10);
+        let out: Vec<(f32, f32)> = (0..EXTERNAL_BLOCK * 3)
+            .map(|i| chain.process(i as f32, -(i as f32)))
+            .collect();
+        assert!(out[..EXTERNAL_BLOCK].iter().all(|s| *s == (0.0, 0.0)));
+        for (i, s) in out[EXTERNAL_BLOCK..].iter().enumerate() {
+            assert_eq!(*s, (2.0 * i as f32, -2.0 * i as f32), "sample {i}");
+        }
+        let blocks = || seen.blocks.load(Ordering::Relaxed);
+        assert_eq!(blocks(), 3, "one call for each full block");
+
+        // Automation reaches the plug-in as a position, whatever its range.
+        chain.set_param_norm(0, 7, 0.25);
+        assert_eq!(seen.moved.load(Ordering::Relaxed), 7250);
+        // A rebuilt chain plays the same plug-in.
+        let mut copy = chain.clone();
+        (0..EXTERNAL_BLOCK).for_each(|_| {
+            copy.process(1.0, 1.0);
+        });
+        assert_eq!(blocks(), 4);
+
+        // Bypassed, it passes the sound at once and adds no delay.
+        chain.fx[0].set([0.0; MAX_FX_PARAMS], true);
+        assert_eq!(chain.process(0.5, 0.25), (0.5, 0.25));
+        assert_eq!(chain.latency_samples(), 0);
+    }
+
+    #[test]
+    fn an_external_slot_without_a_plug_in_passes_the_sound() {
+        let mut fx = Fx::new(FxKind::External, [0.0; MAX_FX_PARAMS], false, 48_000.0);
+        assert_eq!(fx.process(0.5, -0.5), (0.5, -0.5));
+        assert_eq!(fx.latency_samples(), 0);
+        assert!(FxKind::External.params().is_empty());
+        assert!(!FxKind::ALL.contains(&FxKind::External));
+    }
+
+    #[test]
+    fn running_an_external_plug_in_does_not_allocate() {
+        struct Quiet;
+        impl ExternalFx for Quiet {
+            fn process(&mut self, _: &mut [f32], _: &mut [f32]) {}
+            fn set_param_norm(&mut self, _: usize, _: f32) {}
+            fn latency_samples(&self) -> usize {
+                0
+            }
+            fn reset(&mut self) {}
+            fn boxed_clone(&self) -> Box<dyn ExternalFx> {
+                Box::new(Quiet)
+            }
+        }
+        let mut chain = Chain::new(vec![Fx::external(Box::new(Quiet), false, 48_000.0)]);
+        assert_no_alloc::assert_no_alloc(|| {
+            for i in 0..EXTERNAL_BLOCK * 4 {
+                chain.process(i as f32, 0.0);
+                chain.set_param_norm(0, 0, 0.5);
+            }
+        });
     }
 }
