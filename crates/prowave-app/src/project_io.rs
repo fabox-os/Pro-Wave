@@ -235,7 +235,11 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
 
 /// The sends of a track in a file: the list, else (older files) the single send.
 fn sends_from_doc(t: &prowave_project::TrackDoc) -> Vec<SendSlot> {
-    let valid = |bus: u8| (1..=8).contains(&bus).then_some(bus);
+    let valid = |bus: u16| {
+        (1..=prowave_engine::MAX_BUSES as u16)
+            .contains(&bus)
+            .then_some(bus)
+    };
     let mut sends: Vec<SendSlot> = t
         .sends
         .iter()
@@ -430,6 +434,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             },
             input_stereo: matches!(t.input, InputSource::Stereo(_)),
             output: t.output,
+            aux_bus: t.aux_bus,
             groove: t.params.groove,
             follow_groove: t.params.follow_groove,
             midi_fx: t
@@ -818,6 +823,11 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             input: input_source(t.input, t.input_stereo),
             output: if usize::from(t.output) <= prowave_engine::MAX_BUSES {
                 t.output
+            } else {
+                0
+            },
+            aux_bus: if usize::from(t.aux_bus) <= prowave_engine::MAX_BUSES {
+                t.aux_bus
             } else {
                 0
             },
@@ -2098,7 +2108,7 @@ pub(crate) mod tests {
             }));
         doc.tracks[1].sends = (0..30)
             .map(|k| prowave_project::SendDoc {
-                bus: k as u8,
+                bus: k as u16,
                 level: 9.0,
                 pre: false,
             })
@@ -2471,7 +2481,7 @@ pub(crate) mod tests {
         let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(q.notes, p.notes);
         assert_eq!(q.tracks[0].output, 2);
-        doc.tracks[0].output = 200;
+        doc.tracks[0].output = 2000;
         doc.notes = "x".repeat(crate::side_panes::MAX_NOTES + 10);
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(r.tracks[0].output, 0, "no such bus");

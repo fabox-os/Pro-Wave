@@ -204,8 +204,8 @@ impl RegionParams {
 /// strip's signal to the bus; the Aux strip that listens to the bus plays it.
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub struct SendSlot {
-    /// Bus number 1..=8, or `None` for an empty slot.
-    pub bus: Option<u8>,
+    /// Bus number 1..=[`prowave_engine::MAX_BUSES`], or `None` for an empty slot.
+    pub bus: Option<u16>,
     /// 0..=1 send level (the knob; see `prowave_engine::send_gain`).
     pub level: f32,
     /// Pre-fader send (shown with the "eye" icon).
@@ -648,7 +648,11 @@ pub struct Track {
     /// The input an audio track records.
     pub input: prowave_engine::InputSource,
     /// The bus the strip plays into; 0 is Stereo Out (the mixer's Output slot).
-    pub output: u8,
+    pub output: u16,
+    /// For an Aux strip made to listen to one bus (Logic makes one when a send goes to a bus
+    /// nothing listens to): that bus. 0 for the others, which listen to the bus of their rank
+    /// (the first Aux to Bus 1, and so on).
+    pub aux_bus: u16,
     pub volume_db: f32,
     pub pan: f32,
     pub inserts: Vec<Insert>,
@@ -766,6 +770,7 @@ impl Track {
             monitor: false,
             input: prowave_engine::InputSource::Mono(0),
             output: 0,
+            aux_bus: 0,
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
@@ -985,6 +990,7 @@ impl Project {
             monitor: false,
             input: prowave_engine::InputSource::Mono(0),
             output: 0,
+            aux_bus: 0,
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
@@ -1037,6 +1043,7 @@ impl Project {
             monitor: false,
             input: prowave_engine::InputSource::Mono(0),
             output: 0,
+            aux_bus: 0,
             volume_db: vol,
             pan: 0.0,
             inserts: inserts_from_names(&ins),
@@ -1135,7 +1142,7 @@ impl Project {
         let mut tracks = tracks;
         for (t, bus) in tracks
             .iter_mut()
-            .zip([Some(1u8), Some(3), Some(3), Some(3)])
+            .zip([Some(1u16), Some(3), Some(3), Some(3)])
         {
             t.sends = vec![SendSlot {
                 bus,
@@ -1962,17 +1969,20 @@ impl Project {
         }
     }
 
-    /// The bus an Aux strip listens to: Aux 1 takes Bus 1, the next Aux Bus 2, and so on up to
-    /// Bus 8. 0 for any other strip, and for an Aux strip past the eighth.
-    pub fn aux_bus_of(&self, i: usize) -> u8 {
+    /// The bus an Aux strip listens to: an Aux strip made for a bus says which, the others
+    /// take the bus of their rank among them (Aux 1 takes Bus 1, the next Aux Bus 2, and so on
+    /// up to [`prowave_engine::MAX_BUSES`]). 0 for any other strip, and for an Aux strip past
+    /// that.
+    pub fn aux_bus_of(&self, i: usize) -> u16 {
         match self.tracks.get(i) {
+            Some(t) if t.kind == TrackKind::Aux && t.aux_bus != 0 => t.aux_bus,
             Some(t) if t.kind == TrackKind::Aux => {
                 let n = self.tracks[..=i]
                     .iter()
-                    .filter(|t| t.kind == TrackKind::Aux)
+                    .filter(|t| t.kind == TrackKind::Aux && t.aux_bus == 0)
                     .count();
                 if n <= prowave_engine::MAX_BUSES {
-                    n as u8
+                    n as u16
                 } else {
                     0
                 }
