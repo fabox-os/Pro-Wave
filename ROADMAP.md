@@ -374,7 +374,6 @@ The items below marked done are in 0.2.2 (see CHANGELOG.md for the full list, an
 limitations at the end of the section). Still open, in the order the work would take them:
 
 - Plug-in hosting (CLAP first, then VST3 and AU), with a sandboxed process per plug-in. Not started.
-- Audio output device and I/O buffer size in Project Settings > Audio (needs an engine stream restart).
 - An offline (faster than real time) bounce: Bounce, Export Track, Bounce in Place and Bounce and Join all work now, but at playing speed.
 - Convert to New Sampler Track (needs a sampler instrument).
 - Show Chord Track and Show Arrangement Track (new data models).

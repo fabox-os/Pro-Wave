@@ -88,6 +88,42 @@ mod queue_tests {
     }
 }
 
+#[cfg(test)]
+mod buffer_tests {
+    use super::*;
+
+    #[test]
+    fn choices_are_the_powers_of_two_the_device_supports() {
+        assert_eq!(buffer_choices(None), vec![32, 64, 128, 256, 512, 1024]);
+        assert_eq!(buffer_choices(Some((16, 512))), vec![32, 64, 128, 256, 512]);
+        assert_eq!(buffer_choices(Some((2048, 4096))), Vec::<u32>::new());
+        assert_eq!(buffer_choices(Some((32, 1024))), BUFFER_CHOICES.to_vec());
+    }
+
+    #[test]
+    fn a_requested_buffer_is_limited_to_the_device_range() {
+        assert_eq!(clamp_buffer(64, None), 64);
+        assert_eq!(clamp_buffer(4, Some((16, 8192))), 16);
+        assert_eq!(clamp_buffer(100_000, Some((16, 8192))), 8192);
+        assert_eq!(clamp_buffer(0, None), 1, "never a zero-frame callback");
+        // A broken range never panics; the upper end wins.
+        assert_eq!(clamp_buffer(64, Some((512, 128))), 128);
+    }
+
+    #[test]
+    fn an_unknown_output_device_is_an_error_not_a_panic() {
+        assert!(Engine::start_on(Some("no such output device"), None).is_err());
+    }
+
+    #[test]
+    fn listing_the_outputs_never_panics_and_ids_are_usable() {
+        for device in output_devices() {
+            assert!(!device.id.is_empty());
+            assert!(device.id.len() <= MAX_DEVICE_ID_CHARS);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum EngineError {
     NoOutputDevice,
@@ -121,6 +157,92 @@ pub fn peak_of(file: &AudioFile) -> Result<f32, EngineError> {
     file.peak().map_err(EngineError::from)
 }
 
+/// The I/O buffer sizes the app offers, in samples (Logic Pro: Settings > Audio).
+pub const BUFFER_CHOICES: [u32; 6] = [32, 64, 128, 256, 512, 1024];
+
+/// Longest device id the app accepts; a longer one is skipped rather than stored.
+const MAX_DEVICE_ID_CHARS: usize = 256;
+
+/// An audio output device of this computer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputDevice {
+    /// Identifies the device to [`Engine::start_on`] (the system's own id).
+    pub id: String,
+    /// The name to show.
+    pub name: String,
+}
+
+fn device_label(d: &cpal::Device) -> String {
+    d.description()
+        .map(|d| d.name().to_string())
+        .or_else(|_| d.id().map(|i| i.to_string()))
+        .unwrap_or_else(|_| "Output".into())
+}
+
+/// The output devices of the default audio system. Empty when there are none or the system
+/// cannot be asked; never panics.
+pub fn output_devices() -> Vec<OutputDevice> {
+    let host = cpal::default_host();
+    let Ok(devices) = host.output_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|d| {
+            let id = d.id().ok()?.to_string();
+            if id.is_empty() || id.len() > MAX_DEVICE_ID_CHARS {
+                return None;
+            }
+            Some(OutputDevice {
+                name: device_label(&d),
+                id,
+            })
+        })
+        .collect()
+}
+
+/// The default audio system's output device with this id, if it is still there.
+fn find_output(id: &str) -> Option<cpal::Device> {
+    let host = cpal::default_host();
+    host.output_devices()
+        .ok()?
+        .find(|d| d.id().is_ok_and(|i| i.to_string() == id))
+}
+
+/// The buffer sizes `device_id` (`None`: the default output) can take, in frames, from its
+/// default configuration. `None` when the device does not say (or is not there).
+pub fn buffer_range(device_id: Option<&str>) -> Option<(u32, u32)> {
+    let device = match device_id {
+        Some(id) => find_output(id)?,
+        None => cpal::default_host().default_output_device()?,
+    };
+    let config = device.default_output_config().ok()?;
+    match config.buffer_size() {
+        SupportedBufferSize::Range { min, max } => Some((*min, *max)),
+        SupportedBufferSize::Unknown => None,
+    }
+}
+
+/// The [`BUFFER_CHOICES`] a device with `range` supports. Without a known range, all of them.
+pub fn buffer_choices(range: Option<(u32, u32)>) -> Vec<u32> {
+    BUFFER_CHOICES
+        .into_iter()
+        .filter(|&n| match range {
+            Some((lo, hi)) => (lo..=hi).contains(&n),
+            None => true,
+        })
+        .collect()
+}
+
+/// `n` frames, limited to what the device supports when its range is known. Never panics,
+/// even for a range whose ends are in the wrong order.
+pub fn clamp_buffer(n: u32, range: Option<(u32, u32)>) -> u32 {
+    let n = n.max(1);
+    match range {
+        Some((lo, hi)) => n.max(lo).min(hi),
+        None => n,
+    }
+}
+
 /// The running audio output. Dropping it stops the sound.
 enum Output {
     Cpal(#[allow(dead_code)] Stream),
@@ -139,6 +261,10 @@ pub struct Engine {
     clock_out: Option<rtrb::Consumer<crate::clock::ClockMessage>>,
     sample_rate: u32,
     device_name: String,
+    /// The id the engine was opened with, `None` for the system's default output.
+    device_id: Option<String>,
+    /// The buffer size asked for (clamped to the device), `None` for the device's default.
+    buffer_frames: Option<u32>,
     _output: Output,
     disk: DiskThread,
 }
@@ -202,6 +328,36 @@ impl Engine {
     /// Starts on the default output device with the device's default buffer size.
     pub fn start() -> Result<Self, EngineError> {
         Self::start_with(None)
+    }
+
+    /// Starts on the output device `device_id` (an [`OutputDevice::id`]), or on the system's
+    /// default output when it is `None`, which is exactly [`Engine::start_with`]. An id that is
+    /// not there is an error, so the caller can fall back to the default. The Windows
+    /// low-latency path is used for the default output only.
+    pub fn start_on(
+        device_id: Option<&str>,
+        buffer_frames: Option<u32>,
+    ) -> Result<Self, EngineError> {
+        let Some(id) = device_id else {
+            return Self::start_with(buffer_frames);
+        };
+        let device = find_output(id)
+            .ok_or_else(|| EngineError::Backend(format!("output device {id} is not there")))?;
+        Self::start_on_device(&device, buffer_frames).map(|mut engine| {
+            engine.device_id = Some(id.to_string());
+            engine
+        })
+    }
+
+    /// The buffer size asked for, clamped to the device, in frames. `None` when the device's
+    /// default was used. The size the callbacks actually get is `EngineState::block_frames`.
+    pub fn buffer_frames(&self) -> Option<u32> {
+        self.buffer_frames
+    }
+
+    /// The id the engine was opened on, `None` for the system's default output.
+    pub fn device_id(&self) -> Option<&str> {
+        self.device_id.as_deref()
     }
 
     /// Like [`Engine::start`], but asks for `buffer_frames` per callback (clamped to what the
@@ -288,6 +444,8 @@ impl Engine {
             clock_out: readers.clock,
             sample_rate: info.sample_rate,
             device_name: info.device_name,
+            device_id: None,
+            buffer_frames: Some(info.period_frames),
             _output: Output::Wasapi(stream),
             disk: DiskThread::spawn(),
         })
@@ -296,7 +454,7 @@ impl Engine {
     fn start_on_host(host: &cpal::Host, buffer_frames: Option<u32>) -> Result<Self, EngineError> {
         let mut last = EngineError::NoOutputDevice;
         if let Some(device) = host.default_output_device() {
-            match Self::start_on(&device, buffer_frames) {
+            match Self::start_on_device(&device, buffer_frames) {
                 Ok(engine) => return Ok(engine),
                 Err(e) => {
                     tracing::warn!("default audio output failed: {e}");
@@ -309,7 +467,7 @@ impl Engine {
         if let Ok(devices) = host.output_devices() {
             for device in devices {
                 let name = device.id().map(|i| i.to_string()).unwrap_or_default();
-                match Self::start_on(&device, buffer_frames) {
+                match Self::start_on_device(&device, buffer_frames) {
                     Ok(engine) => {
                         tracing::info!("using audio output {name}");
                         return Ok(engine);
@@ -325,7 +483,10 @@ impl Engine {
     }
 
     /// Starts on `device`. If the requested buffer size is refused, retries with its default.
-    fn start_on(device: &cpal::Device, buffer_frames: Option<u32>) -> Result<Self, EngineError> {
+    fn start_on_device(
+        device: &cpal::Device,
+        buffer_frames: Option<u32>,
+    ) -> Result<Self, EngineError> {
         match Self::start_device(device, buffer_frames) {
             Err(e) if buffer_frames.is_some() => {
                 tracing::warn!("buffer size {buffer_frames:?} refused ({e}); using the default");
@@ -352,8 +513,8 @@ impl Engine {
             SupportedBufferSize::Unknown => None,
         };
         let mut config: StreamConfig = supported.into();
+        let buffer_frames = buffer_frames.map(|n| clamp_buffer(n, range));
         if let Some(n) = buffer_frames {
-            let n = range.map_or(n, |(lo, hi)| n.clamp(lo, hi));
             config.buffer_size = BufferSize::Fixed(n);
         }
         let sample_rate = config.sample_rate;
@@ -395,6 +556,8 @@ impl Engine {
             clock_out: readers.clock,
             sample_rate,
             device_name,
+            device_id: None,
+            buffer_frames,
             _output: Output::Cpal(stream),
             disk: DiskThread::spawn(),
         })

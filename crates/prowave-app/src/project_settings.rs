@@ -8,10 +8,12 @@
 //! - Metronome: the click's volume and whether the first beat of a bar clicks higher.
 //! - Recording: the bars of count-in before recording.
 //! - Tuning: the reference pitch of software instruments, A4 = 427 to 453 Hz.
-//! - Audio: which output the engine plays on (read only: the system's default output is used;
-//!   inputs are chosen on each audio track).
+//! - Audio: the output device and the I/O buffer size the engine plays on, with the latency
+//!   they give (applied at once: the engine restarts on the choice). Inputs are still chosen on
+//!   each audio track. One page, as the Devices page of Logic Pro's Settings > Audio.
 //! - MIDI: which MIDI input plays live notes.
 
+use crate::audio_prefs::AudioPrefs;
 use crate::i18n::{tr, trf};
 use crate::model::{
     Project, DEFAULT_CLICK_DB, MAX_COUNT_IN_BARS, MAX_TUNING_HZ, MIN_CLICK_DB, MIN_TUNING_HZ,
@@ -74,6 +76,7 @@ const MAX_NAME_CHARS: usize = 128;
 /// by the engine sync on the next frame.
 pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut crate::UiState) {
     let Some(mut tab) = s.settings_tab else {
+        s.audio_tab_open = false;
         return;
     };
     let mut open = true;
@@ -97,11 +100,19 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut crate::UiState) {
                 SettingsTab::Metronome => metronome(ui, p),
                 SettingsTab::Recording => recording(ui, p),
                 SettingsTab::Tuning => tuning(ui, p),
-                SettingsTab::Audio => audio(ui, s.audio_info.as_ref()),
+                SettingsTab::Audio => audio(ui, s),
                 SettingsTab::Midi => midi(ui, p, &mut s.midi_panic),
             }
         });
     s.settings_tab = open.then_some(tab);
+    // The Audio tab reads the system's outputs when it is opened, not every frame. The frame
+    // after a switch draws the lists read now.
+    let audio_open = s.settings_tab == Some(SettingsTab::Audio);
+    if audio_open && !s.audio_tab_open {
+        s.refresh_audio_list();
+        ctx.request_repaint();
+    }
+    s.audio_tab_open = audio_open;
 }
 
 fn general(ui: &mut egui::Ui, p: &mut Project) {
@@ -161,14 +172,109 @@ fn tuning(ui: &mut egui::Ui, p: &mut Project) {
     });
 }
 
-fn audio(ui: &mut egui::Ui, info: Option<&(String, u32)>) {
-    if let Some((device, rate)) = info {
-        ui.label(trf("Output Device: {}", &[device]));
-        ui.label(trf("Sample Rate: {} Hz", &[rate]));
-    }
+/// Logic Pro's Settings > Audio: rows of a right-aligned label and its control. A choice is
+/// only asked for here (`UiState::audio_request`); `App` restarts the engine on it.
+fn audio(ui: &mut egui::Ui, s: &mut crate::UiState) {
+    let prefs = s.audio_prefs.clone();
+    let info = s.audio_info.clone();
+    let mut request = None;
+    egui::Grid::new("audio_settings")
+        .num_columns(2)
+        .spacing([12.0, 8.0])
+        .show(ui, |ui| {
+            row_label(ui, tr("Output Device"));
+            let shown = prefs
+                .device
+                .as_deref()
+                .and_then(|id| s.audio_devices.iter().find(|d| d.id == id))
+                .map_or_else(|| tr("System Default").to_string(), |d| d.name.clone());
+            egui::ComboBox::from_id_salt("audio_output_device")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(prefs.device.is_none(), tr("System Default"))
+                        .clicked()
+                    {
+                        request = Some(device_choice(&prefs, None));
+                    }
+                    for d in &s.audio_devices {
+                        let on = prefs.device.as_deref() == Some(d.id.as_str());
+                        if ui.selectable_label(on, &d.name).clicked() {
+                            request = Some(device_choice(&prefs, Some(d.id.clone())));
+                        }
+                    }
+                });
+            ui.end_row();
+
+            row_label(ui, tr("I/O Buffer Size"));
+            ui.horizontal(|ui| {
+                let effective = prefs.buffer.or(info.as_ref().and_then(|i| i.buffer_frames));
+                buffer_popup(ui, &prefs, s.audio_buffer_range, effective, &mut request);
+                ui.label(tr("Samples"));
+            });
+            ui.end_row();
+
+            row_label(ui, tr("Resulting Latency"));
+            match info.as_ref().and_then(|i| i.latency_ms()) {
+                Some(ms) => ui.label(trf("Output {} ms", &[&format!("{ms:.1}")])),
+                None => ui.label(""),
+            };
+            ui.end_row();
+
+            row_label(ui, tr("Sample Rate"));
+            match info.as_ref() {
+                Some(i) => ui.label(trf("{} Hz", &[&i.sample_rate])),
+                None => ui.label(""),
+            };
+            ui.end_row();
+        });
+    ui.separator();
     ui.label(tr(
         "Inputs are chosen with the Input slot of each audio track.",
     ));
+    if request.is_some() {
+        s.audio_request = request;
+    }
+}
+
+/// The I/O buffer size popup: the sizes the device takes, with the one in use shown. `effective`
+/// is the size the engine runs at (the default's, when no size was chosen). Returns the button's
+/// response.
+fn buffer_popup(
+    ui: &mut egui::Ui,
+    prefs: &AudioPrefs,
+    range: Option<(u32, u32)>,
+    effective: Option<u32>,
+    request: &mut Option<AudioPrefs>,
+) -> egui::Response {
+    let shown = effective.map_or_else(|| tr("Default").to_string(), |n| n.to_string());
+    egui::ComboBox::from_id_salt("audio_buffer_size")
+        .selected_text(shown)
+        .show_ui(ui, |ui| {
+            for n in prowave_engine::buffer_choices(range) {
+                if ui
+                    .selectable_label(prefs.buffer == Some(n), n.to_string())
+                    .clicked()
+                {
+                    *request = Some(prefs.with_buffer(Some(n)));
+                }
+            }
+        })
+        .response
+}
+
+/// The choice that plays on `device` (`None`: the system's default), keeping the buffer size
+/// when that device takes it.
+fn device_choice(prefs: &AudioPrefs, device: Option<String>) -> AudioPrefs {
+    let range = prowave_engine::buffer_range(device.as_deref());
+    prefs.with_device(device, range)
+}
+
+/// A label right-aligned in its column, as the rows of Logic Pro's Settings have them.
+fn row_label(ui: &mut egui::Ui, text: &str) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.label(text);
+    });
 }
 
 fn midi(ui: &mut egui::Ui, p: &mut Project, panic: &mut bool) {
@@ -233,10 +339,71 @@ mod tests {
         for tab in SettingsTab::ALL {
             let (mut p, mut s) = (Project::demo(), crate::UiState::new());
             s.settings_tab = Some(tab);
-            s.audio_info = Some(("Speakers".into(), 48_000));
+            s.audio_info = Some(crate::engine_sync::AudioInfo {
+                device: "Speakers".into(),
+                sample_rate: 48_000,
+                buffer_frames: Some(128),
+                output_latency_us: None,
+            });
             run(&mut p, &mut s);
             assert_eq!(s.settings_tab, Some(tab));
         }
+    }
+
+    #[test]
+    fn the_audio_tab_draws_its_rows_and_opens_the_buffer_popup() {
+        use crate::engine_sync::AudioInfo;
+        use prowave_engine::OutputDevice;
+        let mut s = crate::UiState::new();
+        s.settings_tab = Some(SettingsTab::Audio);
+        // Set `audio_tab_open` so the lists below are kept instead of read from the system.
+        s.audio_tab_open = true;
+        s.audio_prefs = AudioPrefs {
+            device: Some("desk".into()),
+            buffer: Some(128),
+        };
+        s.audio_devices = vec![
+            OutputDevice {
+                id: "desk".into(),
+                name: "Desk Speakers".into(),
+            },
+            OutputDevice {
+                id: "usb".into(),
+                name: "USB Interface".into(),
+            },
+        ];
+        s.audio_buffer_range = Some((16, 2048));
+        s.audio_info = Some(AudioInfo {
+            device: "Desk Speakers".into(),
+            sample_rate: 48_000,
+            buffer_frames: Some(128),
+            output_latency_us: Some(5_000),
+        });
+        let mut h = crate::ui_test::Harness::new(900.0, 600.0);
+        let (prefs, range) = (s.audio_prefs.clone(), s.audio_buffer_range);
+        let mut request = None;
+        let mut button = None;
+        for _ in 0..2 {
+            h.frame(vec![], |ui| {
+                button = Some(buffer_popup(ui, &prefs, range, Some(128), &mut request).rect);
+            });
+        }
+        let rect = button.expect("the buffer size popup is drawn");
+        h.click(rect.center(), |ui| {
+            buffer_popup(ui, &prefs, range, Some(128), &mut request);
+        });
+        h.frame(vec![], |ui| {
+            buffer_popup(ui, &prefs, range, Some(128), &mut request);
+        });
+        assert!(
+            egui::Popup::is_any_open(&h.ctx),
+            "the buffer size popup opened"
+        );
+        // Only a choice made in the popup asks for a change.
+        assert!(request.is_none());
+        // The whole tab draws with the lists and the info given above.
+        h.frame(vec![], |ui| audio(ui, &mut s));
+        assert!(s.audio_tab_open && s.audio_prefs.buffer == Some(128));
     }
 
     #[test]
