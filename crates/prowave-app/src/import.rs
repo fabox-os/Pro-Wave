@@ -100,6 +100,7 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         soundfont: None,
         sampler: None,
         epiano: None,
+        drums: None,
         icon: None,
         midi_channel: 1,
         midi_program: None,

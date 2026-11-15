@@ -417,6 +417,9 @@ pub(crate) mod tests {
         for t in crate::tooltips::all_texts() {
             add(t);
         }
+        for kind in prowave_engine::drum_machine::PadKind::ALL {
+            add(kind.name());
+        }
         for (t, _) in crate::inspector::QUANTIZE {
             add(t);
         }

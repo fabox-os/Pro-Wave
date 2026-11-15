@@ -689,6 +689,9 @@ pub struct Track {
     /// The physically modelled Electric Piano the track plays instead of its synth patch or
     /// SoundFont (it wins over a SoundFont).
     pub epiano: Option<EPianoUse>,
+    /// The Drum Machine the track plays: sixteen pads on the keys 36 to 51 (it wins over the
+    /// Sampler and a SoundFont).
+    pub drums: Option<crate::drum_kit::DrumsUse>,
     /// The icon the user picked (Track > Assign Track Icon); `None` is the automatic one.
     pub icon: Option<crate::track_icons::IconKind>,
 }
@@ -781,6 +784,7 @@ impl Track {
             soundfont: None,
             sampler: None,
             epiano: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,
@@ -999,6 +1003,7 @@ impl Project {
             soundfont: None,
             sampler: None,
             epiano: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,
@@ -1064,6 +1069,7 @@ impl Project {
             soundfont: None,
             sampler: None,
             epiano: None,
+            drums: None,
             icon: None,
             midi_channel: 1,
             midi_program: None,

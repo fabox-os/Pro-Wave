@@ -75,6 +75,7 @@ fn use_soundfont_file(p: &mut Project, ti: usize, path: String) {
     });
     p.tracks[ti].epiano = None;
     p.tracks[ti].sampler = None;
+    p.tracks[ti].drums = None;
 }
 
 /// The Sampler's dials as inspector rows: dial, name, drag steps per unit and range in steps.
@@ -126,6 +127,7 @@ fn use_sampler(p: &mut Project, ti: usize, source: crate::sampler_load::SamplerS
     p.tracks[ti].sampler = Some(crate::model::SamplerUse::new(source));
     p.tracks[ti].soundfont = None;
     p.tracks[ti].epiano = None;
+    p.tracks[ti].drums = None;
 }
 
 /// The Sampler's rows under the instrument row: its three dials, and for a single audio file its
@@ -988,7 +990,9 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                 let current = p.tracks[ti].soundfont.clone();
                 let piano = p.tracks[ti].epiano;
                 let sampler = p.tracks[ti].sampler.clone();
+                let has_drums = p.tracks[ti].drums.is_some();
                 let shown = match (&current, piano) {
+                    _ if has_drums => tr("Drum Machine").to_string(),
                     _ if sampler.is_some() => {
                         let name = sampler
                             .as_ref()
@@ -1025,7 +1029,27 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                             p.tracks[ti].epiano = Some(crate::model::EPianoUse::default());
                             p.tracks[ti].soundfont = None;
                             p.tracks[ti].sampler = None;
+                            p.tracks[ti].drums = None;
                             ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(tr("Drum Machine")).clicked() {
+                            p.tracks[ti].drums = Some(crate::drum_kit::DrumsUse::new());
+                            p.tracks[ti].sampler = None;
+                            p.tracks[ti].epiano = None;
+                            p.tracks[ti].soundfont = None;
+                            s.show_drum_machine = Some(ti);
+                            ui.close();
+                        }
+                        if has_drums {
+                            if ui.button(tr("Edit Drum Machine…")).clicked() {
+                                s.show_drum_machine = Some(ti);
+                                ui.close();
+                            }
+                            if ui.button(tr("Remove Drum Machine")).clicked() {
+                                p.tracks[ti].drums = None;
+                                ui.close();
+                            }
                         }
                         ui.separator();
                         ui.menu_button(tr("Sampler"), |ui| {

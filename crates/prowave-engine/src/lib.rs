@@ -17,6 +17,7 @@ mod clock;
 mod convolver;
 mod core;
 mod disk;
+pub mod drum_machine;
 pub mod epiano;
 mod flex;
 mod fx;

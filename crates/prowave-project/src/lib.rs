@@ -279,6 +279,8 @@ pub struct TrackDoc {
     pub sampler: Option<SamplerDoc>,
     /// The dials of an Electric Piano the track plays (none: not an Electric Piano).
     pub epiano: Option<Vec<f32>>,
+    /// The Drum Machine the track plays (none: not a Drum Machine).
+    pub drums: Option<DrumsDoc>,
     /// The icon the user picked (`IconKind::name`); absent or unknown names give the automatic one.
     pub icon: Option<String>,
     /// Audio tracks: the first input channel they record (0 is Input 1), and whether they
@@ -338,6 +340,29 @@ pub struct SamplerDoc {
     pub looped: bool,
     /// The dials (Level, Attack, Release).
     pub params: Vec<f32>,
+}
+
+/// A track's Drum Machine in a project file: its sixteen pads.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct DrumsDoc {
+    pub pads: Vec<PadDoc>,
+}
+
+/// One drum pad in a project file.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct PadDoc {
+    /// The drum: `Kick`, `Snare`, `Sample`…
+    pub kind: String,
+    pub tune: f32,
+    pub decay: f32,
+    pub tone: f32,
+    pub level_db: f32,
+    pub pan: f32,
+    pub choke: u8,
+    /// The sample file of a `Sample` pad.
+    pub sample: Option<String>,
 }
 
 /// The automation lane of one effect parameter.
@@ -454,6 +479,7 @@ impl Default for TrackDoc {
             soundfont_program: 0,
             sampler: None,
             epiano: None,
+            drums: None,
             icon: None,
             input: 0,
             input_stereo: false,
