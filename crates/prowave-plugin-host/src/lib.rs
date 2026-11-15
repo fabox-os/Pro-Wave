@@ -580,6 +580,17 @@ impl Processor {
             ProcessorKind::Remote(p) => p.reset(),
         }
     }
+
+    /// Offline rendering (not in real time): a plug-in in its own process is waited for, block
+    /// by block, instead of its late blocks passing dry. A plug-in in this process runs at the
+    /// engine's own pace, so nothing changes for it.
+    pub fn set_offline(&mut self, offline: bool) {
+        match &mut self.0 {
+            ProcessorKind::Local(_) => {}
+            #[cfg(unix)]
+            ProcessorKind::Remote(p) => p.set_offline(offline),
+        }
+    }
 }
 
 /// The folders plug-ins of `format` are installed in on this system (existing or not).

@@ -916,3 +916,6 @@ Not found = Hindi nahanap
 In Use = Ginagamit
 LADSPA scan = LADSPA scan
 Vamp scan = Vamp scan
+the engine did not take the project in time; no file was written = hindi tinanggap ng engine ang proyekto sa tamang oras; walang file na naisulat
+the bounce has not finished = hindi pa tapos ang bounce
+cannot bounce: there is no audio output = hindi maaaring mag-bounce: walang audio output

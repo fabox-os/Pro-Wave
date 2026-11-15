@@ -180,6 +180,10 @@ impl BlockEffect for Hosted {
     fn boxed_clone(&self) -> Option<Box<dyn BlockEffect>> {
         Some(Box::new(Hosted(self.0.clone())))
     }
+
+    fn set_offline(&mut self, offline: bool) {
+        self.0.set_offline(offline);
+    }
 }
 
 /// Puts `info` in the rack, with the state a project file had for it, and returns its number

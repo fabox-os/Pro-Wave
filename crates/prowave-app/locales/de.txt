@@ -916,3 +916,6 @@ Not found = Nicht gefunden
 In Use = In Verwendung
 LADSPA scan = LADSPA-Suche
 Vamp scan = Vamp-Suche
+the engine did not take the project in time; no file was written = die Engine hat das Projekt nicht rechtzeitig übernommen; es wurde keine Datei geschrieben
+the bounce has not finished = der Bounce ist noch nicht fertig
+cannot bounce: there is no audio output = Bounce nicht möglich: keine Audioausgabe
