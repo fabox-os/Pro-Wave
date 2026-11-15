@@ -42,7 +42,7 @@ pub fn category(kind: FxKind) -> &'static str {
         FxKind::Delay => "Delay",
         FxKind::Overdrive => "Distortion",
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => "Dynamics",
-        FxKind::ChannelEq | FxKind::MultiEq => "EQ",
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => "EQ",
         FxKind::Filter => "Filter",
         FxKind::Chorus | FxKind::Phaser => "Modulation",
         FxKind::Reverb => "Reverb",

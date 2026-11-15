@@ -8,6 +8,7 @@
 //! not finite is clamped, so a damaged project cannot make the output blow up.
 use crate::convolver::Convolver;
 use crate::plugin::{BlockEffect, PluginSlot, PLUGIN_BLOCK};
+use crate::pult_eq::PultState;
 use std::f32::consts::{PI, TAU};
 
 /// Most parameters one effect has.
@@ -34,6 +35,8 @@ pub enum FxKind {
     /// A hosted LADSPA effect (see [`crate::plugin`]). Its parameters are positions from 0
     /// to 1 along each control port's range; the app names and scales them from the plug-in.
     Plugin,
+    /// Pult EQ: a Pultec-style tube equaliser (see [`crate::pult_eq`]).
+    PultEq,
 }
 
 /// One parameter of an effect.
@@ -243,6 +246,21 @@ const PLUGIN_PARAMS: [ParamInfo; MAX_FX_PARAMS] = [
     p("Parameter 30", 0.0, 1.0, 0.5, ""),
     p("Parameter 31", 0.0, 1.0, 0.5, ""),
     p("Parameter 32", 0.0, 1.0, 0.5, ""),
+/// Pult EQ's dials (see `pult_eq.rs`): the selectors are whole numbers, the boosts and cuts run
+/// 0 to 10 like the hardware's dials.
+const PULT_PARAMS: [ParamInfo; crate::pult_eq::idx::COUNT] = [
+    p("Mode", 0.0, 3.0, 1.0, ""),
+    p("Input", -12.0, 12.0, 0.0, "dB"),
+    p("Low Freq", 0.0, 3.0, 2.0, ""),
+    p("Low Boost", 0.0, 10.0, 0.0, ""),
+    p("Low Atten", 0.0, 10.0, 0.0, ""),
+    p("High Boost", 0.0, 10.0, 0.0, ""),
+    p("High Freq", 0.0, 6.0, 3.0, ""),
+    p("Bandwidth", 0.0, 10.0, 5.0, ""),
+    p("High Atten", 0.0, 10.0, 0.0, ""),
+    p("Atten Freq", 0.0, 2.0, 1.0, ""),
+    p("Drive", 0.0, 10.0, 0.0, ""),
+    p("Output", -12.0, 12.0, 0.0, "dB"),
 ];
 const AMP_PARAMS: [ParamInfo; 9] = [
     p("Amp", 0.0, 4.0, 0.0, ""),
@@ -454,7 +472,7 @@ fn limiter_len(sr: f32) -> usize {
 }
 
 impl FxKind {
-    pub const ALL: [FxKind; 13] = [
+    pub const ALL: [FxKind; 14] = [
         FxKind::ChannelEq,
         FxKind::Compressor,
         FxKind::MultiComp,
@@ -468,6 +486,7 @@ impl FxKind {
         FxKind::Limiter,
         FxKind::MultiEq,
         FxKind::Amp,
+        FxKind::PultEq,
     ];
 
     /// The name the mixer shows in the slot.
@@ -487,6 +506,7 @@ impl FxKind {
             FxKind::MultiEq => "Multi-Band EQ",
             FxKind::Amp => "Amp Designer",
             FxKind::Plugin => "Plug-in",
+            FxKind::PultEq => "Pult EQ",
         }
     }
 
@@ -523,6 +543,7 @@ impl FxKind {
             "multi-band eq" | "multiband eq" | "multi band eq" => FxKind::MultiEq,
             "amp designer" | "amp" | "guitar amp" => FxKind::Amp,
             "plug-in" | "plugin" | "ladspa" => FxKind::Plugin,
+            "pult eq" | "pulteq" | "pultec eq" | "tube eq" => FxKind::PultEq,
             _ => return None,
         })
     }
@@ -544,6 +565,7 @@ impl FxKind {
             FxKind::MultiEq => &MULTI_PARAMS,
             FxKind::Amp => &AMP_PARAMS,
             FxKind::Plugin => &PLUGIN_PARAMS,
+            FxKind::PultEq => &PULT_PARAMS,
         }
     }
 
@@ -573,7 +595,7 @@ impl FxKind {
 
 /// One biquad filter (RBJ cookbook), per channel state in transposed direct form II.
 #[derive(Clone, Copy, Debug, Default)]
-struct Biquad {
+pub(crate) struct Biquad {
     b0: f32,
     b1: f32,
     b2: f32,
@@ -584,7 +606,7 @@ struct Biquad {
 }
 
 #[derive(Clone, Copy)]
-enum Shape {
+pub(crate) enum Shape {
     LowShelf,
     HighShelf,
     Peak,
@@ -594,14 +616,14 @@ enum Shape {
 }
 
 impl Biquad {
-    fn unity() -> Self {
+    pub(crate) fn unity() -> Self {
         Self {
             b0: 1.0,
             ..Self::default()
         }
     }
 
-    fn make(shape: Shape, freq: f32, q: f32, gain_db: f32, sr: f32) -> Self {
+    pub(crate) fn make(shape: Shape, freq: f32, q: f32, gain_db: f32, sr: f32) -> Self {
         let f = freq.clamp(10.0, sr * 0.45);
         let w = TAU * f / sr;
         let (sin, cos) = (w.sin(), w.cos());
@@ -668,7 +690,7 @@ impl Biquad {
     }
 
     /// The new filter with the old one's memory, so a knob that turns does not click.
-    fn retuned(self, new: Biquad) -> Biquad {
+    pub(crate) fn retuned(self, new: Biquad) -> Biquad {
         Biquad {
             z1: self.z1,
             z2: self.z2,
@@ -677,7 +699,7 @@ impl Biquad {
     }
 
     /// The same filter with its memory cleared.
-    fn cleared(self) -> Self {
+    pub(crate) fn cleared(self) -> Self {
         Self {
             z1: 0.0,
             z2: 0.0,
@@ -686,7 +708,7 @@ impl Biquad {
     }
 
     #[inline]
-    fn tick(&mut self, x: f32) -> f32 {
+    pub(crate) fn tick(&mut self, x: f32) -> f32 {
         let y = self.b0 * x + self.z1;
         self.z1 = self.b1 * x - self.a1 * y + self.z2;
         self.z2 = self.b2 * x - self.a2 * y;
@@ -694,7 +716,7 @@ impl Biquad {
     }
 
     /// Gain in dB at `freq`.
-    fn response_db(&self, freq: f32, sr: f32) -> f32 {
+    pub(crate) fn response_db(&self, freq: f32, sr: f32) -> f32 {
         let w = TAU * freq.clamp(1.0, sr * 0.5) / sr;
         let (c1, s1, c2, s2) = (w.cos(), w.sin(), (2.0 * w).cos(), (2.0 * w).sin());
         let nr = self.b0 + self.b1 * c1 + self.b2 * c2;
@@ -735,6 +757,9 @@ pub fn response_db(kind: FxKind, params: [f32; MAX_FX_PARAMS], freqs: &[f32], sr
     let filters: Vec<Biquad> = match kind {
         FxKind::ChannelEq => eq_filters(&params, sr).to_vec(),
         FxKind::MultiEq => multi_filters(&params, sr).to_vec(),
+        FxKind::PultEq if params[crate::pult_eq::idx::MODE].round() as i32 != 0 => {
+            crate::pult_eq::filters(&params, sr).to_vec()
+        }
         _ => Vec::new(),
     };
     freqs
@@ -1088,6 +1113,7 @@ enum State {
     Filter([Biquad; 2]),
     Amp(Box<AmpState>),
     Plugin(Box<PluginSlot>),
+    PultEq(Box<PultState>),
 }
 
 /// One effect with its state. Make it with [`Fx::new`] off the audio thread.
@@ -1153,6 +1179,7 @@ impl Fx {
             FxKind::MultiEq => State::MultiEq([[Biquad::unity(); 6]; 2]),
             FxKind::Amp => State::Amp(Box::new(AmpState::new())),
             FxKind::Plugin => State::Plugin(Box::new(PluginSlot::empty())),
+            FxKind::PultEq => State::PultEq(Box::new(PultState::new())),
         };
         let mut fx = Self {
             kind,
@@ -1333,6 +1360,7 @@ impl Fx {
                     s.set_param(i, *v);
                 }
             }
+            State::PultEq(s) => s.retune(&pr, sr),
             State::Amp(s) => {
                 let model = &AMP_VOICES[pr[0].round().clamp(0.0, 4.0) as usize];
                 // The Gain knob is spread over the four valves, so each one clips in turn.
@@ -1594,6 +1622,7 @@ impl Fx {
             }
             State::Filter(f) => (f[0].tick(l), f[1].tick(r)),
             State::Plugin(s) => s.tick(l, r),
+            State::PultEq(s) => s.process(&pr, l, r),
             State::Amp(s) => {
                 let input = [l, r];
                 let mut out = [0f32; 2];
@@ -1747,6 +1776,7 @@ impl Fx {
                 s.dc_out = [0.0; 2];
             }
             State::Plugin(s) => s.reset(),
+            State::PultEq(s) => s.reset(),
             State::Amp(s) => {
                 s.input_hp.iter_mut().for_each(|b| *b = b.cleared());
                 s.pre_lp.iter_mut().for_each(|b| *b = b.cleared());
