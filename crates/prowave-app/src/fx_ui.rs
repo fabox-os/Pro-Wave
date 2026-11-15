@@ -58,7 +58,7 @@ enum Family {
 
 fn family(kind: FxKind) -> (Family, &'static str, Color32) {
     match kind {
-        FxKind::ChannelEq | FxKind::MultiEq => (Family::Eq, "EQ", EQ_BLUE),
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => (Family::Eq, "EQ", EQ_BLUE),
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => {
             (Family::Dynamics, "Dynamics", DYN_AMBER)
         }
@@ -71,7 +71,7 @@ fn family(kind: FxKind) -> (Family, &'static str, Color32) {
 
 fn window_width(kind: FxKind) -> f32 {
     match kind {
-        FxKind::ChannelEq | FxKind::MultiEq => 632.0,
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => 632.0,
         FxKind::Amp => AMP_W + 28.0,
         FxKind::MultiComp => 604.0,
         _ => 560.0,
@@ -225,7 +225,9 @@ fn header(
 fn visual(ui: &mut Ui, insert: &Insert, reduction: f32, beat: f64, accent: Color32) {
     let params = insert.kind.clamp_params(insert.params);
     match insert.kind {
-        FxKind::ChannelEq | FxKind::MultiEq => eq_curve(ui, insert.kind, &params, accent),
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => {
+            eq_curve(ui, insert.kind, &params, accent)
+        }
         FxKind::Compressor | FxKind::Gate | FxKind::Limiter => {
             transfer_curve(ui, insert.kind, &params, reduction, accent)
         }
@@ -342,6 +344,11 @@ fn param_text(kind: FxKind, info: &ParamInfo, v: f32) -> String {
     if kind == FxKind::Filter && info.name == "Mode" {
         return ["Low Pass", "High Pass", "Band Pass"][(v.round() as usize).min(2)].to_string();
     }
+    if kind == FxKind::PultEq {
+        if let Some(text) = pult_text(info.name, v) {
+            return text;
+        }
+    }
     if matches!(info.name, "Amp" | "Cabinet") {
         return format!("{:.0}", v + 1.0);
     }
@@ -349,6 +356,27 @@ fn param_text(kind: FxKind, info: &ParamInfo, v: f32) -> String {
         return if v >= 0.5 { "On".into() } else { "Off".into() };
     }
     knob_text(info, v)
+}
+
+/// Pult EQ's selectors by name (the knob stops at whole positions): the mode, and the frequency
+/// of each selector; its dials run 0 to 10 like the hardware's.
+fn pult_text(name: &str, v: f32) -> Option<String> {
+    use prowave_engine::pult_eq::{atten_freq_hz, high_freq_hz, low_freq_hz, mode_name};
+    let hz = |f: f32| {
+        if f >= 1000.0 {
+            format!("{} kHz", f / 1000.0)
+        } else {
+            format!("{f} Hz")
+        }
+    };
+    match name {
+        "Mode" => Some(tr(mode_name(v)).to_string()),
+        "Low Freq" => Some(hz(low_freq_hz(v))),
+        "High Freq" => Some(hz(high_freq_hz(v))),
+        "Atten Freq" => Some(hz(atten_freq_hz(v))),
+        "Input" | "Output" => None,
+        _ => Some(format!("{v:.1}")),
+    }
 }
 
 /// Draws an arc between two angles (radians, screen space) around `c`.
@@ -1288,6 +1316,34 @@ mod tests {
         }
         assert_eq!(s.mixer.fx_window, Some((0, 0)));
         assert_eq!(p.tracks[0].inserts[0], Insert::new(FxKind::Reverb));
+    }
+
+    #[test]
+    fn the_pult_eq_window_draws_names_its_selectors_and_survives_a_save() {
+        let mut p = Project::empty();
+        let mut ins = Insert::new(FxKind::PultEq);
+        ins.params[prowave_engine::pult_eq::idx::LOW_BOOST] = 6.0;
+        ins.params[prowave_engine::pult_eq::idx::HIGH_FREQ] = 6.0;
+        p.tracks[0].inserts = vec![ins];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)));
+        assert_eq!(pult_text("Mode", 1.0).as_deref(), Some("Stereo"));
+        assert_eq!(pult_text("Low Freq", 3.0).as_deref(), Some("100 Hz"));
+        assert_eq!(pult_text("High Freq", 6.0).as_deref(), Some("16 kHz"));
+        assert_eq!(pult_text("Low Boost", 6.0).as_deref(), Some("6.0"));
+        assert_eq!(pult_text("Output", 1.0), None);
+        // It is saved by name and opens again with the same settings.
+        let (doc, _) = crate::project_io::to_doc(&p);
+        assert_eq!(doc.tracks[0].fx[0].kind, "Pult EQ");
+        let (back, _) =
+            crate::project_io::from_doc(&doc, std::path::Path::new("."), &egui::Context::default());
+        assert_eq!(back.tracks[0].inserts, p.tracks[0].inserts);
     }
 
     #[test]
