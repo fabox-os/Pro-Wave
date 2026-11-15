@@ -3,7 +3,7 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
-## Unreleased
+## 0.3.0
 
 ### All systems (Windows, macOS, Linux)
 
@@ -87,6 +87,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **Mixer on short windows:** on a 768-point-tall screen the Mixer panel was too short for a channel strip and cut off everything under the Pan knob. The panel is now never shorter than one whole strip (it follows the project's Audio FX slots and sends), and still no taller than the room there is.
 
 ### Still to do or test
+
+❌ Not yet tried by hand on Windows and macOS: the Drum Machine window, the Sampler rows in the Inspector, Musical Typing, Split and Join, Track Stacks, the audio device and buffer settings, Bounce to FLAC and the plug-in hosting (LADSPA, CLAP, VST3, Audio Unit). Their tests run on all three systems, but the screens were checked on Linux only. On Windows a CLAP, VST3 or LADSPA plug-in that crashes takes Pro Wave down with it (macOS and Linux run CLAP, VST3 and Audio Unit plug-ins in a process of their own). Hosted plug-in instruments are not supported yet, only effects.
 
 ❌ MusicXML import; GarageBand tempo, signature and arrangement (see `GARAGEBAND-FORMAT-SPEC.md`); Hydrogen kits and the new menu entries (Import Audio File, Show in File Manager, Undo History) were tested by automated tests on Linux only, not on Windows or macOS
 
