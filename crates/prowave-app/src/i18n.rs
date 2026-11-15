@@ -409,6 +409,8 @@ pub(crate) mod tests {
             add(t);
         }
         for (_, t, _, _) in crate::inspector::PIANO_ROWS {
+            add(t);
+        }
         for t in crate::tooltips::all_texts() {
             add(t);
         }
