@@ -3447,6 +3447,7 @@ dependencies = [
  "muda",
  "prowave-engine",
  "prowave-garageband-import",
+ "prowave-logicx-import",
  "prowave-plugin-host",
  "prowave-project",
  "rfd",
