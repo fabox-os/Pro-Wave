@@ -162,7 +162,18 @@ fn chain_of(inserts: &[Insert], sample_rate: f32) -> Box<Chain> {
     Box::new(Chain::new(
         inserts
             .iter()
-            .map(|i| Fx::new(i.kind, i.params, i.bypass, sample_rate))
+            .map(|i| {
+                let mut fx = Fx::new(i.kind, i.params, i.bypass, sample_rate);
+                // A LADSPA plug-in is started here, off the audio thread. One that cannot
+                // start leaves its slot passing the sound through (with the same delay).
+                if let Some(id) = i.plugin {
+                    match crate::plugins::load_effect(id, sample_rate) {
+                        Ok(plugin) => fx.set_plugin(plugin),
+                        Err(e) => tracing::warn!("plug-in {}: {e}", crate::plugins::name(id)),
+                    }
+                }
+                fx
+            })
             .collect(),
     ))
 }
@@ -235,7 +246,10 @@ fn latency_of(t: &Track, sample_rate: f32) -> usize {
     t.inserts
         .iter()
         .filter(|i| !i.bypass)
-        .map(|i| i.kind.latency_samples(sample_rate))
+        .map(|i| {
+            i.kind.latency_samples(sample_rate)
+                + i.plugin.map_or(0, crate::plugins::reported_latency)
+        })
         .sum()
 }
 
@@ -778,7 +792,10 @@ impl EngineSync {
                 .filter(|_| i < MAX_TRACKS)
                 .map_or(&[], |t| &t.inserts);
             let same_kinds = self.fx[i].len() == want.len()
-                && self.fx[i].iter().zip(want).all(|(a, b)| a.kind == b.kind);
+                && self.fx[i]
+                    .iter()
+                    .zip(want)
+                    .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin);
             if !same_kinds {
                 let chain = chain_of(want, sr);
                 if !self.send(Command::SetInserts {
@@ -874,7 +891,7 @@ impl EngineSync {
                 .master_fx
                 .iter()
                 .zip(want)
-                .all(|(a, b)| a.kind == b.kind);
+                .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin);
         if !same_kinds {
             if !self.send(Command::SetMasterInserts(chain_of(want, sr))) {
                 return false;

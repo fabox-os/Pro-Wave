@@ -299,6 +299,24 @@ pub struct InsertDoc {
     pub kind: String,
     pub bypass: bool,
     pub params: Vec<f32>,
+    /// The LADSPA plug-in of a `Plug-in` effect.
+    pub plugin: Option<PluginDoc>,
+}
+
+/// A hosted plug-in a project uses (a LADSPA effect): which library file, and which plug-in in
+/// it. The settings of an effect are the insert's `params`, as positions 0 to 1 along each
+/// control's range.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct PluginDoc {
+    /// `LADSPA`.
+    pub format: String,
+    /// The library file when the project was saved; on another machine the file name is
+    /// looked for in the plug-in folders.
+    pub library: String,
+    pub label: String,
+    pub unique_id: u64,
+    pub name: String,
 }
 
 /// The automation lane of one effect parameter.
