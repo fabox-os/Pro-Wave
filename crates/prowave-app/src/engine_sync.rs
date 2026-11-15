@@ -1,6 +1,7 @@
 //! Bridges the UI project model to `prowave-engine` using only `Command`s (never direct mutation).
+use crate::drum_kit::DrumsUse;
 use crate::model::TrackKind;
-use crate::model::{Insert, Project, Region, SoundFontUse, TempoPoint, Track};
+use crate::model::{Insert, Project, Region, SamplerUse, SoundFontUse, TempoPoint, Track};
 use crate::patches::synth_patch;
 use prowave_engine::{
     AutoLane, AutoTarget, Chain, Command, ControlEvent, Engine, Fx, InputSource, MonitorTrack,
@@ -52,6 +53,16 @@ pub struct EngineSync {
     patches: Vec<SynthPatch>,
     /// The SoundFont each track was last given (`None`: its synth patch), by track.
     soundfonts: Vec<Option<SoundFontUse>>,
+    /// The Drum Machine each track was last given, by track (`None`: none).
+    drum_kits: Vec<Option<DrumsUse>>,
+    /// Drum machines being built off the UI thread, by track.
+    drum_jobs: std::collections::HashMap<usize, DrumJob>,
+    /// The Sampler each track was last given, by track (`None`: none).
+    samplers: Vec<Option<SamplerUse>>,
+    /// Samplers being loaded off the UI thread, by track.
+    sampler_jobs: std::collections::HashMap<usize, SamplerJob>,
+    /// The Electric Piano dials each track was last given (`None`: no Electric Piano), by track.
+    pianos: Vec<Option<[f32; prowave_engine::epiano::PARAMS]>>,
     /// Which tracks the engine was told are external, by track.
     externals: Vec<bool>,
     /// The controller changes the engine has.
@@ -77,22 +88,49 @@ pub struct EngineSync {
 
 /// The settings that change the impulse response of a Space Designer (not Predelay, Dry, Wet,
 /// Input or Output EQ, which the audio thread applies as they move).
-fn ir_key(params: &[f32; prowave_engine::MAX_FX_PARAMS]) -> Vec<u32> {
-    prowave_engine::IR_PARAMS
+fn ir_key(insert: &Insert) -> Vec<u32> {
+    let mut key: Vec<u32> = prowave_engine::IR_PARAMS
         .iter()
-        .map(|&i| params[i].to_bits())
-        .collect()
+        .map(|&i| insert.params[i].to_bits())
+        .collect();
+    // A different impulse-response file is a different response.
+    key.push(
+        insert
+            .ir_file
+            .map_or(u32::MAX, crate::ir_files::IrFileId::number),
+    );
+    key
 }
 
 /// The key of the master bus in the Space Designer jobs (no track has this number).
 const MASTER_KEY: usize = usize::MAX;
+
+/// A Drum Machine being built on a background thread.
+struct DrumJob {
+    kit: DrumsUse,
+    rx: Option<std::sync::mpsc::Receiver<prowave_engine::drum_machine::DrumMachine>>,
+}
+
+/// A Sampler being loaded on a background thread.
+struct SamplerJob {
+    source: crate::sampler_load::SamplerSource,
+    /// The dials it was built with.
+    params: [f32; prowave_engine::sampler::PARAMS],
+    rx: Option<std::sync::mpsc::Receiver<Result<prowave_engine::sampler::Sampler, String>>>,
+    ready: Option<prowave_engine::sampler::Sampler>,
+    /// It could not be loaded: not tried again until the source changes.
+    failed: bool,
+}
 
 /// A Space Designer response being made on a background thread. Settings that change while it
 /// runs wait in `next`; only the newest is made after it, so dragging a control does not queue
 /// up work.
 struct IrJob {
     running: Option<std::sync::mpsc::Receiver<Box<prowave_engine::Convolver>>>,
-    next: Option<[f32; prowave_engine::MAX_FX_PARAMS]>,
+    next: Option<(
+        [f32; prowave_engine::MAX_FX_PARAMS],
+        Option<crate::ir_files::IrFileId>,
+    )>,
     /// A finished response the engine did not take yet.
     ready: Option<Box<prowave_engine::Convolver>>,
 }
@@ -162,7 +200,18 @@ fn chain_of(inserts: &[Insert], sample_rate: f32) -> Box<Chain> {
     Box::new(Chain::new(
         inserts
             .iter()
-            .map(|i| Fx::new(i.kind, i.params, i.bypass, sample_rate))
+            .map(|i| {
+                let mut fx = Fx::new(i.kind, i.params, i.bypass, sample_rate);
+                // A LADSPA plug-in is started here, off the audio thread. One that cannot
+                // start leaves its slot passing the sound through (with the same delay).
+                if let Some(id) = i.plugin {
+                    match crate::plugins::load_effect(id, sample_rate) {
+                        Ok(plugin) => fx.set_plugin(plugin),
+                        Err(e) => tracing::warn!("plug-in {}: {e}", crate::plugins::name(id)),
+                    }
+                }
+                fx
+            })
             .collect(),
     ))
 }
@@ -235,7 +284,10 @@ fn latency_of(t: &Track, sample_rate: f32) -> usize {
     t.inserts
         .iter()
         .filter(|i| !i.bypass)
-        .map(|i| i.kind.latency_samples(sample_rate))
+        .map(|i| {
+            i.kind.latency_samples(sample_rate)
+                + i.plugin.map_or(0, crate::plugins::reported_latency)
+        })
         .sum()
 }
 
@@ -523,6 +575,11 @@ impl EngineSync {
             mixes: Vec::new(),
             patches: Vec::new(),
             soundfonts: Vec::new(),
+            drum_kits: Vec::new(),
+            drum_jobs: std::collections::HashMap::new(),
+            samplers: Vec::new(),
+            sampler_jobs: std::collections::HashMap::new(),
+            pianos: Vec::new(),
             externals: Vec::new(),
             controls: Vec::new(),
             mtc: None,
@@ -684,27 +741,78 @@ impl EngineSync {
         // changes. A file that cannot be played is logged and the track plays its synth patch.
         let sample_rate = self.engine.sample_rate() as f32;
         for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
-            let want = if t.kind == TrackKind::ExternalMidi {
-                None
-            } else {
-                t.soundfont.as_ref()
-            };
-            let unchanged = match self.soundfonts.get(i) {
-                Some(sent) => sent.as_ref() == want,
-                None => want.is_none(),
-            };
-            if unchanged {
+            let external = t.kind == TrackKind::ExternalMidi;
+            // A Drum Machine wins over a Sampler, an Electric Piano and a SoundFont; its sample
+            // pads are read in the background, and its pad settings move while it plays.
+            if let Some(drums) = t.drums.as_ref().filter(|_| !external) {
+                if !self.sync_drums(i, drums) {
+                    break;
+                }
+                if let Some(slot) = self.pianos.get_mut(i) {
+                    *slot = None;
+                }
                 continue;
             }
-            let player = match want {
-                Some(sf) => match soundfont_player(sf, sample_rate) {
-                    Ok(player) => Some(player),
-                    Err(e) => {
-                        tracing::warn!("SoundFont of track {}: {e}", t.name);
-                        None
+            // A Sampler wins over an Electric Piano and a SoundFont: it is loaded in the
+            // background and handed over when ready; its dials move while it plays.
+            if let Some(sampler) = t.sampler.as_ref().filter(|_| !external) {
+                if !self.sync_sampler(i, sampler) {
+                    break;
+                }
+                if let Some(slot) = self.pianos.get_mut(i) {
+                    *slot = None;
+                }
+                continue;
+            }
+            // The Sampler was taken away: the engine still plays it, so what the track should
+            // play now (a piano, a SoundFont, or its synth patch) is sent even if it did not
+            // change.
+            let drums_were = self
+                .drum_kits
+                .get_mut(i)
+                .is_some_and(|d| d.take().is_some());
+            self.drum_jobs.remove(&i);
+            let force = self.samplers.get_mut(i).is_some_and(|s| s.take().is_some()) || drums_were;
+            self.sampler_jobs.remove(&i);
+            let want = if external { None } else { t.soundfont.as_ref() };
+            let want_piano = if external {
+                None
+            } else {
+                t.epiano.map(|e| prowave_engine::epiano::clamp(e.params))
+            };
+            let sent_piano = self.pianos.get(i).copied().flatten();
+            let same_sound = match self.soundfonts.get(i) {
+                Some(sent) => sent.as_ref() == want,
+                None => want.is_none(),
+            } && sent_piano.is_some() == want_piano.is_some();
+            if same_sound && !force {
+                // Only the Electric Piano's dials moved: they change while the notes ring.
+                if let (Some(dials), true) = (want_piano, sent_piano != want_piano) {
+                    if !self.send(Command::SetPianoParams {
+                        track: i as u16,
+                        params: dials,
+                    }) {
+                        break;
                     }
-                },
-                None => None,
+                    self.pianos[i] = Some(dials);
+                }
+                continue;
+            }
+            // An Electric Piano wins over a SoundFont; a SoundFont that cannot be played is
+            // logged and the track plays its synth patch.
+            let player = if let Some(dials) = want_piano {
+                Some(Box::new(SfPlayer::electric_piano(dials, sample_rate)))
+            } else {
+                match want {
+                    Some(sf) => match soundfont_player(sf, sample_rate) {
+                        Ok(player) => Some(player),
+                        Err(e) => {
+                            tracing::warn!("SoundFont of track {}: {e}", t.name);
+                            None
+                        }
+                    },
+                    None => None,
+                }
             };
             if !self.send(Command::SetTrackSoundFont {
                 track: i as u16,
@@ -716,6 +824,10 @@ impl EngineSync {
                 self.soundfonts.resize(i + 1, None);
             }
             self.soundfonts[i] = want.cloned();
+            if self.pianos.len() <= i {
+                self.pianos.resize(i + 1, None);
+            }
+            self.pianos[i] = want_piano;
         }
         // External MIDI tracks: their notes go out as MIDI instead of sounding here.
         for (i, t) in p.tracks.iter().enumerate().take(MAX_TRACKS) {
@@ -778,7 +890,10 @@ impl EngineSync {
                 .filter(|_| i < MAX_TRACKS)
                 .map_or(&[], |t| &t.inserts);
             let same_kinds = self.fx[i].len() == want.len()
-                && self.fx[i].iter().zip(want).all(|(a, b)| a.kind == b.kind);
+                && self.fx[i]
+                    .iter()
+                    .zip(want)
+                    .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin);
             if !same_kinds {
                 let chain = chain_of(want, sr);
                 if !self.send(Command::SetInserts {
@@ -789,6 +904,7 @@ impl EngineSync {
                 }
                 self.fx[i] = want.to_vec();
                 self.irs.retain(|(t, _), _| *t != i);
+                self.queue_file_irs(i, want);
             } else {
                 for (slot, (have, w)) in self.fx[i].iter_mut().zip(want).enumerate() {
                     if have == w {
@@ -804,15 +920,13 @@ impl EngineSync {
                         self.retry = true;
                         return;
                     }
-                    if w.kind == prowave_engine::FxKind::Reverb
-                        && ir_key(&have.params) != ir_key(&w.params)
-                    {
+                    if w.kind == prowave_engine::FxKind::Reverb && ir_key(have) != ir_key(w) {
                         let job = self.irs.entry((i, slot)).or_insert(IrJob {
                             running: None,
                             next: None,
                             ready: None,
                         });
-                        job.next = Some(w.params);
+                        job.next = Some((w.params, w.ir_file));
                     }
                     *have = *w;
                 }
@@ -874,13 +988,14 @@ impl EngineSync {
                 .master_fx
                 .iter()
                 .zip(want)
-                .all(|(a, b)| a.kind == b.kind);
+                .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin);
         if !same_kinds {
             if !self.send(Command::SetMasterInserts(chain_of(want, sr))) {
                 return false;
             }
             self.master_fx = want.to_vec();
             self.irs.retain(|(t, _), _| *t != MASTER_KEY);
+            self.queue_file_irs(MASTER_KEY, want);
             return true;
         }
         for (slot, (have, w)) in self.master_fx.iter_mut().zip(want).enumerate() {
@@ -897,18 +1012,222 @@ impl EngineSync {
                 self.retry = true;
                 return false;
             }
-            if w.kind == prowave_engine::FxKind::Reverb && ir_key(&have.params) != ir_key(&w.params)
-            {
+            if w.kind == prowave_engine::FxKind::Reverb && ir_key(have) != ir_key(w) {
                 let job = self.irs.entry((MASTER_KEY, slot)).or_insert(IrJob {
                     running: None,
                     next: None,
                     ready: None,
                 });
-                job.next = Some(w.params);
+                job.next = Some((w.params, w.ir_file));
             }
             *have = *w;
         }
         true
+    }
+
+    /// Keeps track `i`'s Drum Machine in step with `want`: pad settings that changed move live;
+    /// a change in which pads play which sample files builds the kit again in the background
+    /// and swaps it in when it is ready (the old kit plays until then). Returns false when the
+    /// engine's queue was full.
+    fn sync_drums(&mut self, i: usize, want: &DrumsUse) -> bool {
+        if self.drum_kits.len() <= i {
+            self.drum_kits.resize(i + 1, None);
+        }
+        if let Some(sent) = self.drum_kits[i].clone() {
+            if sent.sample_pads() == want.sample_pads()
+                && sent
+                    .pads
+                    .iter()
+                    .map(|p| p.settings.kind)
+                    .eq(want.pads.iter().map(|p| p.settings.kind))
+            {
+                self.drum_jobs.remove(&i);
+                for (pad, (a, b)) in sent.pads.iter().zip(&want.pads).enumerate() {
+                    if a.settings != b.settings {
+                        let cmd = Command::SetDrumPad {
+                            track: i as u16,
+                            pad: pad as u8,
+                            settings: b.settings,
+                        };
+                        if !self.send(cmd) {
+                            return false;
+                        }
+                        if let Some(s) = self.drum_kits[i].as_mut() {
+                            s.pads[pad].settings = b.settings;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+        if !self.drum_jobs.get(&i).is_some_and(|j| j.kit == *want) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let kit = want.clone();
+            let sr = self.engine.sample_rate() as f32;
+            let spawned = std::thread::Builder::new()
+                .name("drum-kit-load".into())
+                .spawn(move || {
+                    let _ = tx.send(crate::drum_kit::build_machine(&kit, sr));
+                });
+            self.drum_jobs.insert(
+                i,
+                DrumJob {
+                    kit: want.clone(),
+                    rx: spawned.is_ok().then_some(rx),
+                },
+            );
+        }
+        let Some(job) = self.drum_jobs.get_mut(&i) else {
+            return true;
+        };
+        let machine = match job.rx.as_ref().map(std::sync::mpsc::Receiver::try_recv) {
+            Some(Ok(machine)) => Some(machine),
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                self.retry = true;
+                None
+            }
+            _ => None,
+        };
+        if let Some(machine) = machine {
+            let kit = job.kit.clone();
+            let cmd = Command::SetTrackSoundFont {
+                track: i as u16,
+                player: Some(Box::new(SfPlayer::drum_machine(machine))),
+            };
+            // A rejected command drops the built kit with it; the next frame builds it again.
+            if !self.send(cmd) {
+                self.drum_jobs.remove(&i);
+                return false;
+            }
+            self.drum_kits[i] = Some(kit);
+            if self.soundfonts.len() <= i {
+                self.soundfonts.resize(i + 1, None);
+            }
+            self.soundfonts[i] = None;
+            self.drum_jobs.remove(&i);
+        }
+        true
+    }
+
+    /// Keeps track `i`'s Sampler in step with `want`: moves its dials when only they changed,
+    /// else loads the new instrument in the background and swaps it in when it is ready (the
+    /// old instrument plays until then; one that cannot be loaded is logged and the old one
+    /// stays). Returns false when the engine's queue was full.
+    fn sync_sampler(&mut self, i: usize, want: &SamplerUse) -> bool {
+        if self.samplers.len() <= i {
+            self.samplers.resize(i + 1, None);
+        }
+        if let Some(sent) = &self.samplers[i] {
+            if sent.source == want.source {
+                self.sampler_jobs.remove(&i);
+                if sent.params != want.params {
+                    let cmd = Command::SetSamplerParams {
+                        track: i as u16,
+                        params: want.params,
+                    };
+                    if !self.send(cmd) {
+                        return false;
+                    }
+                    self.samplers[i] = Some(want.clone());
+                }
+                return true;
+            }
+        }
+        if !self
+            .sampler_jobs
+            .get(&i)
+            .is_some_and(|j| j.source == want.source)
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (source, params) = (want.source.clone(), want.params);
+            let sr = self.engine.sample_rate() as f32;
+            let spawned = std::thread::Builder::new()
+                .name("sampler-load".into())
+                .spawn(move || {
+                    let loaded = crate::sampler_load::build_zones(&source)
+                        .map(|zones| prowave_engine::sampler::Sampler::new(zones, sr, params));
+                    let _ = tx.send(loaded);
+                });
+            self.sampler_jobs.insert(
+                i,
+                SamplerJob {
+                    source: want.source.clone(),
+                    params: want.params,
+                    rx: spawned.is_ok().then_some(rx),
+                    ready: None,
+                    failed: spawned.is_err(),
+                },
+            );
+        }
+        let Some(job) = self.sampler_jobs.get_mut(&i) else {
+            return true;
+        };
+        if job.failed {
+            // Not tried again until the source changes (the old instrument keeps playing).
+            return true;
+        }
+        if let Some(rx) = &job.rx {
+            match rx.try_recv() {
+                Ok(Ok(sampler)) => {
+                    job.ready = Some(sampler);
+                    job.rx = None;
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Sampler of track {}: {e}", i + 1);
+                    job.rx = None;
+                    job.failed = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => self.retry = true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    job.rx = None;
+                    job.failed = true;
+                }
+            }
+        }
+        let Some(job) = self.sampler_jobs.get_mut(&i) else {
+            return true;
+        };
+        if let Some(sampler) = job.ready.take() {
+            let (source, params) = (job.source.clone(), job.params);
+            let cmd = Command::SetTrackSoundFont {
+                track: i as u16,
+                player: Some(Box::new(SfPlayer::sampler(sampler))),
+            };
+            // A rejected command drops the loaded instrument with it; the next frame loads it
+            // again (the queue is only ever full for a moment).
+            if !self.send(cmd) {
+                self.sampler_jobs.remove(&i);
+                return false;
+            }
+            self.samplers[i] = Some(SamplerUse { source, params });
+            if self.soundfonts.len() <= i {
+                self.soundfonts.resize(i + 1, None);
+            }
+            self.soundfonts[i] = None;
+            self.sampler_jobs.remove(&i);
+        }
+        true
+    }
+
+    /// A new chain's Space Designers start with a built-in response; the ones that play an
+    /// impulse-response file get a job that reads it and swaps its response in.
+    fn queue_file_irs(&mut self, key: usize, inserts: &[Insert]) {
+        for (slot, ins) in inserts.iter().enumerate() {
+            let file = ins.ir_file.filter(|_| {
+                ins.kind == prowave_engine::FxKind::Reverb
+                    && ins.params[prowave_engine::sd::IR_TYPE].round() as i32 == 2
+            });
+            if let Some(file) = file {
+                self.irs.insert(
+                    (key, slot),
+                    IrJob {
+                        running: None,
+                        next: Some((ins.params, Some(file))),
+                        ready: None,
+                    },
+                );
+            }
+        }
     }
 
     /// Starts the response for the newest Space Designer settings, hands finished ones to the
@@ -960,13 +1279,22 @@ impl EngineSync {
                 continue;
             };
             if job.running.is_none() {
-                if let Some(params) = job.next.take() {
+                if let Some((params, file)) = job.next.take() {
                     let (tx, rx) = std::sync::mpsc::channel();
                     let spawned = std::thread::Builder::new()
                         .name("space-designer-ir".into())
                         .spawn(move || {
-                            let _ = tx
-                                .send(Box::new(prowave_engine::Convolver::for_params(&params, sr)));
+                            // An impulse-response file is read and resampled here, off the UI
+                            // and audio threads; one that cannot be read plays the built-in
+                            // response chosen by IR.
+                            let frames = file
+                                .and_then(|id| crate::ir_files::resampled(id, sr.round() as u32));
+                            let conv = prowave_engine::Convolver::for_params_with(
+                                &params,
+                                sr,
+                                frames.as_ref().map(|f| f.as_slice()),
+                            );
+                            let _ = tx.send(Box::new(conv));
                         });
                     job.running = spawned.is_ok().then_some(rx);
                 }
@@ -1097,6 +1425,9 @@ mod tests {
             vca: None,
             midi_port: None,
             soundfont: None,
+            sampler: None,
+            epiano: None,
+            drums: None,
             midi_channel: 1,
             midi_program: None,
             midi_bank: None,
@@ -1555,5 +1886,21 @@ mod tests {
             program: 0,
         };
         assert!(soundfont_player(&sf, 48_000.0).is_ok());
+    }
+
+    #[test]
+    fn a_different_impulse_response_file_is_a_different_response_for_the_jobs() {
+        let mut a = Insert::new(prowave_engine::FxKind::Reverb);
+        let b = a;
+        assert_eq!(ir_key(&a), ir_key(&b));
+        a.ir_file = Some(crate::ir_files::intern(std::path::Path::new("/irs/a.wav")));
+        assert_ne!(ir_key(&a), ir_key(&b));
+        let mut c = a;
+        c.ir_file = Some(crate::ir_files::intern(std::path::Path::new("/irs/c.wav")));
+        assert_ne!(ir_key(&a), ir_key(&c));
+        // The mix (Dry, Wet) is not part of the response.
+        let mut d = a;
+        d.params[prowave_engine::sd::WET] = -20.0;
+        assert_eq!(ir_key(&a), ir_key(&d));
     }
 }

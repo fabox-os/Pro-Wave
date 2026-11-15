@@ -3435,8 +3435,11 @@ dependencies = [
  "midir",
  "muda",
  "prowave-engine",
+ "prowave-exs",
  "prowave-garageband-import",
+ "prowave-ladspa",
  "prowave-project",
+ "prowave-sfz",
  "rfd",
  "rhai",
  "rtrb",
@@ -3469,6 +3472,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-exs"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "prowave-garageband-import"
 version = "0.1.0"
 dependencies = [
@@ -3483,6 +3493,13 @@ version = "0.1.0"
 dependencies = [
  "quick-xml 0.42.0",
  "zip",
+]
+
+[[package]]
+name = "prowave-hydrogen-import"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.42.0",
 ]
 
 [[package]]
@@ -3523,6 +3540,20 @@ dependencies = [
  "serde_json",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "prowave-sfz"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
+name = "prowave-vamp"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.8.9",
 ]
 
 [[package]]

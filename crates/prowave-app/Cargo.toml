@@ -43,7 +43,10 @@ egui = "0.37"
 human-panic = "2.0.8"
 prowave-engine = { version = "0.1.0", path = "../prowave-engine" }
 prowave-garageband-import = { version = "0.1.0", path = "../prowave-garageband-import" }
+prowave-ladspa = { version = "0.1.0", path = "../prowave-ladspa" }
 prowave-project = { version = "0.1.0", path = "../prowave-project" }
+prowave-sfz = { version = "0.1.0", path = "../prowave-sfz" }
+prowave-exs = { version = "0.1.0", path = "../prowave-exs" }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 rfd = "0.17.2"
 rtrb = "0.4.0"
@@ -63,6 +66,9 @@ rhai = { version = "1", features = ["no_module"] }
 # The menus in the macOS system menu bar (see src/native_menu.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "=0.21.0", default-features = false }
+# `--screenshot` must not take the focus on macOS (see `event_loop_builder` in main.rs);
+# eframe re-exports winit's types but not the `platform::macos` extension trait.
+winit = "0.30.13"
 
 [build-dependencies]
 winresource = "0.1.34"

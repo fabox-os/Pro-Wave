@@ -32,6 +32,10 @@ pub enum LiveNote {
     Pressure {
         val: u8,
     },
+    /// The modulation wheel (controller 1), 0-127.
+    Modulation {
+        val: u8,
+    },
 }
 
 /// What [`update`] did, for the app to react to (selection, messages).
@@ -195,6 +199,11 @@ pub fn capture(rec: &mut Recorder, p: &mut Project) -> Option<(usize, usize)> {
                 num: CHANNEL_PRESSURE,
                 val: u16::from(val),
             }),
+            LiveNote::Modulation { val } => controls.push(Control {
+                start: now as f32,
+                num: MODULATION_WHEEL,
+                val: u16::from(val),
+            }),
         }
     }
     for i in open.into_values() {
@@ -346,6 +355,11 @@ fn record(rec: &mut Recorder, p: &mut Project, t: usize, r: usize, input: &[Live
                 num: CHANNEL_PRESSURE,
                 val: u16::from(val),
             }),
+            LiveNote::Modulation { val } => region.controls.push(Control {
+                start: now as f32,
+                num: MODULATION_WHEEL,
+                val: u16::from(val),
+            }),
         }
     }
     // Held notes keep growing, and so does the region.
@@ -360,6 +374,8 @@ fn record(rec: &mut Recorder, p: &mut Project, t: usize, r: usize, input: &[Live
 
 /// The sustain pedal's controller number.
 pub const SUSTAIN: u8 = 64;
+/// The modulation wheel's controller number.
+pub const MODULATION_WHEEL: u8 = 1;
 
 /// The shortest note, in beats (a 64th note).
 const MIN_LEN: f32 = 0.0625;
@@ -556,6 +572,34 @@ mod tests {
         p.tracks[0].regions.clear();
         assert_eq!(update(&mut rec, &mut p, &[on(60)]), Outcome::Finished(None));
         assert!(!rec.active());
+    }
+
+    #[test]
+    fn the_modulation_wheel_and_the_pitch_bend_from_the_typing_keys_are_recorded_as_controls() {
+        let mut p = project();
+        let mut rec = Recorder::default();
+        p.recording = true;
+        p.playing = true;
+        update(&mut rec, &mut p, &[]);
+        p.position_beats = 1.0;
+        update(
+            &mut rec,
+            &mut p,
+            &[
+                on(60),
+                LiveNote::Modulation { val: 76 },
+                LiveNote::Bend { val: 16383 },
+            ],
+        );
+        let controls = &p.tracks[0].regions[0].controls;
+        assert!(controls
+            .iter()
+            .any(|c| c.num == MODULATION_WHEEL && c.val == 76));
+        assert!(controls
+            .iter()
+            .any(|c| c.num == PITCH_BEND && c.val == 16383));
+        // (A recording also starts with the pedal's state.)
+        assert!(controls.len() >= 2);
     }
 
     #[test]

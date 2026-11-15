@@ -72,8 +72,16 @@ fn stroke(c: Color32) -> Stroke {
 }
 
 fn clicked(ui: &Ui, rect: Rect, key: &str) -> bool {
-    ui.interact(rect, egui::Id::unique(("control_bar", key)), Sense::click())
-        .clicked()
+    let resp = ui.interact(rect, egui::Id::unique(("control_bar", key)), Sense::click());
+    tip(&resp, key);
+    resp.clicked()
+}
+
+/// Shows what the button with `key` does when the pointer rests on it (issue #118).
+fn tip(resp: &egui::Response, key: &str) {
+    if let Some(text) = crate::tooltips::bar_tip(key) {
+        resp.clone().on_hover_text(tr(text));
+    }
 }
 
 // ---------------------------------------------------------------- icons
@@ -437,6 +445,7 @@ fn tbutton(
 ) -> bool {
     let r = Rect::from_center_size(center, vec2(30.0, 26.0));
     let resp = ui.interact(r, egui::Id::unique(("control_bar", key)), Sense::click());
+    tip(&resp, key);
     if let Some(bg) = active_bg {
         g.rect_filled(r, 6.0, bg);
     } else if resp.hovered() {
@@ -817,6 +826,38 @@ pub(crate) fn master_volume(
     );
 }
 
+/// Where the Smart Controls / Mixer / Editors buttons start, from the bar's left edge, and how
+/// wide they are together (three 30-point buttons).
+const PANES_LEFT: f32 = 140.0;
+const PANES_WIDTH: f32 = 90.0;
+/// The LCD's width, and how far the transport buttons reach to its left (the Rewind button's
+/// left edge is 213 points before the LCD).
+const LCD_WIDTH: f32 = 555.0;
+const TRANSPORT_REACH: f32 = 213.0;
+/// The least space between the Editors button and the Rewind button.
+const PANES_GAP: f32 = 16.0;
+
+/// What the buttons right of the LCD need: the metronome's right edge is 156 points after it,
+/// and the four editor icons start 121 points before the bar's right edge.
+const RIGHT_REACH: f32 = 156.0;
+const RIGHT_ICONS: f32 = 121.0;
+
+/// The LCD's centre. Usually a little right of the bar's middle; moved right when the Rewind
+/// button would crowd the Editors (scissors) button (issue #118), but never so far that the
+/// metronome meets the icons on the right. When the bar is too narrow for both, the room that is
+/// missing is shared between the two sides.
+fn lcd_center_x(bar: Rect) -> f32 {
+    let centred = bar.center().x + 20.0;
+    let half = LCD_WIDTH / 2.0;
+    let least = bar.left() + PANES_LEFT + PANES_WIDTH + PANES_GAP + TRANSPORT_REACH + half;
+    let most = bar.right() - RIGHT_ICONS - PANES_GAP - RIGHT_REACH - half;
+    if least <= most {
+        centred.clamp(least, most)
+    } else {
+        (least + most) / 2.0
+    }
+}
+
 pub fn control_bar(
     ui: &mut Ui,
     p: &mut Project,
@@ -853,7 +894,7 @@ pub fn control_bar(
         (icon_mixer, s.show_mixer && s.bottom == Bottom::Mixer),
         (icon_editors, editors_on),
     ];
-    match segmented(ui, &g, bar.left() + 140.0, cy, "panes", &mid) {
+    match segmented(ui, &g, bar.left() + PANES_LEFT, cy, "panes", &mid) {
         // Switches the menu bar and its menus between dark and light (white).
         Some(0) => s.light_menus = !s.light_menus,
         Some(1) => {
@@ -871,8 +912,8 @@ pub fn control_bar(
     }
 
     // Centre: LCD, transport to its left, count-in & co. to its right.
-    let lcd_w = 555.0;
-    let lcd_rect = Rect::from_center_size(pos2(bar.center().x + 20.0, cy), vec2(lcd_w, 44.0));
+    let lcd_w = LCD_WIDTH;
+    let lcd_rect = Rect::from_center_size(pos2(lcd_center_x(bar), cy), vec2(lcd_w, 44.0));
     lcd(ui, &g, p, lcd_rect, s.cpu_load, s.hd_load);
 
     let tx = |dx: f32| pos2(lcd_rect.left() + dx, cy);
@@ -1071,5 +1112,65 @@ mod tests {
         assert_eq!(take_steps(&mut left, -25.0, 10.0), -2);
         assert_eq!(take_steps(&mut left, 25.0, 10.0), 2);
         assert!(left.abs() < 1e-4);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    fn bar(w: f32) -> Rect {
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(w, 44.0))
+    }
+
+    /// The space between the Editors button and Rewind, and between the metronome and the
+    /// right-hand icons, with the LCD placed by [`lcd_center_x`].
+    fn gaps(w: f32) -> (f32, f32) {
+        let c = lcd_center_x(bar(w));
+        let rewind_left = c - LCD_WIDTH / 2.0 - TRANSPORT_REACH;
+        let metronome_right = c + LCD_WIDTH / 2.0 + RIGHT_REACH;
+        (
+            rewind_left - (PANES_LEFT + PANES_WIDTH),
+            (w - RIGHT_ICONS) - metronome_right,
+        )
+    }
+
+    #[test]
+    fn a_wide_bar_keeps_the_lcd_centred_and_both_gaps_open() {
+        for w in [1700.0, 1920.0, 2560.0] {
+            let (left, right) = gaps(w);
+            assert!(
+                left >= PANES_GAP && right >= PANES_GAP,
+                "{w}: {left} {right}"
+            );
+            assert_eq!(lcd_center_x(bar(w)), w / 2.0 + 20.0);
+        }
+    }
+
+    #[test]
+    fn a_bar_that_fits_both_sides_keeps_the_editors_button_clear_of_rewind() {
+        for w in (1320..1700).step_by(20) {
+            let (left, right) = gaps(w as f32);
+            assert!(
+                left >= PANES_GAP - 0.01,
+                "{w}: Rewind is {left} from the Editors button"
+            );
+            assert!(
+                right >= PANES_GAP - 0.01,
+                "{w}: the metronome is {right} from the icons"
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrow_bar_is_better_than_before_and_shares_the_squeeze() {
+        for w in (1000..1320).step_by(40) {
+            let w = w as f32;
+            let before =
+                (w / 2.0 + 20.0) - LCD_WIDTH / 2.0 - TRANSPORT_REACH - (PANES_LEFT + PANES_WIDTH);
+            let (left, right) = gaps(w);
+            assert!(left > before, "{w}: {left} is not better than {before}");
+            assert!((left - right).abs() < 0.01, "{w}: {left} vs {right}");
+        }
     }
 }

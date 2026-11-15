@@ -281,6 +281,7 @@ const WINDOW: &[&str] = &[
     "Smart Tempo",
     "Piano Roll",
     "Mixer",
+    "Show Musical Typing",
     "Plugin Manager",
     "Video",
     "-",
@@ -441,6 +442,10 @@ fn shortcut(label: &str) -> Option<KeyboardShortcut> {
         "Show Inspector" => Key::I,
         "Show List Editors" => Key::D,
         "Show Mixer" => Key::X,
+        // Logic's key command for Musical Typing.
+        "Show Musical Typing" => {
+            return Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::K));
+        }
         _ => return None,
     };
     Some(KeyboardShortcut::new(Modifiers::NONE, key))
@@ -509,6 +514,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Configure Track Header…" | "Show Master Track" => true,
         // Mix > Edit Groups…: with no group yet it still opens, to make the first one.
         "Edit Groups…" => true,
+        "Show Musical Typing" => true,
+        "Plugin Manager" => true,
         // Opens the Space Designer on the selected track (adding one when it has none). The
         // mastering presets go on the Stereo Out strip (the master bus).
         "Show" => p
@@ -691,6 +698,15 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         }
         "Show Master Track" => p.show_master_track = !p.show_master_track,
         "Edit Groups…" => s.show_groups = true,
+        // Window > Show Musical Typing (Cmd+K): the computer keyboard plays the selected
+        // instrument; closing it lets go of every key.
+        "Show Musical Typing" => {
+            s.typing.open = !s.typing.open;
+            if !s.typing.open {
+                s.typing.release_all();
+            }
+        }
+        "Plugin Manager" => s.show_plugin_manager = true,
         "Select All" => s.tracks.select_all(p),
         "Join" => crate::region_edit::join_selected(p, &mut s.tracks),
         "Show Mixer" | "Mixer" => {
@@ -1108,6 +1124,10 @@ pub fn handle_keys(ctx: &egui::Context, p: &mut Project, s: &mut crate::UiState)
         return;
     }
     for label in ["Show Library", "Show Inspector", "Show Mixer"] {
+        // With Musical Typing open the letter keys are notes (Y, I and X included).
+        if s.typing.open {
+            break;
+        }
         if let Some(k) = shortcut(label) {
             if ctx.input_mut(|i| i.consume_shortcut(&k)) {
                 apply(label, p, s);
@@ -1134,6 +1154,7 @@ pub fn handle_keys(ctx: &egui::Context, p: &mut Project, s: &mut crate::UiState)
         "Bigger Interface",
         "Smaller Interface",
         "Actual Interface Size",
+        "Show Musical Typing",
     ] {
         if let Some(k) = shortcut(label) {
             if ctx.input_mut(|i| i.consume_shortcut(&k)) {
@@ -1257,7 +1278,7 @@ mod tests {
                     p.header_hidden.len(),
                     s.track_dialog.is_some(),
                     p.tracks.get(p.selected_track).is_some_and(|t| t.rec),
-                    s.show_groups
+                    (s.show_groups, s.typing.open, s.show_plugin_manager)
                 ),
                 (
                     s.tracks.show_tempo,
