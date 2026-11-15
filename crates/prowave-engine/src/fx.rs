@@ -1100,6 +1100,11 @@ pub trait ExternalFx: Send {
     /// Another handle on the same plug-in, for a rebuilt chain. Called off the audio thread;
     /// only one handle is ever played at a time.
     fn boxed_clone(&self) -> Box<dyn ExternalFx>;
+    /// Offline rendering (see `Engine::render_offline`) is not in real time: a plug-in that
+    /// runs in another process must answer every block instead of letting a late answer pass
+    /// dry. Plug-ins that run on the engine's own thread need nothing, so the default does
+    /// nothing.
+    fn set_offline(&mut self, _offline: bool) {}
 }
 
 /// An [`ExternalFx`] with the block it is filling: the sample at `pos` is the plug-in's output
@@ -1135,6 +1140,14 @@ impl ExternalState {
             self.pos = 0;
         }
         out
+    }
+}
+
+impl ExternalState {
+    fn set_offline(&mut self, offline: bool) {
+        if let Some(plug) = self.plug.as_mut() {
+            plug.set_offline(offline);
+        }
     }
 }
 
@@ -1245,6 +1258,13 @@ impl Fx {
 
     pub fn kind(&self) -> FxKind {
         self.kind
+    }
+
+    /// Passes offline rendering on to a third-party plug-in (see [`ExternalFx::set_offline`]).
+    pub fn set_offline(&mut self, offline: bool) {
+        if let State::External(state) = &mut self.state {
+            state.set_offline(offline);
+        }
     }
 
     /// New parameter values (put into range here) and bypass. Cheap and allocation free, so
@@ -1845,6 +1865,13 @@ impl Chain {
     pub fn new(mut fx: Vec<Fx>) -> Self {
         fx.truncate(MAX_INSERTS);
         Self { fx }
+    }
+
+    /// Offline rendering on or off for every plug-in in the chain.
+    pub fn set_offline(&mut self, offline: bool) {
+        for f in self.fx.iter_mut() {
+            f.set_offline(offline);
+        }
     }
 
     #[inline]

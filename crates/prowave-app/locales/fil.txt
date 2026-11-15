@@ -839,3 +839,6 @@ Input Monitoring: hear the input of the track = Input Monitoring: pakinggan ang 
 Plug-in not found = Hindi nahanap ang plug-in
 Not found = Hindi nahanap
 In Use = Ginagamit
+the engine did not take the project in time; no file was written = hindi tinanggap ng engine ang proyekto sa tamang oras; walang file na naisulat
+the bounce has not finished = hindi pa tapos ang bounce
+cannot bounce: there is no audio output = hindi maaaring mag-bounce: walang audio output

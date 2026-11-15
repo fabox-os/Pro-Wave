@@ -839,3 +839,6 @@ Input Monitoring: hear the input of the track = Моніторинг входу:
 Plug-in not found = Плагін не знайдено
 Not found = Не знайдено
 In Use = Використовуються
+the engine did not take the project in time; no file was written = рушій не прийняв проєкт вчасно; файл не записано
+the bounce has not finished = Боунс ще не завершено
+cannot bounce: there is no audio output = неможливо зробити боунс: немає аудіовиходу

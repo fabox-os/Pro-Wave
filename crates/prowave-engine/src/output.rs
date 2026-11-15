@@ -127,6 +127,8 @@ enum Output {
     /// Windows: our own WASAPI stream with the smallest period the audio engine allows.
     #[cfg(windows)]
     Wasapi(#[allow(dead_code)] crate::wasapi::LowLatencyStream),
+    /// No device: the engine is driven by [`Engine::render_offline`].
+    Offline,
 }
 
 /// UI-thread handle. Not `Send` on some platforms (cpal `Stream`); keep it on the UI thread.
@@ -141,6 +143,8 @@ pub struct Engine {
     device_name: String,
     _output: Output,
     disk: DiskThread,
+    /// The core of an offline engine (see [`Engine::offline`]), which nothing else runs.
+    offline: Option<Box<EngineCore>>,
 }
 
 /// Renders the engine into a device buffer of any sample format and channel count. Lives on
@@ -241,6 +245,53 @@ impl Engine {
         Err(last)
     }
 
+    /// An engine with no sound card, for offline rendering: [`Engine::render_offline`] makes
+    /// its audio as fast as the processor allows, with the same commands, streams and readers as
+    /// a device engine. Nothing plays. It can be made on any thread, and needs no device.
+    pub fn offline(sample_rate: u32) -> Result<Self, EngineError> {
+        let (tx, rx) = RingBuffer::<Command>::new(1024);
+        let (gtx, grx) = RingBuffer::<Garbage>::new(GARBAGE_CAPACITY);
+        let shared = Arc::new(Shared::new());
+        let mut core = EngineCore::new(sample_rate, rx, gtx, shared.clone());
+        core.set_offline(true);
+        let readers = core.take_readers();
+        let state = readers
+            .state
+            .ok_or_else(|| EngineError::Backend("no state reader".into()))?;
+        Ok(Self {
+            commands: CommandQueue {
+                tx,
+                garbage: grx,
+                credits: GARBAGE_CAPACITY,
+            },
+            shared,
+            state,
+            midi_out: readers.midi,
+            mtc_out: readers.mtc,
+            clock_out: readers.clock,
+            sample_rate,
+            device_name: "offline".to_string(),
+            _output: Output::Offline,
+            disk: DiskThread::spawn(),
+            offline: Some(Box::new(core)),
+        })
+    }
+
+    /// Makes the next `out.len() / 2` frames of stereo audio on an [`Engine::offline`] engine
+    /// (interleaved, left then right), with every command sent so far applied. Not in real time:
+    /// the frames are as fast as the processor makes them, and a streamed region or a plug-in
+    /// that runs in its own process waits for its data rather than letting silence through.
+    /// Errors on an engine that plays on a device.
+    pub fn render_offline(&mut self, out: &mut [f32]) -> Result<(), EngineError> {
+        let core = self
+            .offline
+            .as_mut()
+            .ok_or_else(|| EngineError::Backend("this engine plays on a device".into()))?;
+        core.set_device_info((out.len() / 2) as u32, 0);
+        assert_no_alloc::assert_no_alloc(|| core.process(out));
+        Ok(())
+    }
+
     /// Starts on the ASIO host (Windows builds with the `asio` feature only).
     /// Use this to avoid shared-mode WASAPI buffering when a native ASIO driver is available.
     #[cfg(all(windows, feature = "asio"))]
@@ -290,6 +341,7 @@ impl Engine {
             device_name: info.device_name,
             _output: Output::Wasapi(stream),
             disk: DiskThread::spawn(),
+            offline: None,
         })
     }
 
@@ -397,6 +449,7 @@ impl Engine {
             device_name,
             _output: Output::Cpal(stream),
             disk: DiskThread::spawn(),
+            offline: None,
         })
     }
 
@@ -522,4 +575,247 @@ where
             None,
         )
         .map_err(|e| EngineError::Backend(e.to_string()))
+}
+
+#[cfg(test)]
+mod offline_tests {
+    use super::*;
+    use crate::core::{
+        AudioClip, CaptureSink, ClipEdit, EngineCore, NoteEvent, Shared, Song, TrackMix,
+    };
+    use crate::fx::{Chain, ExternalFx, Fx, EXTERNAL_BLOCK};
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+
+    /// Frames of stereo audio rendered per call in these tests.
+    const BLOCK: usize = 512;
+
+    fn render(engine: &mut Engine, frames: usize) -> Vec<f32> {
+        let mut out = vec![0f32; frames * 2];
+        for block in out.chunks_mut(BLOCK * 2) {
+            engine
+                .render_offline(block)
+                .unwrap_or_else(|e| panic!("an offline engine renders: {e}"));
+        }
+        out
+    }
+
+    /// Plays `commands` on a new offline engine at `sample_rate` and renders `frames`.
+    fn run(sample_rate: u32, commands: Vec<Command>, frames: usize) -> (Vec<f32>, Engine) {
+        let mut engine =
+            Engine::offline(sample_rate).unwrap_or_else(|e| panic!("offline engine: {e}"));
+        for c in commands {
+            assert!(engine.send(c), "the command queue takes the commands");
+        }
+        let out = render(&mut engine, frames);
+        (out, engine)
+    }
+
+    /// The commands that make a song from `notes` play from the start.
+    fn song_play(notes: Vec<NoteEvent>, clips: Vec<AudioClip>) -> Vec<Command> {
+        vec![
+            Command::SetTempoMap(Box::default()),
+            Command::SetSong(Box::new(
+                Song::new(notes, vec![TrackMix::default()]).with_clips(clips),
+            )),
+            Command::SetPosition { beat: 0.0 },
+            Command::Play,
+        ]
+    }
+
+    fn note(start: f64, len: f64, pitch: u8) -> NoteEvent {
+        NoteEvent {
+            start_beat: start,
+            end_beat: start + len,
+            pitch,
+            vel: 100,
+            track: 0,
+        }
+    }
+
+    fn temp_wav(name: &str, sample_rate: u32, frames: usize, f: impl Fn(usize) -> f32) -> PathBuf {
+        let stereo: Vec<f32> = (0..frames)
+            .flat_map(|n| {
+                let s = f(n);
+                [s, s]
+            })
+            .collect();
+        let path =
+            std::env::temp_dir().join(format!("prowave-offline-{}-{name}.wav", std::process::id()));
+        crate::write_wav(&path, &stereo, sample_rate)
+            .unwrap_or_else(|e| panic!("write the test WAV: {e}"));
+        path
+    }
+
+    #[test]
+    fn an_empty_song_renders_silence() {
+        let (out, _engine) = run(48_000, song_play(Vec::new(), Vec::new()), 9_600);
+        assert_eq!(out.len(), 9_600 * 2);
+        assert!(out.iter().all(|s| *s == 0.0), "nothing plays");
+    }
+
+    #[test]
+    fn a_note_renders_sound() {
+        let (out, _engine) = run(
+            48_000,
+            song_play(vec![note(0.0, 4.0, 69)], Vec::new()),
+            24_000,
+        );
+        let peak = out.iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "an A4 for two beats is heard (peak {peak})");
+        assert!(out.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn the_same_commands_render_the_same_frames() {
+        let notes = || vec![note(0.0, 2.0, 60), note(1.0, 2.0, 64), note(2.5, 1.0, 67)];
+        let (a, _) = run(48_000, song_play(notes(), Vec::new()), 48_000);
+        let (b, _) = run(48_000, song_play(notes(), Vec::new()), 48_000);
+        assert!(a.iter().any(|s| *s != 0.0));
+        assert!(
+            a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()),
+            "two offline renders are bit-identical"
+        );
+    }
+
+    #[test]
+    fn a_streamed_region_comes_out_as_its_file_without_underruns() {
+        // One second of a 440 Hz sine at the engine's rate, through the disk thread.
+        let frames = 48_000;
+        let path = temp_wav("same-rate", 48_000, frames, |n| {
+            0.5 * (std::f32::consts::TAU * 440.0 * n as f32 / 48_000.0).sin()
+        });
+        let file = AudioFile::open(&path).unwrap_or_else(|e| panic!("open the test WAV: {e:?}"));
+        let mut engine = Engine::offline(48_000).unwrap_or_else(|e| panic!("offline engine: {e}"));
+        let clip = engine.stream_clip_in(&file, 0, 0.0, ClipEdit::default(), 1);
+        for c in song_play(Vec::new(), vec![clip]) {
+            assert!(engine.send(c));
+        }
+        let out = render(&mut engine, frames);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            engine.shared().underruns.load(Ordering::Relaxed),
+            0,
+            "no gaps"
+        );
+        // The master fader's level is the only gain between the file and the output.
+        let gain = 0.8f32;
+        let worst = (0..frames)
+            .map(|n| {
+                let source = 0.5 * (std::f32::consts::TAU * 440.0 * n as f32 / 48_000.0).sin();
+                (out[2 * n] - gain * source).abs()
+            })
+            .fold(0f32, f32::max);
+        assert!(
+            worst < 1e-4,
+            "every frame is the file's frame (worst error {worst})"
+        );
+    }
+
+    #[test]
+    fn a_region_from_a_file_at_another_rate_is_resampled_closely() {
+        let frames = 44_100;
+        let path = temp_wav("other-rate", 44_100, frames, |n| {
+            0.5 * (std::f32::consts::TAU * 440.0 * n as f32 / 44_100.0).sin()
+        });
+        let file = AudioFile::open(&path).unwrap_or_else(|e| panic!("open the test WAV: {e:?}"));
+        let mut engine = Engine::offline(48_000).unwrap_or_else(|e| panic!("offline engine: {e}"));
+        let clip = engine.stream_clip_in(&file, 0, 0.0, ClipEdit::default(), 1);
+        for c in song_play(Vec::new(), vec![clip]) {
+            assert!(engine.send(c));
+        }
+        let out = render(&mut engine, 44_000);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(engine.shared().underruns.load(Ordering::Relaxed), 0);
+        let worst = (0..44_000)
+            .map(|m| {
+                let t = m as f32 / 48_000.0;
+                let want = 0.8 * 0.5 * (std::f32::consts::TAU * 440.0 * t).sin();
+                (out[2 * m] - want).abs()
+            })
+            .fold(0f32, f32::max);
+        assert!(
+            worst < 5e-3,
+            "linear resampling stays close (worst error {worst})"
+        );
+    }
+
+    /// A plug-in that only records whether the engine told it about offline rendering.
+    struct Recorder(Arc<AtomicBool>);
+
+    impl ExternalFx for Recorder {
+        fn process(&mut self, _left: &mut [f32], _right: &mut [f32]) {}
+        fn set_param_norm(&mut self, _index: usize, _norm: f32) {}
+        fn latency_samples(&self) -> usize {
+            0
+        }
+        fn reset(&mut self) {}
+        fn boxed_clone(&self) -> Box<dyn ExternalFx> {
+            Box::new(Recorder(Arc::clone(&self.0)))
+        }
+        fn set_offline(&mut self, offline: bool) {
+            self.0.store(offline, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn a_plug_in_in_a_track_is_told_about_offline_rendering() {
+        let told = Arc::new(AtomicBool::new(false));
+        let chain = Chain::new(vec![Fx::external(
+            Box::new(Recorder(Arc::clone(&told))),
+            false,
+            48_000.0,
+        )]);
+        let mut commands = song_play(Vec::new(), Vec::new());
+        commands.push(Command::SetInserts {
+            track: 0,
+            chain: Box::new(chain),
+        });
+        let (_out, _engine) = run(48_000, commands, EXTERNAL_BLOCK * 4);
+        assert!(
+            told.load(Ordering::Relaxed),
+            "the plug-in waits for its blocks"
+        );
+    }
+
+    /// The real-time path (a core that is not offline, handing its frames over with
+    /// `Command::SetCapture`) hears exactly what the offline render makes: offline changes how
+    /// the core waits for data, not what it plays.
+    #[test]
+    fn the_live_capture_is_bit_for_bit_the_offline_render() {
+        let notes = || vec![note(0.0, 4.0, 60), note(1.0, 2.0, 67), note(2.5, 1.0, 72)];
+        let frames = 24_000;
+        let (offline, _) = run(48_000, song_play(notes(), Vec::new()), frames);
+
+        let (mut tx, rx) = RingBuffer::<Command>::new(1024);
+        let (trash_tx, _trash_rx) = RingBuffer::new(64);
+        let mut core = EngineCore::new(48_000, rx, trash_tx, Arc::new(Shared::new()));
+        let (captured_tx, mut captured) = RingBuffer::<[f32; 2]>::new(frames * 2);
+        let sink = CaptureSink {
+            frames: captured_tx,
+            dropped: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+        assert!(tx.push(Command::SetCapture(Some(sink))).is_ok());
+        for c in song_play(notes(), Vec::new()) {
+            assert!(tx.push(c).is_ok());
+        }
+        let mut out = vec![0f32; frames * 2];
+        for block in out.chunks_mut(BLOCK * 2) {
+            core.process(block);
+        }
+        let mut heard = Vec::with_capacity(frames * 2);
+        while let Ok(frame) = captured.pop() {
+            heard.extend_from_slice(&frame);
+        }
+        assert_eq!(heard.len(), offline.len());
+        assert!(
+            heard
+                .iter()
+                .zip(&offline)
+                .all(|(a, b)| a.to_bits() == b.to_bits()),
+            "the capture and the offline render are identical"
+        );
+    }
 }

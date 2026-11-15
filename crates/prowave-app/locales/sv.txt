@@ -839,3 +839,6 @@ Input Monitoring: hear the input of the track = Ingångsövervakning: hör spår
 Plug-in not found = Plugin hittades inte
 Not found = Hittades inte
 In Use = I bruk
+the engine did not take the project in time; no file was written = motorn tog inte emot projektet i tid; ingen fil skrevs
+the bounce has not finished = bounce är inte klar
+cannot bounce: there is no audio output = kan inte bounca: ingen ljudutgång

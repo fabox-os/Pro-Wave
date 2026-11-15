@@ -839,3 +839,6 @@ Input Monitoring: hear the input of the track = Monitorowanie wejścia: słuchaj
 Plug-in not found = Nie znaleziono wtyczki
 Not found = Nie znaleziono
 In Use = W użyciu
+the engine did not take the project in time; no file was written = silnik nie przyjął projektu na czas; nie zapisano żadnego pliku
+the bounce has not finished = bounce nie został zakończony
+cannot bounce: there is no audio output = nie można zrobić bounce: brak wyjścia audio

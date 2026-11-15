@@ -839,3 +839,6 @@ Input Monitoring: hear the input of the track = Input Monitoring: dengarkan inpu
 Plug-in not found = Plug-in tidak ditemukan
 Not found = Tidak ditemukan
 In Use = Digunakan
+the engine did not take the project in time; no file was written = engine tidak menerima proyek tepat waktu; tidak ada berkas yang ditulis
+the bounce has not finished = bounce belum selesai
+cannot bounce: there is no audio output = tidak dapat bounce: tidak ada output audio

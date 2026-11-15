@@ -556,6 +556,14 @@ impl EngineSync {
         sync
     }
 
+    /// Sends every change of `p` the engine has not accepted yet. Returns `false` while some
+    /// are still waiting: a full command queue, or a Space Designer response still being made.
+    /// Offline, the caller renders blocks between calls (which takes the queue) and tries again.
+    pub fn settle(&mut self, p: &mut Project) -> bool {
+        self.sync(p);
+        !self.retry
+    }
+
     /// Call once per frame: push UI-side changes to the engine, then pull the playhead back.
     pub fn sync(&mut self, p: &mut Project) {
         let counted = !self.playing && p.playing && p.recording && p.count_in;

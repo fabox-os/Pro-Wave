@@ -839,3 +839,6 @@ Input Monitoring: hear the input of the track = Tulon monitorointi: kuule raidan
 Plug-in not found = Liitännäistä ei löytynyt
 Not found = Ei löytynyt
 In Use = Käytössä
+the engine did not take the project in time; no file was written = äänimoottori ei ottanut projektia vastaan ajoissa; tiedostoa ei kirjoitettu
+the bounce has not finished = bounce ei ole vielä valmis
+cannot bounce: there is no audio output = bounce ei onnistu: ei äänilähtöä

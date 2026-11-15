@@ -482,21 +482,24 @@ impl App {
         else {
             return;
         };
-        let Some(sync) = self.sync.as_mut() else {
-            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
-            return;
-        };
-        match bounce::Bounce::start(&mut sync.engine, &mut self.project, start, end, path) {
-            Ok(running) => {
-                self.bounce = Some(running);
-                self.region_bounce = None;
-                // Send the seek and Play in this same frame, so the engine starts capturing
-                // exactly when playback starts (no silent lead-in in the file).
-                if let Some(sync) = self.sync.as_mut() {
-                    sync.sync(&mut self.project);
-                }
-            }
+        let engine = self.sync.as_mut().map(|s| &mut s.engine);
+        match bounce::Bounce::start(engine, &mut self.project, start, end, path) {
+            Ok(running) => self.begun_bounce(running, None),
             Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    /// Keeps a bounce that has just started. A real-time bounce sends its seek and Play in this
+    /// same frame, so the engine starts capturing exactly when playback starts (no silent lead-in
+    /// in the file). An offline bounce has nothing to send: it works on a copy of the project.
+    fn begun_bounce(&mut self, running: bounce::Bounce, placed: Option<(usize, Vec<usize>)>) {
+        let realtime = running.is_realtime();
+        self.bounce = Some(running);
+        self.region_bounce = placed;
+        if realtime {
+            if let Some(sync) = self.sync.as_mut() {
+                sync.sync(&mut self.project);
+            }
         }
     }
 
@@ -550,26 +553,9 @@ impl App {
         else {
             return;
         };
-        let Some(sync) = self.sync.as_mut() else {
-            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
-            return;
-        };
-        match bounce::Bounce::start_track(
-            &mut sync.engine,
-            &mut self.project,
-            track,
-            0.0,
-            end,
-            path,
-        ) {
-            Ok(running) => {
-                self.bounce = Some(running);
-                self.region_bounce = None;
-                // Seek and Play in this same frame, so the capture starts with the sound.
-                if let Some(sync) = self.sync.as_mut() {
-                    sync.sync(&mut self.project);
-                }
-            }
+        let engine = self.sync.as_mut().map(|s| &mut s.engine);
+        match bounce::Bounce::start_track(engine, &mut self.project, track, 0.0, end, path) {
+            Ok(running) => self.begun_bounce(running, None),
             Err(e) => self.ui.status = Some(e),
         }
     }
@@ -618,12 +604,9 @@ impl App {
             return;
         }
         let path = bounce::free_path(&dir, &format!("{} {start:.3}", file_name(&name)));
-        let Some(sync) = self.sync.as_mut() else {
-            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
-            return;
-        };
+        let engine = self.sync.as_mut().map(|s| &mut s.engine);
         match bounce::Bounce::start_regions(
-            &mut sync.engine,
+            engine,
             &mut self.project,
             track,
             &regions,
@@ -631,14 +614,7 @@ impl App {
             end,
             path,
         ) {
-            Ok(running) => {
-                self.bounce = Some(running);
-                self.region_bounce = Some((track, regions));
-                // Seek and Play in this same frame, so the capture starts with the sound.
-                if let Some(sync) = self.sync.as_mut() {
-                    sync.sync(&mut self.project);
-                }
-            }
+            Ok(running) => self.begun_bounce(running, Some((track, regions))),
             Err(e) => self.ui.status = Some(e),
         }
     }
@@ -701,22 +677,23 @@ impl App {
             return;
         };
         self.ui.bouncing = true;
-        if running.poll(&self.project) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            running.cancel(&mut self.project);
+        }
+        if running.advance(&self.project) {
             let percent = (running.progress(&self.project) * 100.0).round();
             self.ui.status = Some(i18n::trf("Bouncing {}%", &[&format!("{percent:.0}")]));
             ctx.request_repaint();
             return;
         }
-        let reached_end = self.project.playing && self.project.position_beats >= running.end_beat;
+        let reached_end = self.project.playing && self.project.position_beats >= running.end_beat();
         let Some(running) = self.bounce.take() else {
             self.ui.bouncing = false;
             return;
         };
         self.ui.bouncing = false;
-        let result = match self.sync.as_mut() {
-            Some(sync) => running.finish(&mut sync.engine, &mut self.project, reached_end),
-            None => Ok(None),
-        };
+        let engine = self.sync.as_mut().map(|s| &mut s.engine);
+        let result = running.finish(engine, &mut self.project, reached_end);
         let placed = self.region_bounce.take();
         match result {
             Ok(Some(done)) => {

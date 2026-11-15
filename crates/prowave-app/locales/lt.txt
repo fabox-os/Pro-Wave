@@ -839,3 +839,6 @@ Input Monitoring: hear the input of the track = Įėjimo stebėjimas: girdėti t
 Plug-in not found = Papildinys nerastas
 Not found = Nerasta
 In Use = Naudojami
+the engine did not take the project in time; no file was written = variklis per nustatytą laiką neperėmė projekto; failas neįrašytas
+the bounce has not finished = bounce dar nesibaigė
+cannot bounce: there is no audio output = negalima atlikti bounce: nėra garso išvesties
