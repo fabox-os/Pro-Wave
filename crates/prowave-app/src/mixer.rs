@@ -237,6 +237,9 @@ fn small_button(
     on_col: Color32,
 ) -> bool {
     let resp = ui.interact(r, id, Sense::click());
+    if let Some(text) = crate::tooltips::button_tip(label) {
+        resp.clone().on_hover_text(tr(text));
+    }
     g.rect_filled(r, 3.0, if on { on_col } else { SLOT_GRAY });
     let txt = if on && on_col == SOLO_ON {
         Color32::BLACK

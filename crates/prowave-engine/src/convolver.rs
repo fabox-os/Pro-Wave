@@ -151,8 +151,8 @@ impl Fft {
         if re.len() < n || im.len() < n {
             return;
         }
-        for (i, j) in self.rev.iter().enumerate().take(n) {
-            let j = *j as usize;
+        for (i, &r) in self.rev.iter().enumerate().take(n) {
+            let j = r as usize;
             if j > i {
                 re.swap(i, j);
                 im.swap(i, j);
