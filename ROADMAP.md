@@ -381,9 +381,9 @@ limitations at the end of the section). Still open, in the order the work would 
 - Hardware tests of MIDI output, MIDI clock and SysEx; native-speaker review of the translations.
 - Release 0.2.2 was tested on Ubuntu 26.04.1 LTS only; Windows and macOS builds are not tested for it.
 
-## Since 0.2.2 (2026-11-09, heading for 0.3.0)
+## Since 0.2.2 (2026-11-09; this is release 0.3.0)
 
-Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
+Done and merged into `main` (CHANGELOG.md, section 0.3.0, has the details):
 
 - **Space Designer** (convolution reverb, own window, six built-in impulse responses, Volume and
   Filter envelopes, X-Over with Spread, Output EQ, synthesized IR tab) and three mastering presets.
