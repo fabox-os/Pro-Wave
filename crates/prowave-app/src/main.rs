@@ -33,6 +33,7 @@ mod inspector;
 mod ir_files;
 mod library;
 mod logicx_import;
+mod logicx;
 mod marker_track;
 mod menus;
 mod midi_file;
@@ -196,8 +197,10 @@ pub struct UiState {
     pub bounce_cmd: bool,
     /// A bounce is running (greys the Bounce entry).
     pub bouncing: bool,
-    /// File > Import > Other Projects… picked this frame (a GarageBand bundle).
+    /// File > Import > Other Projects… picked this frame (a GarageBand or Logic Pro bundle).
     pub open_band_cmd: bool,
+    /// The Logic Pro Import window, while it is open (see `logicx::show_report`).
+    pub logicx_report: Option<logicx::Report>,
     /// File > Show in File Manager picked this frame.
     pub reveal_cmd: bool,
     /// The project has a file on disk (greys the File Manager entry until it is saved).
@@ -312,6 +315,7 @@ impl UiState {
             bounce_cmd: false,
             bouncing: false,
             open_band_cmd: false,
+            logicx_report: None,
             reveal_cmd: false,
             has_path: false,
             piano_focus: false,
@@ -504,6 +508,13 @@ impl App {
     }
 
     fn import(&mut self, path: &std::path::Path, ctx: &egui::Context) {
+        if logicx::is_bundle(path) {
+            // A Logic Pro project opens as a new project, as File > Open does, after the question
+            // about unsaved changes. Open Recent takes the path from `recent_pick`.
+            self.ui.recent_pick = Some(path.to_path_buf());
+            self.run_file_cmd(file_commands::FileCmd::OpenRecent, ctx);
+            return;
+        }
         if midi_file::is_midi_path(path) {
             self.ui.status = Some(match midi_file::import_path(&mut self.project, path) {
                 Ok(n) => i18n::trf("imported {} tracks from {}", &[&n, &path.display()]),
@@ -701,8 +712,9 @@ impl App {
         }
     }
 
-    /// File > Import > Other Projects…: the audio files of a GarageBand bundle become tracks
-    /// (see `garageband`; the arrangement inside the project is not read yet).
+    /// File > Import > Other Projects…: a Logic Pro `.logicx` project adds its tracks, with their
+    /// plug-ins and regions (see `logicx`); otherwise the audio files of a GarageBand bundle
+    /// become tracks (see `garageband`; the arrangement inside the project is not read yet).
     fn import_band(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new()
             .set_title(i18n::tr("Other Projects…"))
@@ -710,6 +722,21 @@ impl App {
         else {
             return;
         };
+        if logicx::is_bundle(&path) {
+            match logicx::import_into(&mut self.project, &path, ctx) {
+                Ok(report) => {
+                    self.ui.status = Some(i18n::trf(
+                        "imported {} tracks from {}",
+                        &[&report.tracks, &path.display()],
+                    ));
+                    // The whole import is one undo step.
+                    self.history.record(&self.project);
+                    self.ui.logicx_report = Some(report);
+                }
+                Err(e) => self.ui.status = Some(e),
+            }
+            return;
+        }
         match garageband::import(&mut self.project, &path, ctx) {
             Ok(n) => {
                 self.ui.status = Some(i18n::trf(
@@ -1560,6 +1587,7 @@ impl eframe::App for App {
             self.restart_audio(prefs);
         }
         track_dialogs::show(&ctx, &mut self.project, &mut self.ui);
+        logicx::show_report(&ctx, &mut self.ui.logicx_report);
         new_track_dialog::show(&ctx, &mut self.project, &mut self.ui);
         stack_dialog::show(&ctx, &mut self.project, &mut self.ui);
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
