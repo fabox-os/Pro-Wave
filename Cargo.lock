@@ -3436,6 +3436,7 @@ dependencies = [
  "muda",
  "prowave-engine",
  "prowave-garageband-import",
+ "prowave-ladspa",
  "prowave-project",
  "rfd",
  "rhai",

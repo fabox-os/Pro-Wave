@@ -27,6 +27,7 @@ mod mapped;
 mod monitor;
 mod mtc;
 mod output;
+pub mod plugin;
 pub mod pult_eq;
 mod routing;
 mod sf2;
@@ -69,6 +70,7 @@ pub use crate::mtc::{
     MtcMessage,
 };
 pub use crate::output::{peak_of, Engine, EngineError};
+pub use crate::plugin::{BlockEffect, PLUGIN_BLOCK};
 pub use crate::routing::{
     curve_shape, lane_value, send_gain, AutoLane, AutoPoint, AutoTarget, Route, SendSpec,
     MAX_AUTO_POINTS, MAX_BUSES, MAX_SENDS,

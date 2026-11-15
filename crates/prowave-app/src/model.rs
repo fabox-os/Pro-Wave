@@ -224,6 +224,9 @@ pub struct Insert {
     pub params: [f32; prowave_engine::MAX_FX_PARAMS],
     /// For a Space Designer set to `IR Type` 2: the impulse-response file it plays.
     pub ir_file: Option<crate::ir_files::IrFileId>,
+    /// For a `Plug-in` effect: the LADSPA plug-in (its settings in `params` are positions from
+    /// 0 to 1 along each control's range).
+    pub plugin: Option<crate::plugins::PluginId>,
 }
 
 impl Insert {
@@ -234,11 +237,32 @@ impl Insert {
             bypass: false,
             params: kind.defaults(),
             ir_file: None,
+            plugin: None,
         }
     }
 
+    /// A new effect that is the LADSPA plug-in `plugin`, with the plug-in's default settings.
+    pub fn new_plugin(plugin: crate::plugins::PluginId) -> Self {
+        Self {
+            kind: prowave_engine::FxKind::Plugin,
+            bypass: false,
+            params: crate::plugins::default_params(plugin),
+            ir_file: None,
+            plugin: Some(plugin),
+        }
+    }
+
+    /// The effect's kind name; for a plug-in see [`Insert::label`].
     pub fn name(&self) -> &'static str {
         self.kind.name()
+    }
+
+    /// What the strip's slot and the effect window show: the plug-in's own name for a plug-in.
+    pub fn label(&self) -> String {
+        match self.plugin {
+            Some(id) => crate::plugins::name(id),
+            None => self.kind.name().to_string(),
+        }
     }
 }
 
