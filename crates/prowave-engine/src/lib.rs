@@ -75,7 +75,10 @@ pub use crate::mtc::{
     full_frame, quarter_frame_data, rate_code, rate_of_code, MtcDecoder, MtcEvent, MtcGenerator,
     MtcMessage,
 };
-pub use crate::output::{peak_of, Engine, EngineError};
+pub use crate::output::{
+    buffer_choices, buffer_range, output_devices, peak_of, Engine, EngineError, OutputDevice,
+    BUFFER_CHOICES,
+};
 pub use crate::plugin::{BlockEffect, PLUGIN_BLOCK};
 pub use crate::routing::{
     curve_shape, lane_value, send_gain, AutoLane, AutoPoint, AutoTarget, Route, SendSpec,
