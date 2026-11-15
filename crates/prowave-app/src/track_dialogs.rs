@@ -10,7 +10,7 @@ use crate::track_icons::{draw_icon, IconKind};
 use egui::{vec2, Color32, Sense, Stroke};
 
 /// The colour swatches of Assign Track Color.
-pub const TRACK_COLORS: [Color32; 16] = [
+pub const TRACK_COLORS: [Color32; 32] = [
     Color32::from_rgb(0x4e, 0xb0, 0x4a),
     Color32::from_rgb(0x3f, 0x5f, 0xc0),
     Color32::from_rgb(0xd9, 0xaa, 0x2a),
@@ -27,6 +27,24 @@ pub const TRACK_COLORS: [Color32; 16] = [
     Color32::from_rgb(0x6a, 0x3a, 0x80),
     Color32::from_rgb(0x4a, 0x4a, 0x4a),
     Color32::from_rgb(0xf0, 0xa0, 0xb0),
+    // Darker, softer and paler shades, so a project with many tracks and clips can use a
+    // colour for each family of sounds (issue #118).
+    Color32::from_rgb(0x2e, 0x7d, 0x4f),
+    Color32::from_rgb(0x27, 0x40, 0x8b),
+    Color32::from_rgb(0xb8, 0x86, 0x0b),
+    Color32::from_rgb(0x4b, 0x3f, 0xa0),
+    Color32::from_rgb(0x8c, 0x2f, 0x39),
+    Color32::from_rgb(0xc2, 0x57, 0x1a),
+    Color32::from_rgb(0x1f, 0x7a, 0x7a),
+    Color32::from_rgb(0xb0, 0x30, 0x7a),
+    Color32::from_rgb(0xb5, 0xd3, 0x34),
+    Color32::from_rgb(0x6c, 0xc4, 0xf0),
+    Color32::from_rgb(0xd2, 0xb4, 0x8c),
+    Color32::from_rgb(0x6b, 0x7f, 0x99),
+    Color32::from_rgb(0x8f, 0x4a, 0x9e),
+    Color32::from_rgb(0xf4, 0xb3, 0x93),
+    Color32::from_rgb(0x8f, 0xe3, 0xb9),
+    Color32::from_rgb(0xb9, 0xa7, 0xf0),
 ];
 
 /// The longest name Rename Track accepts, in characters.
