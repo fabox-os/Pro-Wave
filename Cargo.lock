@@ -3438,6 +3438,7 @@ dependencies = [
  "prowave-exs",
  "prowave-garageband-import",
  "prowave-ladspa",
+ "prowave-plugin-host",
  "prowave-project",
  "prowave-sfz",
  "rfd",
@@ -3538,6 +3539,15 @@ version = "0.1.0"
 dependencies = [
  "quick-xml 0.42.0",
  "zip",
+]
+
+[[package]]
+name = "prowave-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libloading 0.8.9",
+ "rtrb",
 ]
 
 [[package]]

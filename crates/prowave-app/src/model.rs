@@ -227,6 +227,9 @@ pub struct Insert {
     /// For a `Plug-in` effect: the LADSPA plug-in (its settings in `params` are positions from
     /// 0 to 1 along each control's range).
     pub plugin: Option<crate::plugins::PluginId>,
+    /// A hosted CLAP, VST3 or Audio Unit plug-in: its number in `crate::hosted_plugins`, or 0 for
+    /// anything else. The plug-in keeps its own settings; `params` is unused.
+    pub hosted: u32,
 }
 
 impl Insert {
@@ -238,6 +241,7 @@ impl Insert {
             params: kind.defaults(),
             ir_file: None,
             plugin: None,
+            hosted: 0,
         }
     }
 
@@ -249,18 +253,33 @@ impl Insert {
             params: crate::plugins::default_params(plugin),
             ir_file: None,
             plugin: Some(plugin),
+            hosted: 0,
+        }
+    }
+
+    /// The hosted CLAP, VST3 or Audio Unit plug-in with number `hosted` in
+    /// `crate::hosted_plugins`.
+    pub fn new_hosted(hosted: u32) -> Self {
+        Self {
+            hosted,
+            ..Self::new(prowave_engine::FxKind::Plugin)
         }
     }
 
     /// The effect's kind name; for a plug-in see [`Insert::label`].
     pub fn name(&self) -> &'static str {
-        self.kind.name()
+        if self.hosted != 0 {
+            crate::hosted_plugins::name(self.hosted)
+        } else {
+            self.kind.name()
+        }
     }
 
     /// What the strip's slot and the effect window show: the plug-in's own name for a plug-in.
     pub fn label(&self) -> String {
         match self.plugin {
             Some(id) => crate::plugins::name(id),
+            None if self.hosted != 0 => crate::hosted_plugins::name(self.hosted).to_string(),
             None => self.kind.name().to_string(),
         }
     }

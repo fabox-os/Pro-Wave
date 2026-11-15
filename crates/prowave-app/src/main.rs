@@ -26,6 +26,7 @@ mod graphics;
 mod groove;
 mod group_editor;
 mod groups;
+mod hosted_plugins;
 mod i18n;
 mod import;
 mod inspector;
@@ -238,6 +239,10 @@ pub struct UiState {
     pub drum_pad: usize,
     pub drum_held: Option<usize>,
     pub drum_error: Option<String>,
+    /// The text in the Plugin Manager's search field, and the manufacturer chosen in its list
+    /// (`None`: Show All).
+    pub plugin_manager_search: String,
+    pub plugin_manager_vendor: Option<String>,
 }
 
 impl UiState {
@@ -324,6 +329,8 @@ impl UiState {
             drum_pad: 0,
             drum_held: None,
             drum_error: None,
+            plugin_manager_search: String::new(),
+            plugin_manager_vendor: None,
         }
     }
 
@@ -1300,7 +1307,7 @@ impl eframe::App for App {
         }
         if s.show_inspector {
             egui::Panel::left("inspector")
-                .exact_size(244.0)
+                .exact_size(inspector::WIDTH)
                 .frame(egui::Frame::new())
                 .show(ui, |ui| inspector::show(ui, p, s, &meters));
         }
@@ -1350,6 +1357,8 @@ impl eframe::App for App {
             .frame(egui::Frame::new())
             .show(ui, |ui| tracks_area::show(ui, p, s, &meters));
         fx_ui::show(&ctx, p, s, &meters);
+        plugin_manager::show(&ctx, p, s);
+        hosted_plugins::idle();
         automation::show(&ctx, p, s);
         undo_history::show(&ctx, p, s, &mut self.history);
 
@@ -1465,7 +1474,6 @@ impl eframe::App for App {
             .get(self.project.selected_track)
             .map(|t| t.name.clone());
         musical_typing::show(&ctx, &mut self.ui.typing, typed.as_deref());
-        plugin_manager::show(&ctx, &mut self.ui);
         drum_machine_ui::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
@@ -1607,7 +1615,9 @@ fn shot_flex_scene(app: &mut App, ctx: &egui::Context, kind: &str) {
 /// The Mixer layout pictures (`PROWAVE_SHOT_SCENE=mix…`): the demo project playing, with two
 /// Aux strips (a reverb and a delay), sends to them, effects on the strips, a compressor
 /// working, and automation in its different modes. `mixfx` also opens the compressor's window,
-/// `mixeq` the Channel EQ's, `mixspace` the Space Designer's and `mixauto` the Automation editor.
+/// `mixeq` the Channel EQ's, `mixspace` the Space Designer's and `mixauto` the Automation editor;
+/// `mixplugin` puts a hosted plug-in on a strip and opens its window, `mixplugins` opens the
+/// Plugin Manager.
 fn shot_mixer_scene(app: &mut App, kind: &str) {
     use model::{AutoMode, AutoTarget, Insert, SendSlot, TrackKind};
     use prowave_engine::FxKind;
@@ -1732,6 +1742,16 @@ fn shot_mixer_scene(app: &mut App, kind: &str) {
             app.project.tracks[bass].inserts = vec![Insert::new(FxKind::Reverb)];
             app.ui.mixer.fx_window = Some((bass, 0));
         }
+        // A hosted plug-in's window: the first Audio Unit the system lists (macOS has its
+        // own), since no plug-in file is certain to be installed.
+        "plugin" => {
+            if let Some(info) = prowave_plugin_host::scan_audio_units().first() {
+                let hosted = Insert::new_hosted(hosted_plugins::add(info, None));
+                app.project.tracks[bass].inserts = vec![hosted];
+                app.ui.mixer.fx_window = Some((bass, 0));
+            }
+        }
+        "plugins" => app.ui.show_plugin_manager = true,
         "auto" => {
             app.ui.mixer.auto_editor.track = Some(piano_t);
             app.ui.mixer.auto_editor.span = 72.0;
@@ -1791,6 +1811,13 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let all_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // A plug-in's own process is this program started with `--plugin-host` (see `plugins`): it
+    // serves the plug-in and never comes back here.
+    prowave_plugin_host::serve_if_requested(&all_args);
+    // The child process that lists one plug-in file's plug-ins (see `plugins`).
+    if hosted_plugins::run_scan_if_requested(&all_args) {
+        return Ok(());
+    }
     // `--version` and `--help` answer without opening a window.
     let flag = |name: &str| {
         let name = std::ffi::OsStr::new(name);
@@ -1883,6 +1910,10 @@ fn main() -> eframe::Result {
             // Cmd/Ctrl + = / - / 0 resize the interface through `ui_scale` instead, which
             // also keeps the fit for small windows.
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+            // The plug-ins of the last run are listed at once, and the scan for new, changed and
+            // removed ones runs in the background, as Logic does at every start.
+            hosted_plugins::set_repaint(&cc.egui_ctx);
+            hosted_plugins::scan(false);
             // Every start begins clean; the picture runs need something to show.
             let project = if shots_dir.is_some() || shot_out.is_some() {
                 Project::demo()

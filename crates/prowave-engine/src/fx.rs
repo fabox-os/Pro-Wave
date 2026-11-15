@@ -1356,11 +1356,7 @@ impl Fx {
                     };
                 }
             }
-            State::Plugin(s) => {
-                for (i, v) in pr.iter().enumerate() {
-                    s.set_param(i, *v);
-                }
-            }
+            State::Plugin(s) => s.apply_settings(&pr),
             State::PultEq(s) => s.retune(&pr, sr),
             State::Amp(s) => {
                 let model = &AMP_VOICES[pr[0].round().clamp(0.0, 4.0) as usize];
@@ -1844,7 +1840,10 @@ impl Chain {
     /// the parameter's range.
     pub fn set_param_norm(&mut self, slot: usize, param: usize, norm: f32) {
         if let Some(fx) = self.fx.get_mut(slot) {
-            if let Some(info) = fx.kind().params().get(param) {
+            if let State::Plugin(s) = &mut fx.state {
+                // A hosted plug-in takes any of its own parameters, not only the generic ones.
+                s.set_param(param, norm);
+            } else if let Some(info) = fx.kind().params().get(param) {
                 fx.set_param(param, info.from_norm(norm));
             }
         }

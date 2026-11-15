@@ -5,7 +5,7 @@
 <text x="129.4" y="33.0" font-size="12" font-weight="600" fill="#fff">57.46%</text>
 <rect x="190.4" y="16" width="68.4" height="24" fill="#555b63"/><rect x="258.8" y="16" width="62" height="24" fill="#c0392b"/>
 <text x="199.4" y="33.0" font-size="12" font-weight="600" fill="#fff">roadmap</text>
-<text x="267.8" y="33.0" font-size="12" font-weight="600" fill="#fff">31.17%</text>
+<text x="267.8" y="33.0" font-size="12" font-weight="600" fill="#fff">32.47%</text>
 <text x="16.0" y="74.0" font-size="14" font-weight="500" fill="#e6edf3">Menu entries: 57.5% (104/181)</text>
 <rect x="16.0" y="84.0" width="31.4" height="33.4" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
 <rect x="47.4" y="84.0" width="31.4" height="33.4" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
@@ -206,7 +206,7 @@
 <rect x="484.7" y="435.8" width="37.3" height="50.2" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
 <rect x="484.7" y="335.2" width="37.3" height="150.8" fill="none" stroke="#10141a" stroke-width="2"/>
 <text x="489.7" y="349.2" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">Help</text>
-<text x="538.0" y="74.0" font-size="14" font-weight="500" fill="#e6edf3">Roadmap items: 31.2% (24/77)</text>
+<text x="538.0" y="74.0" font-size="14" font-weight="500" fill="#e6edf3">Roadmap items: 32.5% (25/77)</text>
 <rect x="538.0" y="84.0" width="47.4" height="51.1" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
 <rect x="585.4" y="84.0" width="47.4" height="51.1" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
 <rect x="632.8" y="84.0" width="47.4" height="51.1" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
@@ -302,10 +302,10 @@
 <rect x="932.7" y="343.6" width="111.3" height="47.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
 <rect x="932.7" y="296.2" width="111.3" height="94.9" fill="none" stroke="#10141a" stroke-width="2"/>
 <text x="937.7" y="310.2" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">4 Mixer &amp; Cha…</text>
-<rect x="932.7" y="391.1" width="37.1" height="47.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="969.8" y="391.1" width="37.1" height="47.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="1006.9" y="391.1" width="37.1" height="47.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
-<rect x="932.7" y="438.5" width="111.3" height="47.5" fill="#3a3d44" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="932.7" y="391.1" width="37.1" height="47.5" fill="#2ea043" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="969.8" y="391.1" width="37.1" height="47.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="1006.9" y="391.1" width="37.1" height="47.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
+<rect x="932.7" y="438.5" width="111.3" height="47.5" fill="#b08a1e" stroke="#1f7a33" stroke-opacity=".55" stroke-width=".6"/>
 <rect x="932.7" y="391.1" width="111.3" height="94.9" fill="none" stroke="#10141a" stroke-width="2"/>
 <text x="937.7" y="405.1" font-size="12" font-weight="600" fill="#fff" stroke="#000" stroke-width="2.5" paint-order="stroke">7 Plugin Host…</text>
 <rect x="16.0" y="498.0" width="11" height="11" fill="#2ea043"/>

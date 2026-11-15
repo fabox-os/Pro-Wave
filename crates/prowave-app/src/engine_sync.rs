@@ -84,6 +84,9 @@ pub struct EngineSync {
     automation: Vec<AutoLane>,
     /// A command was rejected during the last `sync`.
     retry: bool,
+    /// The plug-in revision the chains were last built for (see `plugins::revision`): when a
+    /// missing plug-in is installed again, the strips that use hosted plug-ins are rebuilt.
+    plugin_rev: u64,
 }
 
 /// The settings that change the impulse response of a Space Designer (not Predelay, Dry, Wet,
@@ -201,16 +204,20 @@ fn chain_of(inserts: &[Insert], sample_rate: f32) -> Box<Chain> {
         inserts
             .iter()
             .map(|i| {
-                let mut fx = Fx::new(i.kind, i.params, i.bypass, sample_rate);
-                // A LADSPA plug-in is started here, off the audio thread. One that cannot
-                // start leaves its slot passing the sound through (with the same delay).
-                if let Some(id) = i.plugin {
-                    match crate::plugins::load_effect(id, sample_rate) {
-                        Ok(plugin) => fx.set_plugin(plugin),
-                        Err(e) => tracing::warn!("plug-in {}: {e}", crate::plugins::name(id)),
+                if i.hosted != 0 {
+                    crate::hosted_plugins::fx(i.hosted, i.bypass, sample_rate)
+                } else {
+                    let mut fx = Fx::new(i.kind, i.params, i.bypass, sample_rate);
+                    // A LADSPA plug-in is started here, off the audio thread. One that cannot
+                    // start leaves its slot passing the sound through (with the same delay).
+                    if let Some(id) = i.plugin {
+                        match crate::plugins::load_effect(id, sample_rate) {
+                            Ok(plugin) => fx.set_plugin(plugin),
+                            Err(e) => tracing::warn!("plug-in {}: {e}", crate::plugins::name(id)),
+                        }
                     }
+                    fx
                 }
-                fx
             })
             .collect(),
     ))
@@ -285,8 +292,12 @@ fn latency_of(t: &Track, sample_rate: f32) -> usize {
         .iter()
         .filter(|i| !i.bypass)
         .map(|i| {
-            i.kind.latency_samples(sample_rate)
-                + i.plugin.map_or(0, crate::plugins::reported_latency)
+            if i.hosted != 0 {
+                crate::hosted_plugins::latency_samples(i.hosted)
+            } else {
+                i.kind.latency_samples(sample_rate)
+                    + i.plugin.map_or(0, crate::plugins::reported_latency)
+            }
         })
         .sum()
 }
@@ -637,6 +648,7 @@ impl EngineSync {
             pdc: Vec::new(),
             automation: Vec::new(),
             retry: false,
+            plugin_rev: crate::hosted_plugins::revision(),
         };
         sync.push(p);
         sync
@@ -925,7 +937,11 @@ impl EngineSync {
         let n = p.tracks.len().min(MAX_TRACKS).max(self.fx.len());
         self.fx.resize_with(n, Vec::new);
         self.routes.resize(n, Route::default());
-        if !self.sync_master_fx(p, sr) {
+        let revision = crate::hosted_plugins::revision();
+        // A plug-in that was missing and is installed now is only in the engine once the chains
+        // that use it are built again: those are rebuilt although their kinds did not change.
+        let relinked = revision != self.plugin_rev;
+        if !self.sync_master_fx(p, sr, relinked) {
             return;
         }
         for i in 0..n {
@@ -934,11 +950,13 @@ impl EngineSync {
                 .get(i)
                 .filter(|_| i < MAX_TRACKS)
                 .map_or(&[], |t| &t.inserts);
-            let same_kinds = self.fx[i].len() == want.len()
+            let rebuild = relinked && want.iter().any(|x| x.hosted != 0);
+            let same_kinds = !rebuild
+                && self.fx[i].len() == want.len()
                 && self.fx[i]
                     .iter()
                     .zip(want)
-                    .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin);
+                    .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin && a.hosted == b.hosted);
             if !same_kinds {
                 let chain = chain_of(want, sr);
                 if !self.send(Command::SetInserts {
@@ -1022,18 +1040,22 @@ impl EngineSync {
                 self.automation = lanes;
             }
         }
+        self.plugin_rev = revision;
     }
 
     /// The effects of the Stereo Out strip, sent like a track's: a new chain when the kinds
-    /// change, else the changed settings. Returns false when the engine's queue was full.
-    fn sync_master_fx(&mut self, p: &Project, sr: f32) -> bool {
+    /// change (or a hosted plug-in was found again, see `sync_strips`), else the changed
+    /// settings. Returns false when the engine's queue was full.
+    fn sync_master_fx(&mut self, p: &Project, sr: f32, relinked: bool) -> bool {
         let want = &p.master_inserts;
-        let same_kinds = self.master_fx.len() == want.len()
+        let rebuild = relinked && want.iter().any(|x| x.hosted != 0);
+        let same_kinds = !rebuild
+            && self.master_fx.len() == want.len()
             && self
                 .master_fx
                 .iter()
                 .zip(want)
-                .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin);
+                .all(|(a, b)| a.kind == b.kind && a.plugin == b.plugin && a.hosted == b.hosted);
         if !same_kinds {
             if !self.send(Command::SetMasterInserts(chain_of(want, sr))) {
                 return false;

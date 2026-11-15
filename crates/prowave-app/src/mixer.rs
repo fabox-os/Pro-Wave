@@ -40,6 +40,9 @@ const STRIP_SEL: Color32 = Color32::from_rgb(0x4d, 0x4d, 0x4d);
 const SLOT_EMPTY: Color32 = Color32::from_rgb(0x2c, 0x2c, 0x2c);
 const SLOT_GRAY: Color32 = Color32::from_rgb(0x55, 0x55, 0x55);
 const PLUGIN_BLUE: Color32 = Color32::from_rgb(0x36, 0x6f, 0xd2);
+/// A plug-in in a project that is not installed here: its slot keeps its name and passes the
+/// sound through, and the orange says so.
+pub const PLUGIN_NOT_FOUND: Color32 = Color32::from_rgb(0xe0, 0x8a, 0x1c);
 /// A strip that makes no sound (muted, or another track is soloed): instruments, plug-ins
 /// and sends turn grey, and so do the meters.
 const PLUGIN_OFF: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x4a);
@@ -92,6 +95,13 @@ pub struct MixerView {
     pub inputs: crate::audio_rec::InputChoice,
     /// The text in the Audio FX plug-in picker's search field (see `plugin_picker`).
     pub picker_search: String,
+    /// The text in a hosted plug-in window's parameter search field (see `fx_ui`).
+    pub plugin_search: String,
+    /// A hosted plug-in is shown as its Controls (the sliders) and not in its own window:
+    /// Logic's View > Controls instead of View > Editor.
+    pub plugin_controls: bool,
+    /// The hosted plug-in whose own window was asked for (see `fx_ui`).
+    pub plugin_editor: Option<crate::fx_ui::EditorWindow>,
 }
 
 /// A channel strip's effects, sends, level and pan, as Copy Channel Strip keeps them.
@@ -117,6 +127,9 @@ impl Default for MixerView {
             copied: None,
             inputs: crate::audio_rec::InputChoice::default(),
             picker_search: String::new(),
+            plugin_search: String::new(),
+            plugin_controls: false,
+            plugin_editor: None,
         }
     }
 }
@@ -205,6 +218,18 @@ fn slot(g: &Painter, r: Rect, text: &str, fill: Color32, color: Color32) {
         let shown = elide(g, text, &font, r.width() - 6.0);
         g.text(r.center(), Align2::CENTER_CENTER, shown, font, color);
     }
+}
+
+/// The name of an empty slot, as Logic writes it in the inspector's channel strips ("Audio FX",
+/// "Sends", "Group"): the Mixer has these in its label column, the inspector has no column.
+fn caption(g: &Painter, r: Rect, text: &str) {
+    g.text(
+        r.center(),
+        Align2::CENTER_CENTER,
+        text,
+        FontId::proportional(10.0),
+        TEXT_DIM,
+    );
 }
 
 fn small_button(
@@ -816,14 +841,13 @@ fn send_slot(
 
 /// What the user chose in an Audio FX slot's menu.
 enum InsertAct {
-    Add(prowave_engine::FxKind),
-    Replace(prowave_engine::FxKind),
-    /// A LADSPA plug-in found on this computer.
-    AddPlugin(crate::plugins::PluginId),
-    ReplacePlugin(crate::plugins::PluginId),
+    Add(Insert),
+    Replace(Insert),
     Remove,
     Bypass,
     Open,
+    /// A hosted plug-in as its sliders (Logic: View > Controls) instead of its own window.
+    Controls,
     Move(isize),
 }
 
@@ -838,6 +862,33 @@ fn strip_inserts(p: &Project, i: usize) -> &[Insert] {
     } else {
         p.tracks.get(i).map_or(&[], |t| &t.inserts)
     }
+}
+
+/// The fill of a filled Audio FX slot. Bypass or silence wins over a missing plug-in: a slot
+/// that makes no sound is grey whether or not its plug-in is installed.
+fn insert_fill(off: bool, missing: bool) -> Color32 {
+    if off {
+        PLUGIN_OFF
+    } else if missing {
+        PLUGIN_NOT_FOUND
+    } else {
+        PLUGIN_BLUE
+    }
+}
+
+/// What the hover text of a slot whose plug-in is not installed says: that, and what the
+/// project knows of the plug-in (its manufacturer and format).
+fn missing_note(plugin: u32) -> String {
+    let mut note = tr("Plug-in not found").to_string();
+    if let Some(info) = crate::hosted_plugins::info(plugin) {
+        let known: Vec<&str> = [info.vendor.as_str(), info.format.name()]
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .collect();
+        note.push('\n');
+        note.push_str(&known.join(" \u{b7} "));
+    }
+    note
 }
 
 /// One Audio FX slot of track `i`: the effect in it (blue, grey when bypassed or silenced),
@@ -856,25 +907,24 @@ fn insert_slot(
 ) {
     let have = strip_inserts(p, i).get(k).copied();
     let count = strip_inserts(p, i).len();
+    let off = have.is_some_and(|fx| inactive || fx.bypass);
+    let missing =
+        have.is_some_and(|fx| fx.hosted != 0 && crate::hosted_plugins::missing(fx.hosted));
+    let ink = if off { TEXT_DIM } else { Color32::WHITE };
     match have {
-        Some(fx) => {
-            let off = inactive || fx.bypass;
-            slot(
-                g,
-                r,
-                fx.name(),
-                if off { PLUGIN_OFF } else { PLUGIN_BLUE },
-                if off { TEXT_DIM } else { Color32::WHITE },
-            );
-        }
+        Some(fx) => slot(g, r, fx.name(), insert_fill(off, missing), ink),
         None => slot(g, r, "", SLOT_EMPTY, TEXT),
     }
     if k > count || (have.is_none() && count >= prowave_engine::MAX_INSERTS) {
         return;
     }
     let resp = ui.interact(r, uid, Sense::click());
+    if let (true, Some(fx)) = (missing, have) {
+        resp.clone().on_hover_text(missing_note(fx.hosted));
+    }
     if have.is_some() && resp.double_clicked() {
         v.fx_window = Some((i, k));
+        v.plugin_controls = false;
     }
     let mut act = None;
     egui::Popup::menu(&resp).show(|ui| {
@@ -882,6 +932,10 @@ fn insert_slot(
         if let Some(fx) = have {
             if ui.button(tr("Open")).clicked() {
                 act = Some(InsertAct::Open);
+                ui.close();
+            }
+            if fx.hosted != 0 && ui.button(tr("Controls")).clicked() {
+                act = Some(InsertAct::Controls);
                 ui.close();
             }
             if ui.selectable_label(fx.bypass, tr("Bypass")).clicked() {
@@ -903,7 +957,7 @@ fn insert_slot(
             ui.separator();
             ui.menu_button(tr("Replace With"), |ui| {
                 if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-                    act = Some(insert_act(pick, true));
+                    act = Some(InsertAct::Replace(pick_insert(pick)));
                     v.picker_search.clear();
                     ui.close();
                 }
@@ -913,7 +967,7 @@ fn insert_slot(
                 ui.close();
             }
         } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-            act = Some(insert_act(pick, false));
+            act = Some(InsertAct::Add(pick_insert(pick)));
             v.picker_search.clear();
             ui.close();
         }
@@ -923,14 +977,15 @@ fn insert_slot(
     }
 }
 
-/// What a picker choice does to the slot: add the effect there, or replace the one in it.
-fn insert_act(pick: crate::plugin_picker::Pick, replace: bool) -> InsertAct {
-    use crate::plugin_picker::Pick;
-    match (pick, replace) {
-        (Pick::Effect(kind), false) => InsertAct::Add(kind),
-        (Pick::Effect(kind), true) => InsertAct::Replace(kind),
-        (Pick::Plugin(id), false) => InsertAct::AddPlugin(id),
-        (Pick::Plugin(id), true) => InsertAct::ReplacePlugin(id),
+/// A new effect for a picker choice: one of Pro Wave's own, or a hosted plug-in, which joins
+/// the session's rack (`crate::hosted_plugins`).
+fn pick_insert(pick: crate::plugin_picker::Pick) -> Insert {
+    match pick {
+        crate::plugin_picker::Pick::Effect(kind) => Insert::new(kind),
+        crate::plugin_picker::Pick::Plugin(id) => Insert::new_plugin(id),
+        crate::plugin_picker::Pick::Hosted(info) => {
+            Insert::new_hosted(crate::hosted_plugins::add(&info, None))
+        }
     }
 }
 
@@ -948,26 +1003,14 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
     };
     let filled = k < inserts.len();
     match act {
-        InsertAct::Add(kind) => {
+        InsertAct::Add(insert) => {
             if inserts.len() < prowave_engine::MAX_INSERTS {
-                inserts.push(Insert::new(kind));
+                inserts.push(insert);
                 v.fx_window = Some((i, inserts.len() - 1));
             }
         }
-        InsertAct::AddPlugin(id) => {
-            if inserts.len() < prowave_engine::MAX_INSERTS {
-                inserts.push(Insert::new_plugin(id));
-                v.fx_window = Some((i, inserts.len() - 1));
-            }
-        }
-        InsertAct::Replace(kind) if filled => {
-            inserts[k] = Insert::new(kind);
-            if let Some(a) = auto.as_mut() {
-                a.insert_replaced(k);
-            }
-        }
-        InsertAct::ReplacePlugin(id) if filled => {
-            inserts[k] = Insert::new_plugin(id);
+        InsertAct::Replace(insert) if filled => {
+            inserts[k] = insert;
             if let Some(a) = auto.as_mut() {
                 a.insert_replaced(k);
             }
@@ -984,7 +1027,10 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
             };
         }
         InsertAct::Bypass if filled => inserts[k].bypass = !inserts[k].bypass,
-        InsertAct::Open if filled => v.fx_window = Some((i, k)),
+        InsertAct::Open | InsertAct::Controls if filled => {
+            v.fx_window = Some((i, k));
+            v.plugin_controls = matches!(act, InsertAct::Controls);
+        }
         InsertAct::Move(d) if filled => {
             let to = k as isize + d;
             if to < 0 || to as usize >= inserts.len() {
@@ -1258,6 +1304,11 @@ pub fn channel_strip(
                 },
             }
         }
+        let captions = name_style == NameStyle::Plain;
+        if captions && inserts.len() < r.fx_rows && !matches!(key, StripKey::Master) {
+            let empty = row(r.fx + inserts.len() as f32 * 17.0, 15.0);
+            caption(g, empty, tr("Audio FX"));
+        }
         match key {
             // An Aux strip takes its signal from a bus: it has no sends of its own.
             StripKey::Track(i) if p.tracks[i].kind != TrackKind::Aux => {
@@ -1276,6 +1327,23 @@ pub fn channel_strip(
             StripKey::StereoOut => slot(g, row(r.sends, 16.0), "", SLOT_EMPTY, TEXT),
             _ => {}
         }
+        if captions {
+            match key {
+                StripKey::Track(i) if p.tracks[i].kind != TrackKind::Aux => {
+                    let used = p.tracks[i].sends.len();
+                    if used < r.send_rows {
+                        caption(g, row(r.sends + used as f32 * 17.0, 16.0), tr("Sends"));
+                    }
+                }
+                // Logic's output strip has a Group slot too; it stays empty here (the Stereo
+                // Out strip belongs to no group).
+                StripKey::StereoOut => {
+                    slot(g, row(r.group, 16.0), "", SLOT_EMPTY, TEXT);
+                    caption(g, row(r.group, 16.0), tr("Group"));
+                }
+                _ => {}
+            }
+        }
         if let StripKey::Track(_) = key {
             let out = if name_style == NameStyle::Plain {
                 tr("Stereo Out")
@@ -1293,6 +1361,11 @@ pub fn channel_strip(
                     id(ns, (key, "output")),
                 );
                 group_slot(ui, g, row(r.group, 16.0), p, i, id(ns, (key, "vca")));
+                let grouped =
+                    p.tracks[i].group.is_some_and(|g| g < p.groups.len()) || p.vca_of(i).is_some();
+                if name_style == NameStyle::Plain && !grouped {
+                    caption(g, row(r.group, 16.0), tr("Group"));
+                }
             }
         }
         if matches!(key, StripKey::StereoOut | StripKey::Master) {
@@ -2322,7 +2395,7 @@ mod tests {
         let mut p = mixer_project();
         let mut v = MixerView::default();
         for kind in [FxKind::ChannelEq, FxKind::Compressor, FxKind::Reverb] {
-            apply_insert(&mut p, &mut v, 0, 99, InsertAct::Add(kind));
+            apply_insert(&mut p, &mut v, 0, 99, InsertAct::Add(Insert::new(kind)));
         }
         let kinds = |p: &Project| {
             p.tracks[0]
@@ -2347,7 +2420,13 @@ mod tests {
         assert_eq!(kinds(&p).len(), 3, "moving past an end does nothing");
         apply_insert(&mut p, &mut v, 0, 1, InsertAct::Bypass);
         assert!(p.tracks[0].inserts[1].bypass);
-        apply_insert(&mut p, &mut v, 0, 1, InsertAct::Replace(FxKind::Delay));
+        apply_insert(
+            &mut p,
+            &mut v,
+            0,
+            1,
+            InsertAct::Replace(Insert::new(FxKind::Delay)),
+        );
         assert_eq!(p.tracks[0].inserts[1], Insert::new(FxKind::Delay));
         apply_insert(&mut p, &mut v, 0, 0, InsertAct::Remove);
         assert_eq!(
@@ -2360,7 +2439,13 @@ mod tests {
         apply_insert(&mut p, &mut v, 0, 5, InsertAct::Remove);
         apply_insert(&mut p, &mut v, 9, 0, InsertAct::Open);
         for _ in 0..20 {
-            apply_insert(&mut p, &mut v, 0, 0, InsertAct::Add(FxKind::Chorus));
+            apply_insert(
+                &mut p,
+                &mut v,
+                0,
+                0,
+                InsertAct::Add(Insert::new(FxKind::Chorus)),
+            );
         }
         assert_eq!(p.tracks[0].inserts.len(), prowave_engine::MAX_INSERTS);
     }
@@ -2374,14 +2459,14 @@ mod tests {
             &mut v,
             MASTER_STRIP,
             0,
-            InsertAct::Add(FxKind::Reverb),
+            InsertAct::Add(Insert::new(FxKind::Reverb)),
         );
         apply_insert(
             &mut p,
             &mut v,
             MASTER_STRIP,
             1,
-            InsertAct::Add(FxKind::Compressor),
+            InsertAct::Add(Insert::new(FxKind::Compressor)),
         );
         assert_eq!(p.master_inserts.len(), 2);
         assert!(p.tracks[0].inserts.is_empty(), "no track was touched");
@@ -2404,7 +2489,7 @@ mod tests {
             &mut v,
             MASTER_STRIP,
             0,
-            InsertAct::Replace(FxKind::Delay),
+            InsertAct::Replace(Insert::new(FxKind::Delay)),
         );
         assert_eq!(p.master_inserts[0], Insert::new(FxKind::Delay));
         apply_insert(&mut p, &mut v, MASTER_STRIP, 0, InsertAct::Remove);
@@ -2526,5 +2611,21 @@ mod tests {
             !strip_visible(TrackKind::Folder, &all),
             "a folder has no channel strip"
         );
+    }
+
+    #[test]
+    fn a_plug_in_that_is_not_installed_is_orange_unless_it_is_silent() {
+        assert_eq!(insert_fill(false, false), PLUGIN_BLUE);
+        assert_eq!(insert_fill(false, true), PLUGIN_NOT_FOUND);
+        assert_eq!(
+            (
+                PLUGIN_NOT_FOUND.r(),
+                PLUGIN_NOT_FOUND.g(),
+                PLUGIN_NOT_FOUND.b()
+            ),
+            (0xe0, 0x8a, 0x1c)
+        );
+        assert_eq!(insert_fill(true, true), PLUGIN_OFF, "bypass wins");
+        assert_eq!(insert_fill(true, false), PLUGIN_OFF);
     }
 }

@@ -317,24 +317,34 @@ pub struct InsertDoc {
     pub params: Vec<f32>,
     /// A Space Designer's impulse-response file (its path), when it plays one.
     pub ir_file: Option<String>,
-    /// The LADSPA plug-in of a `Plug-in` effect.
+    /// A hosted plug-in (LADSPA, CLAP, VST3, Audio Unit) instead of one of Pro Wave's effects;
+    /// `kind` is then its name. A LADSPA effect's settings are the insert's `params`; the other
+    /// formats keep theirs in `PluginDoc::state`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginDoc>,
 }
 
-/// A hosted plug-in a project uses (a LADSPA effect): which library file, and which plug-in in
-/// it. The settings of an effect are the insert's `params`, as positions 0 to 1 along each
-/// control's range.
+/// A hosted plug-in in an effect slot: which one, and for most formats its own state.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct PluginDoc {
-    /// `LADSPA`.
+    /// "LADSPA", "CLAP", "VST3" or "Audio Unit".
     pub format: String,
-    /// The library file when the project was saved; on another machine the file name is
-    /// looked for in the plug-in folders.
+    /// What names the plug-in in its format: a CLAP id, a VST3 class id, an Audio Unit's codes
+    /// (empty for LADSPA, which uses `label` and `unique_id`).
+    pub id: String,
+    pub name: String,
+    pub vendor: String,
+    /// The plug-in's file when it was saved (empty for an Audio Unit); another computer may
+    /// have it elsewhere, so `format` and `id` are what find it.
+    pub path: String,
+    /// The plug-in's state as it gave it, in hexadecimal (empty: none).
+    pub state: String,
+    /// LADSPA: the library file when the project was saved (on another machine the file name
+    /// is looked for in the plug-in folders), and which plug-in in it.
     pub library: String,
     pub label: String,
     pub unique_id: u64,
-    pub name: String,
 }
 
 /// A track's Sampler in a project file: where its sounds come from and its dials.

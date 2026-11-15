@@ -34,6 +34,20 @@ pub trait BlockEffect: Send {
 
     /// Clears the plug-in's memory (tails, delay lines).
     fn reset(&mut self);
+
+    /// Whether the effect's settings (the slot's parameter values) drive the plug-in. A plug-in
+    /// that keeps its own settings and is moved only by automation says no.
+    fn takes_settings(&self) -> bool {
+        true
+    }
+
+    /// Another handle on the same plug-in, for a chain that is rebuilt while the plug-in plays
+    /// (a plug-in that lives in its own process can be shared this way). Called off the audio
+    /// thread; only one handle is ever played at a time. `None` (the default) means an
+    /// instance cannot be shared: the copy of the slot passes the sound through.
+    fn boxed_clone(&self) -> Option<Box<dyn BlockEffect>> {
+        None
+    }
 }
 
 /// The audio thread's side of a hosted effect: the plug-in, and the block it is fed with.
@@ -72,6 +86,15 @@ impl PluginSlot {
     /// The plug-in's own latency, in samples (not counting the block).
     pub(crate) fn reported_latency(&self) -> usize {
         self.plugin.as_ref().map_or(0, |p| p.latency_samples())
+    }
+
+    /// The slot's settings, one per parameter, for a plug-in that is driven by them.
+    pub(crate) fn apply_settings(&mut self, settings: &[f32]) {
+        if let Some(p) = self.plugin.as_mut().filter(|p| p.takes_settings()) {
+            for (i, v) in settings.iter().enumerate() {
+                p.set_param(i, v.clamp(0.0, 1.0));
+            }
+        }
     }
 
     pub(crate) fn set_param(&mut self, index: usize, norm: f32) {
@@ -117,9 +140,12 @@ impl PluginSlot {
 }
 
 impl Clone for PluginSlot {
-    /// A copy has no plug-in (an instance cannot be shared): it passes the sound through.
+    /// A copy shares the plug-in when it can ([`BlockEffect::boxed_clone`]); otherwise it has
+    /// none and passes the sound through.
     fn clone(&self) -> Self {
-        Self::empty()
+        let mut copy = Self::empty();
+        copy.plugin = self.plugin.as_ref().and_then(|p| p.boxed_clone());
+        copy
     }
 }
 
