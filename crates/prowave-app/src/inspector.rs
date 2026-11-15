@@ -21,8 +21,11 @@ const PANEL_BG: Color32 = Color32::from_rgb(0x3a, 0x3a, 0x3a);
 const HEADER_BG: Color32 = Color32::from_rgb(0x42, 0x42, 0x42);
 const ROW_H: f32 = 20.0;
 const HEADER_H: f32 = 24.0;
-const LABEL_RIGHT: f32 = 104.0;
-const VALUE_LEFT: f32 = 112.0;
+/// The inspector's width: Logic's, which is two channel strips of the Mixer's width side by
+/// side (the selected track's and its output's).
+pub const WIDTH: f32 = 180.0;
+const LABEL_RIGHT: f32 = 76.0;
+const VALUE_LEFT: f32 = 82.0;
 const STRIPS_MIN_H: f32 = 430.0;
 
 /// Fade lengths move in 1/16 notes.

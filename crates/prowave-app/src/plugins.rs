@@ -829,6 +829,7 @@ pub fn to_doc(id: PluginId) -> Option<prowave_project::PluginDoc> {
         label: r.label,
         unique_id: r.unique_id,
         name: r.name,
+        ..Default::default()
     })
 }
 
