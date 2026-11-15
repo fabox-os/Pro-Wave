@@ -26,6 +26,7 @@ mod groups;
 mod i18n;
 mod import;
 mod inspector;
+mod ir_files;
 mod library;
 mod marker_track;
 mod menus;

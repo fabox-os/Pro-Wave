@@ -333,8 +333,10 @@ fn body(
             (0..MASTERING_PRESETS.len()).find(|&i| mastering_preset(i) == edited.params);
         let name = if let Some(i) = mastering {
             MASTERING_PRESETS[i].to_string()
-        } else if edited.params[sd::IR_TYPE] >= 0.5 {
+        } else if ir_kind(&edited.params) == 1 {
             tr("Synthesized IR").to_string()
+        } else if let (2, Some(file)) = (ir_kind(&edited.params), edited.ir_file) {
+            crate::ir_files::label(file)
         } else {
             IR_NAMES[index].to_string()
         };
@@ -354,7 +356,7 @@ fn body(
                     }));
                 };
                 for (i, n) in IR_NAMES.iter().enumerate() {
-                    let on = mastering.is_none() && i == index && edited.params[sd::IR_TYPE] < 0.5;
+                    let on = mastering.is_none() && i == index && ir_kind(&edited.params) == 0;
                     if ui.selectable_label(on, *n).clicked() {
                         edited.params = preset_params(&edited.params, i);
                         all(edited, edits);
@@ -527,7 +529,7 @@ fn body(
             pos2(tabs.left() + n as f32 * w / 2.0, tabs.top()),
             vec2(w / 2.0, TAB_H * k),
         );
-        let on = (edited.params[sd::IR_TYPE] >= 0.5) == (n == 1);
+        let on = (ir_kind(&edited.params) == 1) == (n == 1);
         let resp = ui.interact(r, ui.scope_id().with(("sd_tab", n)), Sense::click());
         g.rect_filled(r, 0.0, if on { PANEL } else { TAB_OFF });
         g.text(
@@ -636,18 +638,18 @@ fn body(
         vec2(250.0 * k, 24.0 * k),
     );
     ui.scope_builder(egui::UiBuilder::new().max_rect(name_rect), |ui| {
-        let synth = edited.params[sd::IR_TYPE] >= 0.5;
-        let text = if synth {
-            tr("Synthesized IR").to_string()
-        } else {
-            IR_NAMES[index].replace(' ', "_")
+        let kind = ir_kind(&edited.params);
+        let text = match (kind, edited.ir_file) {
+            (1, _) => tr("Synthesized IR").to_string(),
+            (2, Some(file)) => crate::ir_files::label(file),
+            _ => IR_NAMES[index].replace(' ', "_"),
         };
         egui::ComboBox::from_id_salt("sd_ir_name")
             .selected_text(egui::RichText::new(text).size(12.0 * k))
             .width(250.0 * k)
             .show_ui(ui, |ui| {
                 for (i, n) in IR_NAMES.iter().enumerate() {
-                    if ui.selectable_label(!synth && i == index, *n).clicked() {
+                    if ui.selectable_label(kind == 0 && i == index, *n).clicked() {
                         // Only the response changes; the envelope and the rest stay.
                         edited.params[sd::IR_TYPE] = 0.0;
                         edited.params[sd::IR_INDEX] = i as f32;
@@ -659,6 +661,22 @@ fn body(
                             });
                         }
                     }
+                }
+                ui.separator();
+                if ui.button(tr("Load Impulse Response File…")).clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter(
+                            "Audio",
+                            &["wav", "aif", "aiff", "flac", "ogg", "mp3", "caf", "m4a"],
+                        )
+                        .pick_file()
+                    {
+                        choose_ir_file(edited, edits, &path);
+                    }
+                    ui.close();
+                }
+                if let Some(e) = ir_file_error(edited.ir_file) {
+                    ui.colored_label(Color32::from_rgb(0xe0, 0x70, 0x60), e);
                 }
             });
     });
@@ -791,7 +809,7 @@ fn body(
         );
     }
     // Synthesized IR: its own three controls, in the space after Reverse.
-    if edited.params[sd::IR_TYPE] >= 0.5 {
+    if ir_kind(&edited.params) == 1 {
         for (n, (p, label)) in [
             (sd::DENSITY, tr("Density")),
             (sd::DIFFUSE, tr("Diffuse")),
@@ -1480,6 +1498,53 @@ fn g_readout(
     }
 }
 
+/// Which kind of response the settings choose: 0 a built-in one, 1 a synthesized one, 2 an
+/// impulse-response file.
+fn ir_kind(params: &[f32; MAX_FX_PARAMS]) -> i32 {
+    (params[sd::IR_TYPE].round() as i32).clamp(0, 2)
+}
+
+/// The Space Designer plays the file at `path`: the file is read now (the menu was just used,
+/// and it also tells how long the response is), the response is switched to it, and Length is
+/// set to its length (up to the 10 seconds Length allows).
+fn choose_ir_file(edited: &mut Insert, edits: &mut Vec<Edit>, path: &std::path::Path) {
+    let id = crate::ir_files::intern(path);
+    // Read it again even if it was read before: the user may have replaced it.
+    crate::ir_files::forget(id);
+    match crate::ir_files::load(id) {
+        Ok(file) => {
+            edited.ir_file = Some(id);
+            edited.params[sd::IR_TYPE] = 2.0;
+            edited.params[sd::LENGTH] = file.seconds().clamp(0.1, 10.0);
+            for p in [sd::IR_TYPE, sd::LENGTH] {
+                edits.push(Edit {
+                    param: p,
+                    value: edited.params[p],
+                    ended: true,
+                });
+            }
+            crate::ir_files::set_last_error(None);
+        }
+        Err(e) => {
+            tracing::warn!("impulse response: {e}");
+            crate::ir_files::set_last_error(Some(e));
+        }
+    }
+}
+
+/// Why the last impulse-response file could not be used, or that the current one is missing.
+fn ir_file_error(file: Option<crate::ir_files::IrFileId>) -> Option<String> {
+    if let Some(e) = crate::ir_files::last_error() {
+        return Some(crate::i18n::trf("Cannot use that file: {}", &[&e]));
+    }
+    match file.and_then(crate::ir_files::peek) {
+        Some(Err(_)) => Some(
+            tr("The impulse response file cannot be read; a built-in response plays.").to_string(),
+        ),
+        _ => None,
+    }
+}
+
 /// The dark display: the response drawn, the Volume Envelope over it and its three handles.
 #[allow(clippy::too_many_arguments)]
 fn draw_display(
@@ -1512,18 +1577,44 @@ fn draw_display(
         pos2(rect.right() - 30.0 * k, rect.bottom() - 28.0 * k),
     );
     // The response, made again when a setting that shapes it changes.
-    let key: Vec<u32> = prowave_engine::IR_PARAMS
+    let mut key: Vec<u32> = prowave_engine::IR_PARAMS
         .iter()
         .map(|&i| edited.params[i].to_bits())
         .collect();
+    key.push(
+        edited
+            .ir_file
+            .map_or(u32::MAX, crate::ir_files::IrFileId::number),
+    );
     let bins = plot.width().max(8.0) as usize;
     if mem
         .preview
         .as_ref()
         .is_none_or(|(kk, b, _)| *kk != key || b.len() != bins)
     {
-        let (peaks, secs) = prowave_engine::ir_preview(&edited.params, 48_000.0, bins);
-        mem.preview = Some((key, peaks, secs));
+        // A response from a file is drawn once its resampled copy exists (it is made in the
+        // background, so the first frames show the built-in response it falls back to).
+        let file = edited
+            .ir_file
+            .filter(|_| ir_kind(&edited.params) == 2)
+            .and_then(|id| crate::ir_files::resampled_in_background(id, 48_000));
+        let (peaks, secs) = prowave_engine::ir_preview_with(
+            &edited.params,
+            48_000.0,
+            bins,
+            file.as_ref().map(|f| f.as_slice()),
+        );
+        // Not ready yet: draw again soon instead of keeping the stand-in.
+        let waiting = ir_kind(&edited.params) == 2
+            && edited.ir_file.is_some()
+            && file.is_none()
+            && !matches!(edited.ir_file.and_then(crate::ir_files::peek), Some(Err(_)));
+        if waiting {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(60));
+        } else {
+            mem.preview = Some((key, peaks, secs));
+        }
     }
     let Some((_, peaks, secs)) = mem.preview.clone() else {
         return;
@@ -1870,5 +1961,93 @@ mod tests {
         assert_eq!(readout_text(sd::XOVER, 710.0), "710 Hz");
         assert_eq!(readout_text(sd::DRY, -12.5), "-12.5 dB");
         assert_eq!(readout_text(sd::WET, -96.0), "-∞ dB");
+    }
+
+    fn click_wav(frames: usize, at: usize) -> Vec<u8> {
+        let data = frames as u32 * 4;
+        let mut v = b"RIFF".to_vec();
+        v.extend_from_slice(&(36 + data).to_le_bytes());
+        v.extend_from_slice(b"WAVEfmt ");
+        v.extend_from_slice(&16u32.to_le_bytes());
+        v.extend_from_slice(&3u16.to_le_bytes());
+        v.extend_from_slice(&1u16.to_le_bytes());
+        v.extend_from_slice(&48_000u32.to_le_bytes());
+        v.extend_from_slice(&(48_000u32 * 4).to_le_bytes());
+        v.extend_from_slice(&4u16.to_le_bytes());
+        v.extend_from_slice(&32u16.to_le_bytes());
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&data.to_le_bytes());
+        for i in 0..frames {
+            v.extend_from_slice(&(if i == at { 1.0f32 } else { 0.0 }).to_le_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn choosing_a_file_switches_the_response_sets_its_length_and_a_bad_file_changes_nothing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("hall.wav");
+        std::fs::write(&path, click_wav(48_000 * 3, 500)).expect("write");
+        let mut ins = Insert::new(FxKind::Reverb);
+        let mut edits = Vec::new();
+        choose_ir_file(&mut ins, &mut edits, &path);
+        assert_eq!(ir_kind(&ins.params), 2);
+        assert!(ins.ir_file.is_some());
+        assert!(
+            (ins.params[sd::LENGTH] - 3.0).abs() < 0.01,
+            "Length is the file's length"
+        );
+        assert_eq!(edits.len(), 2, "both settings are reported as edits");
+        assert_eq!(
+            crate::ir_files::label(ins.ir_file.expect("file")),
+            "hall.wav"
+        );
+        assert!(ir_file_error(ins.ir_file).is_none());
+        // A file that is not audio changes nothing and says why.
+        let junk = dir.path().join("junk.wav");
+        std::fs::write(&junk, b"nope").expect("write");
+        let before = ins;
+        let mut edits = Vec::new();
+        choose_ir_file(&mut ins, &mut edits, &junk);
+        assert_eq!(ins, before);
+        assert!(edits.is_empty());
+        assert!(ir_file_error(ins.ir_file).is_some());
+        // Choosing a good one again clears the message.
+        choose_ir_file(&mut ins, &mut Vec::new(), &path);
+        assert!(ir_file_error(ins.ir_file).is_none());
+    }
+
+    #[test]
+    fn the_window_draws_for_a_file_response_a_missing_one_and_the_kind_is_read_safely() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("room.wav");
+        std::fs::write(&path, click_wav(48_000, 100)).expect("write");
+        let mut good = Insert::new(FxKind::Reverb);
+        choose_ir_file(&mut good, &mut Vec::new(), &path);
+        let mut gone = Insert::new(FxKind::Reverb);
+        gone.params[sd::IR_TYPE] = 2.0;
+        gone.ir_file = Some(crate::ir_files::intern(&dir.path().join("gone.wav")));
+        let _ = crate::ir_files::load(gone.ir_file.expect("file"));
+        let mut hostile = Insert::new(FxKind::Reverb);
+        hostile.params[sd::IR_TYPE] = 9.0;
+        assert_eq!(ir_kind(&hostile.params), 2, "past the end is the file kind");
+        let mut nan = FxKind::Reverb.defaults();
+        nan[sd::IR_TYPE] = f32::NAN;
+        assert_eq!(ir_kind(&nan), 0);
+        for insert in [good, gone, hostile] {
+            let mut p = crate::model::Project::empty();
+            p.tracks[0].inserts = vec![insert];
+            let mut s = crate::UiState::new();
+            s.mixer.fx_window = Some((0, 0));
+            let meters = crate::mixer::Meters::default();
+            let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+            for _ in 0..4 {
+                h.frame(vec![], |ui| {
+                    crate::fx_ui::show(ui.ctx(), &mut p, &mut s, &meters)
+                });
+            }
+            assert_eq!(s.mixer.fx_window, Some((0, 0)), "looking does not close it");
+            assert_eq!(p.tracks[0].inserts[0], insert, "looking changes nothing");
+        }
     }
 }

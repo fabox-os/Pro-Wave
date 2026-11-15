@@ -7,6 +7,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **Space Designer loads your own impulse responses (issue #111):** in the Space Designer window, the response menu has **Load Impulse Response File…** (WAV, AIFF, FLAC, MP3, CAF, OGG or M4A). A mono file is heard on both sides, a stereo file as it is, and a four-channel "true stereo" file uses its left-to-left and right-to-right responses; with more channels the first two. The file is read and resampled to the project's rate in the background (only its first 12 seconds, and files over 256 MB are refused), Length is set to the file's length, and Size, IR Offset, Reverse, the envelopes, the filter, X-Over and Output EQ all work on it. The display draws the file's response. The file is saved in the project by its path (like a SoundFont); if it is gone, the built-in response chosen by IR plays and the window says so. It works on the Stereo Out too.
+
 ✅ **LADSPA plug-ins in the Audio FX slots (issues #64, #115):** every Audio FX slot, the Stereo Out's included, now has **LADSPA Plug-ins** in its plug-in menu (and in the search), listing the effects found in `LADSPA_PATH` or the usual folders (`/usr/lib/ladspa`, `~/.ladspa`, the macOS and Windows equivalents). A plug-in shows its own controls, with their names and ranges, as knobs (toggles show On or Off, whole-number controls step), and every control can be automated like a built-in effect's. A mono plug-in runs once for each side, so the stereo image is kept; the delay a plug-in reports is made up for by delay compensation. The plug-in is saved in the project by file and name, and found again by file name on another machine; a project that names a plug-in this computer lacks opens with the sound passing through. **Window > Plugin Manager** lists what was found, the folders, and any library that failed. Libraries are read in a child process with a time limit (`prowave --scan-ladspa <file>`), so a plug-in that crashes or hangs while it is scanned does not close the program; after three failures a library is left alone (`quarantine.json`) until **Retry Failed Plug-ins**. Not done: DSSI synths, a plug-in's own window, and running plug-ins in a separate process while they play (a plug-in that crashes while processing still ends the program).
 
 ✅ **Fixed: knobs of effects on the Stereo Out strip did nothing:** the Stereo Out's effect windows ignored every knob except Space Designer's. They now move the setting.
@@ -66,7 +68,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ❌ MusicXML import; GarageBand tempo, signature and arrangement (see `GARAGEBAND-FORMAT-SPEC.md`); Hydrogen kits and the new menu entries (Import Audio File, Show in File Manager, Undo History) were tested by automated tests on Linux only, not on Windows or macOS
 
-❌ Space Designer: loading your own impulse response files (the six responses are made in code, none is shipped as a WAV); tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
+❌ Space Designer: the four-channel (true stereo) cross responses (left-to-right and right-to-left) are not used; the six built-in responses are made in code, none is shipped as a WAV; tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
 
 ## 0.2.2
 

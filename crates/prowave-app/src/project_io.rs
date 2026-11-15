@@ -220,6 +220,12 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
                 kind,
                 bypass: d.bypass,
                 params: kind.clamp_params(params),
+                // Only a Space Designer plays an impulse-response file.
+                ir_file: d
+                    .ir_file
+                    .as_deref()
+                    .filter(|_| kind == prowave_engine::FxKind::Reverb)
+                    .and_then(crate::ir_files::from_doc),
                 plugin,
             })
         })
@@ -1086,6 +1092,7 @@ fn insert_doc(s: &crate::model::Insert) -> prowave_project::InsertDoc {
         kind: s.name().into(),
         bypass: s.bypass,
         params: s.params[..s.kind.params().len()].to_vec(),
+        ir_file: s.ir_file.and_then(crate::ir_files::to_doc),
         plugin: s.plugin.and_then(crate::plugins::to_doc),
     }
 }
@@ -1404,6 +1411,41 @@ pub(crate) mod tests {
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         let top = prowave_engine::MAX_INPUT_CHANNELS as u16 - 2;
         assert_eq!(r.tracks[1].input, InputSource::Stereo(top));
+    }
+
+    #[test]
+    fn a_space_designers_impulse_response_file_is_saved_and_only_a_space_designer_keeps_it() {
+        use crate::model::Insert;
+        let file = crate::ir_files::intern(Path::new("/irs/cathedral.wav"));
+        let mut sd = Insert::new(prowave_engine::FxKind::Reverb);
+        sd.params[prowave_engine::sd::IR_TYPE] = 2.0;
+        sd.ir_file = Some(file);
+        let mut p = Project::empty();
+        p.tracks[0].inserts = vec![sd, Insert::new(prowave_engine::FxKind::Delay)];
+        p.master_inserts = vec![sd];
+        let (mut doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0].fx[0].ir_file.as_deref(),
+            Some("/irs/cathedral.wav")
+        );
+        assert_eq!(doc.tracks[0].fx[1].ir_file, None);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].inserts[0].ir_file, Some(file));
+        assert_eq!(
+            q.master_inserts[0].ir_file,
+            Some(file),
+            "the Stereo Out keeps it too"
+        );
+        // A file named on another effect, or an empty path, is dropped.
+        doc.tracks[0].fx[1].ir_file = Some("/irs/cathedral.wav".into());
+        doc.tracks[0].fx[0].ir_file = Some("  ".into());
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(r.tracks[0].inserts[0].ir_file, None);
+        assert_eq!(r.tracks[0].inserts[1].ir_file, None);
+        // An old project has none.
+        doc.tracks[0].fx[0].ir_file = None;
+        let (o, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(o.tracks[0].inserts[0].ir_file, None);
     }
 
     #[test]

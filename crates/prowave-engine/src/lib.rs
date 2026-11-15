@@ -21,6 +21,7 @@ mod flex;
 mod fx;
 mod gain_smoothing;
 pub mod hydrogen;
+pub mod ir_file;
 #[cfg(not(target_arch = "wasm32"))]
 mod mapped;
 mod monitor;
@@ -44,8 +45,8 @@ pub use crate::capture::{
 };
 pub use crate::clock::{song_position, tick_index, ClockMessage, TICKS_PER_BEAT};
 pub use crate::convolver::{
-    ir_preview, ir_samples, ir_seconds, sd, volume_env, Convolver, BLOCK as CONVOLVER_BLOCK,
-    IR_NAMES, IR_PARAMS, MAX_IR_SECONDS,
+    ir_preview, ir_preview_with, ir_samples, ir_samples_with, ir_seconds, sd, volume_env,
+    Convolver, BLOCK as CONVOLVER_BLOCK, IR_NAMES, IR_PARAMS, MAX_IR_SECONDS,
 };
 pub use crate::core::{
     dsp_load, AudioClip, CaptureSink, ClipEdit, Command, ControlEvent, EngineCore, EngineState,
