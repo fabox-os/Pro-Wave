@@ -3457,6 +3457,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-dssi"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libloading 0.8.9",
+]
+
+[[package]]
 name = "prowave-engine"
 version = "0.1.0"
 dependencies = [
@@ -3540,6 +3548,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "prowave-rex"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]
