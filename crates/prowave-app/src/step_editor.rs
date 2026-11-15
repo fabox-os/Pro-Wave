@@ -103,7 +103,20 @@ enum Gesture {
 
 /// Whether a track plays a drum kit (so its pattern rows are named after the drums).
 pub fn is_drum_track(t: &Track) -> bool {
-    t.kind == TrackKind::Drummer || t.instrument.is_some_and(|i| i.contains("Drum"))
+    t.kind == TrackKind::Drummer
+        || t.drums.is_some()
+        || t.instrument.is_some_and(|i| i.contains("Drum"))
+}
+
+/// The name of a pattern row: a Drum Machine's own pad (a sample pad shows its file), else a
+/// General MIDI drum on a drum track, else the note.
+fn row_label(pitch: u8, drums: bool, kit: Option<&crate::drum_kit::DrumsUse>) -> String {
+    if let Some(pad) = kit.and_then(|_| prowave_engine::drum_machine::pad_of(pitch)) {
+        if let Some(kit) = kit {
+            return kit.pad_label(pad);
+        }
+    }
+    row_name(pitch, drums)
 }
 
 /// Draws the editor for the Pattern or Drummer region `ri` of track `ti` in `body`.
@@ -273,6 +286,7 @@ fn show_pattern(ui: &mut Ui, p: &mut Project, s: &mut UiState, ti: usize, ri: us
     };
     let bar_len = p.bar_len_at(origin);
     let drums = is_drum_track(&p.tracks[ti]);
+    let kit = p.tracks[ti].drums.clone();
     let mut changed = false;
     let mut convert = false;
     let mut mode = s.steps.mode;
@@ -404,7 +418,7 @@ fn show_pattern(ui: &mut Ui, p: &mut Project, s: &mut UiState, ti: usize, ri: us
         g.text(
             label.left_center() + vec2(8.0, 0.0),
             Align2::LEFT_CENTER,
-            row_name(row.pitch, drums),
+            row_label(row.pitch, drums, kit.as_ref()),
             FontId::proportional(12.0),
             TEXT,
         );
@@ -1347,5 +1361,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_drum_machine_track_is_a_drum_track_and_its_rows_are_named_after_its_pads() {
+        use crate::drum_kit::DrumsUse;
+        use prowave_engine::drum_machine::PadKind;
+        let mut t = Track::new("Beats", TrackKind::Instrument);
+        assert!(!is_drum_track(&t));
+        t.drums = Some(DrumsUse::new());
+        assert!(is_drum_track(&t));
+        let mut kit = DrumsUse::new();
+        assert_eq!(row_label(36, true, Some(&kit)), "Kick");
+        assert_eq!(row_label(46, true, Some(&kit)), "Open Hi-Hat");
+        kit.pads[1].settings = PadKind::Sample.settings();
+        kit.pads[1].sample = Some("/kits/snap.wav".into());
+        assert_eq!(row_label(37, true, Some(&kit)), "snap.wav");
+        // Outside the pads it falls back to the General MIDI name, then the note.
+        assert_eq!(row_label(60, true, Some(&kit)), "C3");
+        assert_eq!(row_label(36, true, None), "Kick");
     }
 }

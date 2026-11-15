@@ -60,8 +60,20 @@ fn region_bar_color(c: Color32) -> Color32 {
 /// Live notes the Piano Roll wants to play; `main` forwards them to the engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Audition {
-    On { pitch: u8, vel: u8, track: u16 },
-    Off { pitch: u8 },
+    On {
+        pitch: u8,
+        vel: u8,
+        track: u16,
+    },
+    Off {
+        pitch: u8,
+    },
+    /// A controller played live on a track: its number (128 is the pitch bend) and value.
+    Control {
+        track: u16,
+        number: u8,
+        value: u16,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -66,8 +66,8 @@ Pro Wave does a lot, and aims to do it the way Logic Pro does. It is a full DAW:
 - **Recording.** MIDI and audio recording with count-in, cycle and takes. Follow or send MIDI clock and MIDI Time Code; MIDI output with program, bank, pitch bend and SysEx.
 - **Piano Roll, Score and more editors.** Draw, select, move and resize notes; time and scale quantize with strength and swing; velocity lane, Event List, Step Sequencer and MIDI Transform. A Score view with clefs, key and time signatures, rests and ties, and **MusicXML export**.
 - **Mixer and automation.** Channel strips with sends, buses, groups, VCA, pan, faders and meters. Automation for faders, pan, send levels and every effect parameter, with Read, Touch, Latch and Write modes.
-- **Real effects.** Channel EQ, Multi-Band EQ, Compressor, **Multi-Band Compressor**, Noise Gate, Limiter, **Space Designer** convolution reverb (Volume and Filter envelopes, X-Over, Output EQ, mastering presets), Tape Delay, Chorus, Phaser, Overdrive, Filter and the **Amp Designer** for guitar and bass. They work on any strip, **including the Stereo Out**.
-- **Instruments and sounds.** A built-in subtractive synthesizer with drum-kit modes (48 voices), **SoundFont (.sf2)** instruments, **Hydrogen drum kits**, and Library patches that set a track's instrument and effects.
+- **Real effects.** Channel EQ, Multi-Band EQ, **Pult EQ** (Pultec-style tube EQ), Compressor, **Multi-Band Compressor**, Noise Gate, Limiter, **Space Designer** convolution reverb (Volume and Filter envelopes, X-Over, Output EQ, mastering presets), Tape Delay, Chorus, Phaser, Overdrive, Filter and the **Amp Designer** for guitar and bass. They work on any strip, **including the Stereo Out**.
+- **Instruments and sounds.** A built-in subtractive synthesizer with drum-kit modes (48 voices), **SoundFont (.sf2)** instruments, a physically modelled **Electric Piano**, **Hydrogen drum kits**, and Library patches that set a track's instrument and effects.
 - **Flex Time, Flex Pitch and Smart Tempo.** Warp and re-pitch audio, detect tempo, and make a project follow a recording.
 - **Audio regions.** WAV, AIFF, FLAC, MP3, CAF, OGG and M4A streamed from disk; region gain, fades, crossfades, reverse and normalize, never destructive.
 - **Bounce and export.** Bounce the project or a cycle section to a 32-bit WAV, export one track, and write the selection as a MIDI file.
@@ -108,6 +108,7 @@ cargo run --release -p prowave-app -- song.prowave   # open a project
 cargo run --release -p prowave-app -- drums.wav      # new project, import audio files
 cargo run --release -p prowave-app -- --play         # start playing right away
 cargo run --release -p prowave-app -- --piano        # open the Piano Roll on start
+cargo run --release -p prowave-app -- --screenshot shot.png   # save one picture of the window, then exit
 cargo run -p prowave-engine --example beep           # 440 Hz test tone, reports output latency
 ```
 
@@ -150,6 +151,9 @@ not a Rust tier-1 target; a report from a build there is welcome.
 | [`crates/prowave-engine`](crates/prowave-engine) | Real-time audio engine: transport, tempo map, synth, mixer, disk streaming, cpal output |
 | [`crates/prowave-app`](crates/prowave-app) | The desktop app (egui): every view and editor |
 | [`crates/prowave-project`](crates/prowave-project) | The `.prowave` project file format |
+| [`crates/prowave-hydrogen-import`](crates/prowave-hydrogen-import) | Hydrogen `.h2song` session reading: kit, instruments, patterns and sequence |
+| [`crates/prowave-exs`](crates/prowave-exs) | EXS24 `.exs` sampler instrument reading: zones, groups, samples, loops and round-robin |
+| [`crates/prowave-sfz`](crates/prowave-sfz) | SFZ sampler instrument reading: regions, groups, sample paths and loops |
 | [`crates/prowave-logicx-import`](crates/prowave-logicx-import) | Logic Pro `.logicx` bundles: save shapes, active alternative, metadata plists and the ProjectData envelope |
 | [`xtask`](xtask) | `cargo xtask check`, `wasm-check` and `rt-check` |
 | [`dist/linux`](dist/linux) | Linux desktop entry, icon, MIME type, `install.sh` and the .deb, .rpm and Flatpak recipes |

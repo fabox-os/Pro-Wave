@@ -9,7 +9,13 @@
 
 use std::sync::Arc;
 
+use crate::drum_machine::DrumMachine;
+use crate::epiano::EPiano;
+use crate::sampler::Sampler;
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
+
+/// The `number` of a live pitch bend in [`SfPlayer::control`] and `Command::LiveControl`.
+pub const PITCH_BEND_CONTROL: u8 = 128;
 
 /// The largest SoundFont accepted, in bytes. The General MIDI banks are about 150 MB.
 pub const MAX_SOUNDFONT_BYTES: usize = 512 * 1024 * 1024;
@@ -84,7 +90,13 @@ impl SoundFontBank {
 /// One track's SoundFont instrument: a synthesizer set to one preset. Make it with
 /// [`SfPlayer::new`] off the audio thread.
 pub struct SfPlayer {
-    synth: Synthesizer,
+    synth: Option<Synthesizer>,
+    /// The Sampler, when this player is one (`SfPlayer::sampler`).
+    sampler: Option<Box<Sampler>>,
+    /// The Electric Piano, when this player is one (`SfPlayer::electric_piano`).
+    piano: Option<Box<EPiano>>,
+    /// The Drum Machine, when this player is one (`SfPlayer::drum_machine`).
+    drums: Option<Box<DrumMachine>>,
     channel: i32,
     sample_rate: i32,
 }
@@ -108,10 +120,77 @@ impl SfPlayer {
         }
         synth.process_midi_message(channel, 0xC0, i32::from(preset.program), 0);
         Ok(Self {
-            synth,
+            synth: Some(synth),
+            sampler: None,
+            piano: None,
+            drums: None,
             channel,
             sample_rate: rate,
         })
+    }
+
+    /// A player that plays a [`DrumMachine`] (pads built off the audio thread, with their
+    /// samples) in place of a SoundFont.
+    pub fn drum_machine(drums: DrumMachine) -> Self {
+        Self {
+            synth: None,
+            sampler: None,
+            piano: None,
+            drums: Some(Box::new(drums)),
+            channel: 0,
+            sample_rate: 0,
+        }
+    }
+
+    /// New settings for one pad of the Drum Machine while it plays (nothing for any other
+    /// player). Allocation free.
+    pub fn set_drum_pad(&mut self, pad: usize, settings: crate::drum_machine::PadSettings) {
+        if let Some(d) = self.drums.as_mut() {
+            d.set_pad(pad, settings);
+        }
+    }
+
+    /// A player that plays a [`Sampler`] (zones built off the audio thread from SFZ, EXS or an
+    /// audio file) in place of a SoundFont.
+    pub fn sampler(sampler: Sampler) -> Self {
+        Self {
+            synth: None,
+            sampler: Some(Box::new(sampler)),
+            piano: None,
+            drums: None,
+            channel: 0,
+            sample_rate: 0,
+        }
+    }
+
+    /// Moves the Sampler's dials while it plays (nothing for a SoundFont player). Allocation
+    /// free.
+    pub fn set_sampler_params(&mut self, params: [f32; crate::sampler::PARAMS]) {
+        if let Some(s) = self.sampler.as_mut() {
+            s.set_params(params);
+        }
+    }
+
+    /// A player that plays the physically modelled Electric Piano (`crate::epiano`) with the
+    /// dials at `params`. Allocates; call off the audio thread.
+    pub fn electric_piano(params: [f32; crate::epiano::PARAMS], sample_rate: f32) -> Self {
+        let rate = sample_rate.round().clamp(16_000.0, 192_000.0) as i32;
+        Self {
+            synth: None,
+            sampler: None,
+            piano: Some(Box::new(EPiano::new(rate as f32, params))),
+            drums: None,
+            channel: 0,
+            sample_rate: rate,
+        }
+    }
+
+    /// Moves the Electric Piano's dials while it plays (nothing for a SoundFont player).
+    /// Allocation free.
+    pub fn set_piano_params(&mut self, params: [f32; crate::epiano::PARAMS]) {
+        if let Some(p) = self.piano.as_mut() {
+            p.set_params(params);
+        }
     }
 
     /// The sample rate the player renders at (Hz).
@@ -122,25 +201,90 @@ impl SfPlayer {
     /// Starts `pitch` (MIDI note number) at velocity `vel` (1-127; 0 is treated as 1).
     pub fn note_on(&mut self, pitch: u8, vel: u8) {
         let velocity = i32::from(vel.clamp(1, 127));
-        self.synth
-            .note_on(self.channel, i32::from(pitch.min(127)), velocity);
+        if let Some(s) = self.sampler.as_mut() {
+            s.note_on(pitch, vel);
+        }
+        if let Some(p) = self.piano.as_mut() {
+            p.note_on(pitch, vel);
+        }
+        if let Some(d) = self.drums.as_mut() {
+            d.note_on(pitch, vel);
+        }
+        if let Some(s) = self.synth.as_mut() {
+            s.note_on(self.channel, i32::from(pitch.min(127)), velocity);
+        }
     }
 
     /// Releases the sounding `pitch`; it fades out with its release time.
     pub fn note_off(&mut self, pitch: u8) {
-        self.synth.note_off(self.channel, i32::from(pitch.min(127)));
+        if let Some(s) = self.sampler.as_mut() {
+            s.note_off(pitch);
+        }
+        if let Some(p) = self.piano.as_mut() {
+            p.note_off(pitch);
+        }
+        if let Some(d) = self.drums.as_mut() {
+            d.note_off(pitch);
+        }
+        if let Some(s) = self.synth.as_mut() {
+            s.note_off(self.channel, i32::from(pitch.min(127)));
+        }
+    }
+
+    /// A live controller change: `number` 0-127 is a MIDI controller with a 7-bit `value`
+    /// (1 is the modulation wheel, 64 the sustain pedal), [`PITCH_BEND_CONTROL`] is the pitch
+    /// bend with a 14-bit `value` (8192 is the centre). Allocation free.
+    pub fn control(&mut self, number: u8, value: u16) {
+        // Only a SoundFont player takes controllers; the Sampler, Electric Piano and Drum
+        // Machine ignore them.
+        let Some(synth) = self.synth.as_mut() else {
+            return;
+        };
+        if number == PITCH_BEND_CONTROL {
+            let v = i32::from(value.min(16383));
+            synth.process_midi_message(self.channel, 0xE0, v & 0x7f, v >> 7);
+        } else if number < 128 {
+            synth.process_midi_message(
+                self.channel,
+                0xB0,
+                i32::from(number),
+                i32::from(value.min(127)),
+            );
+        }
     }
 
     /// Releases every sounding note at once.
     pub fn all_notes_off(&mut self) {
-        self.synth.note_off_all(false);
+        if let Some(s) = self.sampler.as_mut() {
+            s.all_notes_off();
+        }
+        if let Some(p) = self.piano.as_mut() {
+            p.all_notes_off();
+        }
+        if let Some(d) = self.drums.as_mut() {
+            d.all_notes_off();
+        }
+        if let Some(s) = self.synth.as_mut() {
+            s.note_off_all(false);
+        }
     }
 
     /// One frame of the instrument's output, `(left, right)`. Does not allocate.
     pub fn render(&mut self) -> (f32, f32) {
+        if let Some(s) = self.sampler.as_mut() {
+            return s.render();
+        }
+        if let Some(p) = self.piano.as_mut() {
+            return p.render();
+        }
+        if let Some(d) = self.drums.as_mut() {
+            return d.render();
+        }
         let mut left = [0f32; 1];
         let mut right = [0f32; 1];
-        self.synth.render(&mut left, &mut right);
+        if let Some(s) = self.synth.as_mut() {
+            s.render(&mut left, &mut right);
+        }
         (left[0], right[0])
     }
 }

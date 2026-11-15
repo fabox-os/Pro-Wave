@@ -158,6 +158,9 @@ pub struct TracksView {
     /// The selected region (track, region): the one the Inspector shows, and the one a drag moves
     /// first. Every other selected region is in `extra`.
     pub selected: Option<(usize, usize)>,
+    /// Where the lane context menu was opened: (track row, bar). Its Create Region entries use
+    /// this rather than the pointer, which by then is over the menu.
+    lane_menu: Option<(usize, f32)>,
     /// Selected regions besides `selected` (Select All, Shift-click). Never holds `selected`.
     pub extra: Vec<(usize, usize)>,
     /// Width of the lanes at the last frame (for Navigate > Zoom to Fit).
@@ -309,6 +312,7 @@ impl Default for TracksView {
             swipe: None,
             normalize_jobs: Vec::new(),
             shot_menu: None,
+            lane_menu: None,
             tempo_jobs: Vec::new(),
             tempo_all: None,
             tempo_editor: Default::default(),
@@ -560,6 +564,9 @@ fn header_button(
     selected_row: bool,
 ) -> bool {
     let resp = ui.interact(rect, id(("hdrbtn", key)), Sense::click());
+    if let Some(text) = crate::tooltips::button_tip(label) {
+        resp.clone().on_hover_text(crate::i18n::tr(text));
+    }
     g.rect_filled(
         rect,
         3.0,
@@ -1117,6 +1124,21 @@ enum CtxAction {
     OpenPianoRoll,
     /// A Pattern or Drummer region becomes an ordinary MIDI region.
     ConvertToMidi(usize, usize),
+    /// An empty MIDI region at `bar` on `track`, opened in the Piano Roll.
+    CreateMidiRegion {
+        track: usize,
+        bar: f32,
+    },
+    /// A generated Pattern region at `bar`.
+    CreatePatternRegion {
+        track: usize,
+        bar: f32,
+    },
+    /// A Drummer region at `bar`.
+    CreateDrummerRegion {
+        track: usize,
+        bar: f32,
+    },
     ToggleRegionMute(usize, usize),
     ToggleReverse(usize, usize),
     ToggleTakeFolder(usize, usize),
@@ -1426,6 +1448,26 @@ fn apply_ctx(action: CtxAction, p: &mut Project, s: &mut UiState, lanes_w: f32) 
         CtxAction::ZoomToFit => zoom_to_fit(p, v, lanes_w),
         CtxAction::OpenPianoRoll => s.bottom = Bottom::PianoRoll,
         CtxAction::ConvertToMidi(t, r) => p.convert_to_midi_region(t, r),
+        CtxAction::CreateMidiRegion { track, bar } => {
+            if let Some(ri) = p.add_empty_region(track, bar) {
+                p.selected_track = track;
+                v.select_only(track, ri);
+                s.bottom = Bottom::PianoRoll;
+            }
+        }
+        CtxAction::CreatePatternRegion { track, bar } => {
+            if let Some(ri) = p.add_generated_region(track, false, bar) {
+                p.selected_track = track;
+                v.select_only(track, ri);
+                s.bottom = Bottom::PianoRoll;
+            }
+        }
+        CtxAction::CreateDrummerRegion { track, bar } => {
+            if let Some(ri) = p.add_generated_region(track, true, bar) {
+                p.selected_track = track;
+                v.select_only(track, ri);
+            }
+        }
         CtxAction::ToggleRegionMute(t, r) => {
             if let Some(region) = p.tracks.get_mut(t).and_then(|t| t.regions.get_mut(r)) {
                 region.params.mute = !region.params.mute;
@@ -2236,6 +2278,19 @@ fn draw_fades(
 
 /// Draws a recorded waveform: `full_x` is the left edge and width of the whole region on
 /// screen, `gain` its region gain (linear) and `reverse` plays it back to front.
+/// How tall a waveform sample of size `a` (0 to 1, or more when the region is boosted) is
+/// drawn, as a fraction of the full height: a soft logarithmic curve, so a quiet recording (a
+/// microphone peaks at 0.05 to 0.2) shows its shape instead of a flat line, while silence stays
+/// a line and full scale stays full height. It only changes the picture, never the audio.
+pub(crate) fn display_amp(a: f32) -> f32 {
+    const K: f32 = 40.0;
+    if !a.is_finite() {
+        return 0.0;
+    }
+    let m = a.abs().min(4.0);
+    (1.0 + K * m).ln() / (1.0 + K).ln() * a.signum()
+}
+
 fn draw_peaks(
     g: &Painter,
     body: Rect,
@@ -2266,7 +2321,7 @@ fn draw_peaks(
         let (lo, hi) = peaks[a..b]
             .iter()
             .fold((0f32, 0f32), |(l, h), p| (l.min(p.0), h.max(p.1)));
-        let (lo, hi) = (lo * gain, hi * gain);
+        let (lo, hi) = (display_amp(lo * gain), display_amp(hi * gain));
         g.line_segment(
             [
                 pos2(x, mid - hi.min(1.0) * half),
@@ -2767,6 +2822,12 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
         if let Some(pt) = lane_resp.interact_pointer_pos() {
             if let Some(row) = row_at(&rows, pt.y - lanes.top() + scroll_y) {
                 p.selected_track = row;
+                if context_click(&lane_resp) {
+                    v.lane_menu = Some((
+                        row,
+                        p.beats_to_bar(beat_of(pt.x)).floor().max(0.0) as f32 + 1.0,
+                    ));
+                }
             }
         }
         v.clear_selection();
@@ -2786,6 +2847,29 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
         }
     }
     context_menu(&lane_resp, |ui| {
+        if let Some((row, bar)) = v.lane_menu {
+            if let Some(track) = p.tracks.get(row) {
+                if track.kind.has_regions() && track.kind != TrackKind::Audio {
+                    if ui.button("Create MIDI Region").clicked() {
+                        picked = Some(CtxAction::CreateMidiRegion { track: row, bar });
+                        ui.close();
+                    }
+                    if track.kind == TrackKind::Instrument
+                        && ui.button("Create Pattern Region").clicked()
+                    {
+                        picked = Some(CtxAction::CreatePatternRegion { track: row, bar });
+                        ui.close();
+                    }
+                    if track.kind == TrackKind::Drummer
+                        && ui.button("Create Drummer Region").clicked()
+                    {
+                        picked = Some(CtxAction::CreateDrummerRegion { track: row, bar });
+                        ui.close();
+                    }
+                    ui.separator();
+                }
+            }
+        }
         new_track_items(ui, &mut picked);
         ui.separator();
         if ui.button(tr("Zoom to Fit")).clicked() {
@@ -3259,7 +3343,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
         stroke(TEXT),
     );
     if pr.clicked() {
-        p.add_track(TrackKind::Instrument);
+        s.new_track.open();
     }
     let dup = Rect::from_center_size(
         pos2(plus.right() + 18.0, corner.center().y),
@@ -3997,5 +4081,39 @@ mod flex_marker_tests {
             .as_ref()
             .unwrap();
         assert_eq!(flex.markers.len(), 1, "the marker was removed");
+    }
+}
+
+#[cfg(test)]
+mod waveform_scale_tests {
+    use super::display_amp;
+
+    #[test]
+    fn silence_stays_flat_and_full_scale_stays_full_height() {
+        assert_eq!(display_amp(0.0), 0.0);
+        assert!((display_amp(1.0) - 1.0).abs() < 1e-6);
+        assert!((display_amp(-1.0) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_quiet_recording_is_drawn_tall_enough_to_see() {
+        // A microphone that peaks at 0.05 used to be 5 % of the height (a flat line).
+        assert!(display_amp(0.05) > 0.25, "{}", display_amp(0.05));
+        assert!(display_amp(0.2) > 0.5);
+        // Still in order: louder is taller, and the curve is symmetric.
+        let mut last = 0.0;
+        for i in 1..=100 {
+            let v = display_amp(i as f32 / 100.0);
+            assert!(v > last);
+            last = v;
+        }
+        assert_eq!(display_amp(-0.3), -display_amp(0.3));
+    }
+
+    #[test]
+    fn bad_values_draw_as_silence_and_boosted_regions_stay_finite() {
+        assert_eq!(display_amp(f32::NAN), 0.0);
+        assert_eq!(display_amp(f32::INFINITY), 0.0);
+        assert!(display_amp(100.0).is_finite() && display_amp(100.0) > 1.0);
     }
 }

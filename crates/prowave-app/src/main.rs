@@ -12,6 +12,8 @@ mod bench;
 mod bounce;
 mod clock_follow;
 mod clock_in;
+mod drum_kit;
+mod drum_machine_ui;
 mod engine_sync;
 mod event_list;
 mod file_browser;
@@ -26,6 +28,7 @@ mod groups;
 mod i18n;
 mod import;
 mod inspector;
+mod ir_files;
 mod library;
 mod marker_track;
 mod menus;
@@ -37,16 +40,22 @@ mod midi_out;
 mod mixer;
 mod model;
 mod mtc_in;
+mod musical_typing;
 mod native_menu;
+mod new_track_dialog;
 mod note_edit;
 mod patches;
 mod pattern;
 mod piano_roll;
+mod plugin_manager;
+mod plugin_picker;
+mod plugins;
 mod project_io;
 mod project_settings;
 mod recent_files;
 mod recorder;
 mod region_edit;
+mod sampler_load;
 mod score;
 mod score_export;
 mod scripter;
@@ -62,6 +71,7 @@ mod sysex;
 mod takes;
 mod tempo_track;
 mod theme;
+mod tooltips;
 mod track_dialogs;
 mod track_icons;
 mod tracks_area;
@@ -128,6 +138,8 @@ pub struct UiState {
     pub settings_tab: Option<project_settings::SettingsTab>,
     /// A Track menu window (rename, colour, icon, header), when one is open.
     pub track_dialog: Option<track_dialogs::TrackDialog>,
+    /// Logic's Create New Track dialog (the + above the track headers).
+    pub new_track: new_track_dialog::NewTrackDialog,
     /// The audio output the engine plays on (name, sample rate), for Project Settings > Audio.
     pub audio_info: Option<(String, u32)>,
     /// Project Settings > MIDI: send MIDI panic on the next frame.
@@ -202,6 +214,16 @@ pub struct UiState {
     pub can_redo: bool,
     /// Mix > Edit Groups… window is open.
     pub show_groups: bool,
+    /// Musical Typing: the computer keyboard as a MIDI keyboard (Window > Show Musical Typing).
+    pub typing: musical_typing::MusicalTyping,
+    /// Window > Plugin Manager is open.
+    pub show_plugin_manager: bool,
+    /// The track whose Drum Machine window is open, the selected pad, the pad being held by the
+    /// mouse, and why the last sample could not be used.
+    pub show_drum_machine: Option<usize>,
+    pub drum_pad: usize,
+    pub drum_held: Option<usize>,
+    pub drum_error: Option<String>,
 }
 
 impl UiState {
@@ -238,6 +260,7 @@ impl UiState {
             show_midi_fx: false,
             settings_tab: None,
             track_dialog: None,
+            new_track: Default::default(),
             audio_info: None,
             midi_panic: false,
             sysex_entry: None,
@@ -275,6 +298,12 @@ impl UiState {
             can_undo: false,
             can_redo: false,
             show_groups: false,
+            typing: musical_typing::MusicalTyping::new(),
+            show_plugin_manager: false,
+            show_drum_machine: None,
+            drum_pad: 0,
+            drum_held: None,
+            drum_error: None,
         }
     }
 
@@ -310,6 +339,10 @@ struct App {
     bench: Option<bench::Probe>,
     /// `--layout-shots <folder>`: pictures of the layout at several window sizes, then closing.
     shots: Option<bench::LayoutShots>,
+    /// `--screenshot <file>`: one picture of the window, then closing.
+    shot: Option<bench::Screenshot>,
+    /// The exit code a failed `--screenshot` leaves for `main` (0 while it is fine).
+    shot_exit: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// Edit > Undo / Redo.
     history: undo::History,
     /// Frames since the history last looked for an edit.
@@ -457,10 +490,17 @@ impl App {
         }
         let Some(path) = rfd::FileDialog::new()
             .add_filter("WAV", &["wav", "WAV"])
+            .add_filter("FLAC", &["flac", "FLAC"])
             .set_file_name(format!("{}.wav", self.project.name))
             .save_file()
         else {
             return;
+        };
+        // A name with no extension is a WAV file.
+        let path = if path.extension().is_none() {
+            path.with_extension("wav")
+        } else {
+            path
         };
         let Some(sync) = self.sync.as_mut() else {
             self.ui.status = Some("cannot bounce: there is no audio output".to_string());
@@ -906,6 +946,9 @@ impl App {
         if let Some(midi) = self.midi.as_mut() {
             midi.poll(&mut input);
         }
+        // The computer keyboard, when Musical Typing is on, makes the same live notes.
+        self.ui.typing.read_keys(ctx);
+        input.extend(self.ui.typing.take());
         let p = &mut self.project;
         let s = &mut self.ui;
         let track = s.rec.target().map_or(p.selected_track, |(t, _)| t);
@@ -924,11 +967,23 @@ impl App {
                     track: track.min(usize::from(u16::MAX)) as u16,
                 },
                 recorder::LiveNote::Off { pitch } => piano_roll::Audition::Off { pitch },
-                // The engine has no sustain pedal, bend or pressure for the keys yet: they are
-                // only recorded.
-                recorder::LiveNote::Sustain { .. }
-                | recorder::LiveNote::Bend { .. }
-                | recorder::LiveNote::Pressure { .. } => continue,
+                // Bend and modulation reach a SoundFont or an external instrument as they are
+                // played (and are recorded).
+                recorder::LiveNote::Bend { val } => piano_roll::Audition::Control {
+                    track: track.min(usize::from(u16::MAX)) as u16,
+                    number: prowave_engine::PITCH_BEND_CONTROL,
+                    value: val,
+                },
+                recorder::LiveNote::Modulation { val } => piano_roll::Audition::Control {
+                    track: track.min(usize::from(u16::MAX)) as u16,
+                    number: recorder::MODULATION_WHEEL,
+                    value: u16::from(val),
+                },
+                // The engine has no sustain pedal or pressure for the keys yet: they are only
+                // recorded.
+                recorder::LiveNote::Sustain { .. } | recorder::LiveNote::Pressure { .. } => {
+                    continue
+                }
             });
         }
         // Record on an audio track is the audio recorder's (see `record_audio`).
@@ -1053,6 +1108,25 @@ impl eframe::App for App {
         if let Some(shots) = self.shots.as_mut() {
             if shots.frame(&ctx) {
                 self.shots = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+        if let Some(shot) = self.shot.as_mut() {
+            if let Some(outcome) = shot.frame(&ctx) {
+                self.shot = None;
+                match outcome {
+                    bench::ShotOutcome::Saved => {}
+                    bench::ShotOutcome::Failed(message) => {
+                        eprintln!("cannot save the picture: {message}");
+                        self.shot_exit
+                            .store(1, std::sync::atomic::Ordering::Release);
+                    }
+                    bench::ShotOutcome::TimedOut => {
+                        eprintln!("the window did not hand out a picture in time");
+                        self.shot_exit
+                            .store(1, std::sync::atomic::Ordering::Release);
+                    }
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
@@ -1234,6 +1308,20 @@ impl eframe::App for App {
                     piano_roll::Audition::Off { pitch } => {
                         Some(prowave_engine::Command::NoteOff { pitch })
                     }
+                    piano_roll::Audition::Control { track, .. }
+                        if usize::from(track) >= prowave_engine::MAX_TRACKS =>
+                    {
+                        None
+                    }
+                    piano_roll::Audition::Control {
+                        track,
+                        number,
+                        value,
+                    } => Some(prowave_engine::Command::LiveControl {
+                        track,
+                        number,
+                        value,
+                    }),
                 };
                 if cmd.is_some_and(|cmd| !sync.engine.send(cmd)) {
                     break;
@@ -1282,10 +1370,19 @@ impl eframe::App for App {
         }
         project_settings::show(&ctx, &mut self.project, &mut self.ui);
         track_dialogs::show(&ctx, &mut self.project, &mut self.ui);
+        new_track_dialog::show(&ctx, &mut self.project, &mut self.ui);
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
         group_editor::show(&ctx, &mut self.project, &mut self.ui);
+        let typed = self
+            .project
+            .tracks
+            .get(self.project.selected_track)
+            .map(|t| t.name.clone());
+        musical_typing::show(&ctx, &mut self.ui.typing, typed.as_deref());
+        plugin_manager::show(&ctx, &mut self.ui);
+        drum_machine_ui::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
         self.track_history(&ctx);
@@ -1560,11 +1657,24 @@ fn print_help() {
     println!(
         "  --layout-shots <folder>   save pictures of the layout at four window sizes, then exit"
     );
+    println!("  --screenshot <file.png>   save one picture of the window, then exit");
+    println!("  --scan-ladspa <file>      list the plug-ins in a LADSPA library, then exit (the");
+    println!("                            Plugin Manager reads each library in a child process)");
     println!();
     println!("A .prowave path opens that project; other paths are imported as audio files.");
 }
 
 fn main() -> eframe::Result {
+    // The Plugin Manager reads each plug-in library in a copy of this program, so a plug-in
+    // that crashes or hangs does not take the app with it: print what is in it and go.
+    {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        if let [_, flag, path] = args.as_slice() {
+            if flag == "--scan-ladspa" {
+                std::process::exit(plugins::scan_main(std::path::Path::new(path)));
+            }
+        }
+    }
     bench::mark_start();
     // Started by an update that is waiting for the program to close: put the update in place.
     if updater::run_helper_if_requested() {
@@ -1586,11 +1696,19 @@ fn main() -> eframe::Result {
     }
     let bench_out = bench::requested(&all_args);
     let shots_dir = bench::shots_requested(&all_args);
-    if bench_out.is_none() && shots_dir.is_none() {
+    let shot_out = bench::screenshot_requested(&all_args);
+    // A `--screenshot` without a file is an error before the window opens: the session it
+    // would otherwise start is not a measuring run and may change the user's settings.
+    if shot_out.is_none() && all_args.iter().any(|a| a == bench::SCREENSHOT_ARG) {
+        eprintln!("--screenshot needs a file name, for example: prowave --screenshot shot.png");
+        std::process::exit(2);
+    }
+    let shot_exit = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    if bench_out.is_none() && shots_dir.is_none() && shot_out.is_none() {
         updater::clean_up_after_update();
     }
     // Measuring runs leave the user's settings (recent projects, size) alone.
-    let measuring = bench_out.is_some() || shots_dir.is_some();
+    let measuring = bench_out.is_some() || shots_dir.is_some() || shot_out.is_some();
     // Release builds: on a crash, write a report to the temp folder instead of a raw panic.
     human_panic::setup_panic!(human_panic::Metadata::new(
         "Pro Wave",
@@ -1624,11 +1742,27 @@ fn main() -> eframe::Result {
             Err(e) => tracing::warn!("app icon could not be decoded: {e}"),
         }
     }
+    // `--screenshot`: a picture without stealing the focus, so whoever asked for it keeps
+    // working in their own window while the app draws.
+    if shot_out.is_some() {
+        viewport = viewport.with_active(false);
+    }
     let wgpu_options = graphics::config();
     let started_backends = graphics::started_backends(&wgpu_options);
     let opts = eframe::NativeOptions {
         viewport,
         wgpu_options,
+        // macOS activates a newly launched app and puts it in front; the picture must not
+        // pull the user away from what they are doing.
+        #[cfg(target_os = "macos")]
+        event_loop_builder: shot_out.as_ref().map(|_| {
+            Box::new(
+                |builder: &mut winit::event_loop::EventLoopBuilder<eframe::UserEvent>| {
+                    use winit::platform::macos::EventLoopBuilderExtMacOS as _;
+                    builder.with_activate_ignoring_other_apps(false);
+                },
+            ) as eframe::EventLoopBuilderHook
+        }),
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -1639,8 +1773,8 @@ fn main() -> eframe::Result {
             // Cmd/Ctrl + = / - / 0 resize the interface through `ui_scale` instead, which
             // also keeps the fit for small windows.
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-            // Every start begins clean; only the layout pictures need something to show.
-            let project = if shots_dir.is_some() {
+            // Every start begins clean; the picture runs need something to show.
+            let project = if shots_dir.is_some() || shot_out.is_some() {
                 Project::demo()
             } else {
                 Project::empty()
@@ -1680,6 +1814,8 @@ fn main() -> eframe::Result {
                 native_menu: None,
                 bench: bench_out.clone().map(bench::Probe::new),
                 shots: shots_dir.clone().map(bench::LayoutShots::new),
+                shot: shot_out.clone().map(bench::Screenshot::new),
+                shot_exit: shot_exit.clone(),
                 frames_since_record: 0,
                 midi: (!measuring).then(midi_in::MidiIn::new),
                 midi_out,
@@ -1898,6 +2034,11 @@ fn main() -> eframe::Result {
     if let (Some(out), Err(e)) = (&bench_out, &result) {
         bench::report_without_window(out, &e.to_string());
         return Ok(());
+    }
+    // A `--screenshot` that failed to save or timed out is an error for the script that ran it.
+    let shot_code = shot_exit.load(std::sync::atomic::Ordering::Acquire);
+    if shot_code != 0 {
+        std::process::exit(shot_code);
     }
     result
 }
