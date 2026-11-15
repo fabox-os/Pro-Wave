@@ -235,7 +235,11 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
 
 /// The sends of a track in a file: the list, else (older files) the single send.
 fn sends_from_doc(t: &prowave_project::TrackDoc) -> Vec<SendSlot> {
-    let valid = |bus: u8| (1..=8).contains(&bus).then_some(bus);
+    let valid = |bus: u16| {
+        (1..=prowave_engine::MAX_BUSES as u16)
+            .contains(&bus)
+            .then_some(bus)
+    };
     let mut sends: Vec<SendSlot> = t
         .sends
         .iter()
@@ -413,6 +417,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             height: t.height,
             indent: t.indent,
             folded: t.folded,
+            summing_stack: t.summing_stack,
             vca: t.vca,
             midi_port: t.midi_port.clone(),
             midi_channel: t.midi_channel,
@@ -430,6 +435,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             },
             input_stereo: matches!(t.input, InputSource::Stereo(_)),
             output: t.output,
+            aux_bus: t.aux_bus,
             groove: t.params.groove,
             follow_groove: t.params.follow_groove,
             midi_fx: t
@@ -538,6 +544,8 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
                                 .collect(),
                         }
                     }),
+                    audio_start: r.audio.as_ref().map_or(0, |a| a.start_frame),
+                    audio_frames: r.audio.as_ref().and_then(|a| a.len_frames),
                     mute: r.params.mute,
                     quantize: r.params.quantize,
                     transpose: r.params.transpose,
@@ -721,6 +729,9 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
                         Some(f) => {
                             let mut a = audio_region(f.clone(), ctx);
                             a.flex = r.flex.as_ref().map(|d| flex_from_doc(d, f.clone()));
+                            // A region cut from its file plays the part it was saved with.
+                            a.start_frame = r.audio_start;
+                            a.len_frames = r.audio_frames;
                             Some(a)
                         }
                         None => continue,
@@ -821,6 +832,15 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             } else {
                 0
             },
+            aux_bus: if usize::from(t.aux_bus) <= prowave_engine::MAX_BUSES {
+                t.aux_bus
+            } else {
+                0
+            },
+            // Only an Aux strip with a bus of its own can be the parent of a Summing Stack.
+            summing_stack: t.summing_stack
+                && t.kind == TrackKindDoc::Aux
+                && (1..=prowave_engine::MAX_BUSES).contains(&usize::from(t.aux_bus)),
             midi_fx: t
                 .midi_fx
                 .iter()
@@ -1980,6 +2000,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_part_of_a_file_that_a_split_region_plays_is_saved_and_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut p = Project::empty();
+        let wav = dir.path().join("take.wav");
+        write_wav(&wav);
+        crate::import::import_audio(&mut p, &wav, &ctx).unwrap();
+        let t = p.tracks.len() - 1;
+        {
+            let a = p.tracks[t].regions[0].audio.as_mut().unwrap();
+            a.start_frame = 1_000;
+            a.len_frames = Some(2_000);
+        }
+        let path = save_project(&p, &dir.path().join("split")).unwrap();
+        let (q, warnings) = open_project(&path, &ctx).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let a = q.tracks[t].regions[0].audio.as_ref().unwrap();
+        assert_eq!((a.start_frame, a.len_frames), (1_000, Some(2_000)));
+    }
+
+    #[test]
     fn effects_sends_and_automation_are_saved_and_damaged_ones_are_tamed() {
         use crate::model::{AutoMode, AutoTarget, Insert};
         use prowave_engine::FxKind;
@@ -2098,7 +2139,7 @@ pub(crate) mod tests {
             }));
         doc.tracks[1].sends = (0..30)
             .map(|k| prowave_project::SendDoc {
-                bus: k as u8,
+                bus: k as u16,
                 level: 9.0,
                 pre: false,
             })
@@ -2471,7 +2512,7 @@ pub(crate) mod tests {
         let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(q.notes, p.notes);
         assert_eq!(q.tracks[0].output, 2);
-        doc.tracks[0].output = 200;
+        doc.tracks[0].output = 2000;
         doc.notes = "x".repeat(crate::side_panes::MAX_NOTES + 10);
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(r.tracks[0].output, 0, "no such bus");
@@ -2616,5 +2657,162 @@ pub(crate) mod tests {
         doc.tracks[0].drums = None;
         let (n, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(n.tracks[0].drums, None);
+    }
+}
+
+#[cfg(test)]
+mod stack_io_tests {
+    use super::{from_doc, to_doc};
+    use crate::model::{Project, Track, TrackKind};
+    use prowave_project::{ProjectDoc, TrackDoc, TrackKindDoc};
+    use std::path::Path;
+
+    fn four() -> Project {
+        let mut p = Project::empty();
+        p.tracks = ["a", "b", "c", "d"]
+            .iter()
+            .map(|n| Track::new(*n, TrackKind::Instrument))
+            .collect();
+        p
+    }
+
+    /// Name, kind, nesting, summing flag, bus listened to and output, per track.
+    fn shape(p: &Project) -> Vec<(String, TrackKind, u8, bool, u16, u16)> {
+        p.tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    t.kind,
+                    t.indent,
+                    t.summing_stack,
+                    t.aux_bus,
+                    t.output,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn folder_and_summing_stacks_and_their_routing_survive_a_save() {
+        let mut p = four();
+        p.create_track_stack(&[0, 2], false);
+        p.create_track_stack(&[3, 4], true);
+        p.tracks[0].volume_db = -4.5;
+        let (doc, _) = to_doc(&p);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(shape(&q), shape(&p));
+        assert_eq!(q.tracks[0].volume_db, -4.5, "a folder's level is kept");
+        let sub = q
+            .tracks
+            .iter()
+            .find(|t| t.summing_stack)
+            .expect("the summing stack is back");
+        assert_eq!(sub.name, "Sub 1");
+        assert_eq!(
+            q.aux_bus_of(q.tracks.iter().position(|t| t.summing_stack).unwrap()),
+            sub.aux_bus
+        );
+    }
+
+    #[test]
+    fn a_file_without_stacks_loads_with_none() {
+        let doc = ProjectDoc {
+            tracks: vec![TrackDoc {
+                name: "Old".into(),
+                kind: TrackKindDoc::Aux,
+                ..TrackDoc::default()
+            }],
+            ..ProjectDoc::default()
+        };
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert!(
+            !q.tracks[0].summing_stack,
+            "no bus of its own, so not a Summing Stack"
+        );
+    }
+
+    #[test]
+    fn hostile_stack_fields_are_repaired_without_a_panic() {
+        let track = |name: &str, kind, indent: u8| TrackDoc {
+            name: name.into(),
+            kind,
+            indent,
+            ..TrackDoc::default()
+        };
+        let mut doc = ProjectDoc {
+            tracks: vec![
+                track("A", TrackKindDoc::Instrument, 200),
+                // An Aux flagged as a summing stack with no bus is not one.
+                TrackDoc {
+                    summing_stack: true,
+                    ..track("B", TrackKindDoc::Aux, 9)
+                },
+                // A summing flag on an instrument, and an output to a bus that does not exist.
+                TrackDoc {
+                    summing_stack: true,
+                    output: 999,
+                    ..track("C", TrackKindDoc::Instrument, 1)
+                },
+                // A real summing stack on bus 7.
+                TrackDoc {
+                    summing_stack: true,
+                    aux_bus: 7,
+                    ..track("Sub", TrackKindDoc::Aux, 0)
+                },
+                TrackDoc {
+                    output: 300,
+                    ..track("D", TrackKindDoc::Instrument, 3)
+                },
+            ],
+            ..ProjectDoc::default()
+        };
+        // A bus beyond the 256 there are is refused as an Aux bus too.
+        doc.tracks.push(TrackDoc {
+            summing_stack: true,
+            aux_bus: 300,
+            ..track("E", TrackKindDoc::Aux, 0)
+        });
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        let got: Vec<(String, u8, bool, u16, u16)> = q
+            .tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    t.indent,
+                    t.summing_stack,
+                    t.aux_bus,
+                    t.output,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("A".to_string(), 0, false, 0, 0),
+                ("B".to_string(), 0, false, 0, 0),
+                ("C".to_string(), 0, false, 0, 0),
+                ("Sub".to_string(), 0, true, 7, 0),
+                ("D".to_string(), 1, false, 0, 0),
+                ("E".to_string(), 0, false, 0, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_engine_sends_the_children_of_a_summing_stack_to_its_bus() {
+        let mut p = four();
+        let at = p.create_track_stack(&[1, 2], true).expect("a bus is free");
+        let bus = p.tracks[at].aux_bus;
+        let child = crate::engine_sync::route_of(&p, 2);
+        assert_eq!(child.output, bus);
+        let parent = crate::engine_sync::route_of(&p, at);
+        assert_eq!(
+            parent.bus_in, bus,
+            "the Aux strip plays the bus its children fill"
+        );
+        assert_eq!(parent.output, 0, "and it plays to Stereo Out");
+        assert_eq!(crate::engine_sync::route_of(&p, 0).output, 0);
     }
 }

@@ -124,6 +124,9 @@ fn audio_key(p: &Project, i: usize) -> u64 {
             }
             mix(map.seconds_at(p.region_start_beats(r)).to_bits());
             mix(u64::from(r.params.mute));
+            let (start, len) = a.part();
+            mix(start);
+            mix(len);
         }
     }
     mix(u64::from(p.tempo.to_bits()));
@@ -169,13 +172,26 @@ pub fn poll(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
         return;
     }
     let map = p.tempo_map();
-    let files: Vec<(prowave_engine::AudioFile, f64)> = p.tracks[i]
+    // Each region: its file, where it starts in seconds, and the part of the file it plays in
+    // seconds (the whole file when it plays all of it).
+    let files: Vec<(prowave_engine::AudioFile, f64, (f64, f64))> = p.tracks[i]
         .regions
         .iter()
         .filter(|r| !r.params.mute)
         .filter_map(|r| {
             let a = r.audio.as_ref()?;
-            Some((a.file.clone(), map.seconds_at(p.region_start_beats(r))))
+            let sr = f64::from(a.file.sample_rate.max(1));
+            let (start, len) = a.part();
+            let span = if a.plays_part() {
+                (start as f64 / sr, (start + len) as f64 / sr)
+            } else {
+                (0.0, f64::INFINITY)
+            };
+            Some((
+                a.file.clone(),
+                map.seconds_at(p.region_start_beats(r)),
+                span,
+            ))
         })
         .collect();
     let (tx, rx) = channel();
@@ -186,7 +202,7 @@ pub fn poll(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
             // Regions of the same file (a loop repeated) are read once.
             let mut read: std::collections::HashMap<std::path::PathBuf, Vec<f64>> =
                 Default::default();
-            for (file, at) in &files {
+            for (file, at, (from, to)) in &files {
                 if !read.contains_key(&file.path) {
                     match file.analyze() {
                         Ok(found) => {
@@ -198,7 +214,13 @@ pub fn poll(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
                         }
                     }
                 }
-                hits.extend(read[&file.path].iter().map(|o| map.beat_at(at + o)));
+                // Only the hits inside the part the region plays, placed where that part starts.
+                hits.extend(
+                    read[&file.path]
+                        .iter()
+                        .filter(|&&o| o >= *from && o < *to)
+                        .map(|&o| map.beat_at(*at + (o - *from))),
+                );
                 if hits.len() > 2_000_000 {
                     break;
                 }

@@ -204,8 +204,8 @@ impl RegionParams {
 /// strip's signal to the bus; the Aux strip that listens to the bus plays it.
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub struct SendSlot {
-    /// Bus number 1..=8, or `None` for an empty slot.
-    pub bus: Option<u8>,
+    /// Bus number 1..=[`prowave_engine::MAX_BUSES`], or `None` for an empty slot.
+    pub bus: Option<u16>,
     /// 0..=1 send level (the knob; see `prowave_engine::send_gain`).
     pub level: f32,
     /// Pre-fader send (shown with the "eye" icon).
@@ -633,6 +633,63 @@ pub struct AudioRegion {
     pub peaks: Arc<OnceLock<Vec<(f32, f32)>>>,
     /// Flex Time and Flex Pitch: when set, `file` is the sound made from this edit.
     pub flex: Option<crate::flex_edit::FlexEdit>,
+    /// Where the region's sound starts in `file`, in the file's own frames: 0 for a region
+    /// that plays its file from the start. Split puts the right-hand piece further in.
+    pub start_frame: u64,
+    /// How many frames of the file the region plays from `start_frame`; `None` plays to the
+    /// end of the file (the case of every region that was not split).
+    pub len_frames: Option<u64>,
+}
+
+impl AudioRegion {
+    /// A region that plays `file` from its start to its end.
+    pub fn whole(file: AudioFile, peaks: Arc<OnceLock<Vec<(f32, f32)>>>) -> Self {
+        Self {
+            file,
+            peaks,
+            flex: None,
+            start_frame: 0,
+            len_frames: None,
+        }
+    }
+
+    /// The frames of the file the region plays: where it starts and how many (to the end of the
+    /// file when it is not cut short), kept inside the file.
+    pub fn part(&self) -> (u64, u64) {
+        let frames = self.file.frames;
+        let start = self.start_frame.min(frames);
+        (
+            start,
+            self.len_frames
+                .unwrap_or(frames - start)
+                .min(frames - start),
+        )
+    }
+
+    /// Whether the region plays only a piece of its file (as the parts of a split do).
+    pub fn plays_part(&self) -> bool {
+        self.part() != (0, self.file.frames)
+    }
+
+    /// The part of the file the engine streams for this region.
+    pub fn span(&self) -> prowave_engine::FileSpan {
+        prowave_engine::FileSpan {
+            start: self.start_frame,
+            len: self.len_frames,
+        }
+    }
+
+    /// The part of the file's overview (`peaks`, one entry per slice of the whole file) that
+    /// the region plays. The whole overview when the region plays the whole file.
+    pub fn peaks_part<'a>(&self, peaks: &'a [(f32, f32)]) -> &'a [(f32, f32)] {
+        let (start, len) = self.part();
+        let frames = self.file.frames.max(1) as f64;
+        let n = peaks.len() as f64;
+        let hi = (((start + len) as f64 / frames) * n).ceil() as usize;
+        let hi = hi.min(peaks.len());
+        let lo = ((start as f64 / frames) * n).floor() as usize;
+        &peaks[lo.min(hi)..hi]
+    }
 }
 
 #[derive(Clone)]
@@ -648,7 +705,11 @@ pub struct Track {
     /// The input an audio track records.
     pub input: prowave_engine::InputSource,
     /// The bus the strip plays into; 0 is Stereo Out (the mixer's Output slot).
-    pub output: u8,
+    pub output: u16,
+    /// For an Aux strip made to listen to one bus (Logic makes one when a send goes to a bus
+    /// nothing listens to): that bus. 0 for the others, which listen to the bus of their rank
+    /// (the first Aux to Bus 1, and so on).
+    pub aux_bus: u16,
     pub volume_db: f32,
     pub pan: f32,
     pub inserts: Vec<Insert>,
@@ -694,6 +755,10 @@ pub struct Track {
     pub drums: Option<crate::drum_kit::DrumsUse>,
     /// The icon the user picked (Track > Assign Track Icon); `None` is the automatic one.
     pub icon: Option<crate::track_icons::IconKind>,
+    /// The parent of a Summing Stack (Track > Create Track Stack > Summing Stack): an Aux strip
+    /// that listens to the bus its children send their output to. Its children are the tracks
+    /// indented under it, as in a folder stack.
+    pub summing_stack: bool,
 }
 
 /// The Sampler on a track: where its sounds come from, and its dials (see
@@ -727,6 +792,8 @@ impl Default for EPianoUse {
         }
     }
 }
+/// The colour of a track stack's parent row (purple, as Logic draws stacks).
+pub const STACK_COLOR: Color32 = Color32::from_rgb(0x8f, 0x78, 0xb8);
 
 /// A SoundFont instrument on a track: the `.sf2` file and the preset played from it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -766,6 +833,7 @@ impl Track {
             monitor: false,
             input: prowave_engine::InputSource::Mono(0),
             output: 0,
+            aux_bus: 0,
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
@@ -790,7 +858,14 @@ impl Track {
             midi_program: None,
             midi_bank: None,
             midi_fx: Vec::new(),
+            summing_stack: false,
         }
+    }
+
+    /// Whether this track is the parent of a track stack: a folder stack (a `Folder` track) or a
+    /// Summing Stack (an Aux strip). The tracks indented under it are its children.
+    pub fn is_stack_parent(&self) -> bool {
+        self.kind == TrackKind::Folder || self.summing_stack
     }
 }
 
@@ -985,6 +1060,7 @@ impl Project {
             monitor: false,
             input: prowave_engine::InputSource::Mono(0),
             output: 0,
+            aux_bus: 0,
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
@@ -1005,6 +1081,7 @@ impl Project {
             epiano: None,
             drums: None,
             icon: None,
+            summing_stack: false,
             midi_channel: 1,
             midi_program: None,
             midi_bank: None,
@@ -1037,6 +1114,7 @@ impl Project {
             monitor: false,
             input: prowave_engine::InputSource::Mono(0),
             output: 0,
+            aux_bus: 0,
             volume_db: vol,
             pan: 0.0,
             inserts: inserts_from_names(&ins),
@@ -1071,6 +1149,7 @@ impl Project {
             epiano: None,
             drums: None,
             icon: None,
+            summing_stack: false,
             midi_channel: 1,
             midi_program: None,
             midi_bank: None,
@@ -1135,7 +1214,7 @@ impl Project {
         let mut tracks = tracks;
         for (t, bus) in tracks
             .iter_mut()
-            .zip([Some(1u8), Some(3), Some(3), Some(3)])
+            .zip([Some(1u16), Some(3), Some(3), Some(3)])
         {
             t.sends = vec![SendSlot {
                 bus,
@@ -1792,7 +1871,7 @@ impl Project {
         for j in (0..i).rev() {
             let t = &self.tracks[j];
             if t.indent < level {
-                if t.kind == TrackKind::Folder && t.folded {
+                if t.is_stack_parent() && t.folded {
                     return true;
                 }
                 level = t.indent;
@@ -1801,42 +1880,145 @@ impl Project {
         false
     }
 
-    /// Track > Create Track Stack: puts track `i` (with everything inside it, if it is a
-    /// folder) into a new folder at its place, selects the folder and returns its index.
-    /// Tracks after it move down one slot, so the engine is told the song changed.
-    pub fn create_track_stack(&mut self, i: usize) -> usize {
-        let (end, level) = (self.folder_end(i), self.tracks[i].indent);
-        for t in &mut self.tracks[i..end] {
-            t.indent = t.indent.saturating_add(1);
+    /// Track > Create Track Stack: puts the tracks `picked` into a new stack. The parent goes
+    /// above the first of them, at the nesting level they had, and each picked track (with the
+    /// tracks nested under it) moves in under the parent, one level deeper. A picked track that
+    /// lies inside another picked one moves with it. A folder stack (`summing` false) is a
+    /// `Folder` track. A Summing Stack is an Aux strip that listens to a bus no other strip
+    /// uses, and the picked tracks send their output to that bus. Returns the parent's index
+    /// and selects it, or `None` (changing nothing) when no track is picked or no bus is free.
+    pub fn create_track_stack(&mut self, picked: &[usize], summing: bool) -> Option<usize> {
+        let mut sel: Vec<usize> = picked
+            .iter()
+            .copied()
+            .filter(|&i| i < self.tracks.len())
+            .collect();
+        sel.sort_unstable();
+        sel.dedup();
+        let mut blocks: Vec<(usize, usize)> = Vec::new();
+        for i in sel {
+            if blocks.last().is_some_and(|&(_, end)| i < end) {
+                continue;
+            }
+            blocks.push((i, self.folder_end(i)));
         }
+        let at = blocks.first()?.0;
+        let level = blocks.iter().map(|&(s, _)| self.tracks[s].indent).min()?;
+        let bus = if summing {
+            Some(self.free_bus()?)
+        } else {
+            None
+        };
+        let len = self.tracks.len();
+        let mut in_block = vec![false; len];
+        let mut block_root = vec![false; len];
+        // How far each block's tracks move in nesting: its first track ends one level under the parent.
+        let mut moved_by = vec![0i32; len];
+        for &(s, e) in &blocks {
+            block_root[s] = true;
+            let delta = i32::from(level) + 1 - i32::from(self.tracks[s].indent);
+            for j in s..e {
+                in_block[j] = true;
+                moved_by[j] = delta;
+            }
+        }
+        // The new order: what is before the first block, the parent (None), the blocks, the rest.
+        let mut order: Vec<Option<usize>> = (0..at).map(Some).collect();
+        order.push(None);
+        for &(s, e) in &blocks {
+            order.extend((s..e).map(Some));
+        }
+        order.extend((at..len).filter(|&j| !in_block[j]).map(Some));
+        let mut new_index = vec![0usize; len];
+        for (k, o) in order.iter().enumerate() {
+            if let Some(j) = *o {
+                new_index[j] = k;
+            }
+        }
+
+        // Numbered among the stacks of the same type.
         let n = self
             .tracks
             .iter()
-            .filter(|t| t.kind == TrackKind::Folder)
+            .filter(|t| {
+                if summing {
+                    t.summing_stack
+                } else {
+                    t.kind == TrackKind::Folder
+                }
+            })
             .count()
             + 1;
-        let mut folder = Track::new(format!("Folder {n}"), TrackKind::Folder);
-        folder.indent = level;
-        self.tracks.insert(i, folder);
-        self.vca_inserted(i);
-        self.selected_track = i;
+        let mut parent = if summing {
+            Track::new(format!("Sub {n}"), TrackKind::Aux)
+        } else {
+            Track::new(format!("Folder {n}"), TrackKind::Folder)
+        };
+        parent.indent = level;
+        parent.color = STACK_COLOR;
+        parent.summing_stack = summing;
+        parent.aux_bus = bus.unwrap_or(0);
+
+        let mut old: Vec<Option<Track>> = std::mem::take(&mut self.tracks)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut tracks: Vec<Track> = Vec::with_capacity(len + 1);
+        let mut parent = Some(parent);
+        for o in order {
+            match o {
+                None => tracks.extend(parent.take()),
+                Some(j) => {
+                    let Some(mut t) = old[j].take() else {
+                        continue;
+                    };
+                    t.indent = (i32::from(t.indent) + moved_by[j]).clamp(0, 255) as u8;
+                    t.vca = t.vca.and_then(|v| new_index.get(v).copied());
+                    // The children of a summing stack play into its bus. Only strips have an
+                    // output to send there: a track stack has no sound of its own.
+                    if let (Some(bus), true) = (bus, block_root[j]) {
+                        if !matches!(t.kind, TrackKind::Folder | TrackKind::Vca) {
+                            t.output = bus;
+                        }
+                    }
+                    tracks.push(t);
+                }
+            }
+        }
+        self.tracks = tracks;
+        self.selected_track = at;
+        self.normalize_nesting();
         self.song_rev += 1;
-        i
+        Some(at)
     }
 
-    /// Track > Release Track Stack: removes folder `i` and lifts the tracks inside it one
-    /// level. Returns false (and changes nothing) when `i` is not a folder.
+    /// A bus number nothing uses yet: no Aux strip listens to it, no track plays into it and no
+    /// send goes to it. The highest such number, so the low numbers stay free for the user's own
+    /// sends. `None` when every bus is in use.
+    pub fn free_bus(&self) -> Option<u16> {
+        (1..=prowave_engine::MAX_BUSES as u16).rev().find(|&b| {
+            !self.bus_has_aux(b)
+                && self
+                    .tracks
+                    .iter()
+                    .all(|t| t.output != b && t.sends.iter().all(|s| s.bus != Some(b)))
+        })
+    }
+
+    /// Track > Release Track Stack: removes the stack parent `i` (a folder or a Summing Stack) and
+    /// lifts the tracks inside it one level. A child of a Summing Stack goes back to Stereo Out.
+    /// Returns false (and changes nothing) when `i` is not a stack parent.
     pub fn release_track_stack(&mut self, i: usize) -> bool {
-        if self
-            .tracks
-            .get(i)
-            .is_none_or(|t| t.kind != TrackKind::Folder)
-        {
+        if self.tracks.get(i).is_none_or(|t| !t.is_stack_parent()) {
             return false;
         }
+        let bus = self.aux_bus_of(i);
         let end = self.folder_end(i);
         for t in &mut self.tracks[i + 1..end] {
             t.indent = t.indent.saturating_sub(1);
+            if bus != 0 && t.output == bus {
+                t.output = 0;
+            }
         }
         self.tracks.remove(i);
         self.vca_removed(i);
@@ -1962,23 +2144,31 @@ impl Project {
         }
     }
 
-    /// The bus an Aux strip listens to: Aux 1 takes Bus 1, the next Aux Bus 2, and so on up to
-    /// Bus 8. 0 for any other strip, and for an Aux strip past the eighth.
-    pub fn aux_bus_of(&self, i: usize) -> u8 {
+    /// The bus an Aux strip listens to: an Aux strip made for a bus says which, the others
+    /// take the bus of their rank among them (Aux 1 takes Bus 1, the next Aux Bus 2, and so on
+    /// up to [`prowave_engine::MAX_BUSES`]). 0 for any other strip, and for an Aux strip past
+    /// that.
+    pub fn aux_bus_of(&self, i: usize) -> u16 {
         match self.tracks.get(i) {
+            Some(t) if t.kind == TrackKind::Aux && t.aux_bus != 0 => t.aux_bus,
             Some(t) if t.kind == TrackKind::Aux => {
                 let n = self.tracks[..=i]
                     .iter()
-                    .filter(|t| t.kind == TrackKind::Aux)
+                    .filter(|t| t.kind == TrackKind::Aux && t.aux_bus == 0)
                     .count();
                 if n <= prowave_engine::MAX_BUSES {
-                    n as u8
+                    n as u16
                 } else {
                     0
                 }
             }
             _ => 0,
         }
+    }
+
+    /// Whether an Aux strip listens to `bus`.
+    pub fn bus_has_aux(&self, bus: u16) -> bool {
+        bus != 0 && (0..self.tracks.len()).any(|i| self.aux_bus_of(i) == bus)
     }
 
     /// Whether track `i` is muted, by its own Mute or by its VCA's.
@@ -2010,7 +2200,36 @@ impl Project {
             return (0.0, false, false);
         }
         let vca_db = self.vca_of(i).map_or(0.0, |v| v.volume_db);
-        (t.volume_db + vca_db, self.is_muted(i), self.is_soloed(i))
+        let folder_db = self.folder_db_of(i);
+        (
+            t.volume_db + vca_db + folder_db,
+            self.is_muted(i),
+            self.is_soloed(i),
+        )
+    }
+
+    /// The level the folder tracks around track `i` add to it: the volume of each folder track
+    /// (Logic: a folder's fader scales everything inside it). A Summing Stack's fader is the
+    /// level of its own bus, so it adds nothing here.
+    pub fn folder_db_of(&self, i: usize) -> f32 {
+        let Some(t) = self.tracks.get(i) else {
+            return 0.0;
+        };
+        let mut level = t.indent;
+        let mut db = 0.0;
+        for j in (0..i).rev() {
+            if level == 0 {
+                break;
+            }
+            let u = &self.tracks[j];
+            if u.indent < level {
+                if u.kind == TrackKind::Folder {
+                    db += u.volume_db;
+                }
+                level = u.indent;
+            }
+        }
+        db
     }
 
     /// Track > Delete Track: removes track `i` with its regions. Deleting a folder keeps the
@@ -2020,7 +2239,7 @@ impl Project {
         if i >= self.tracks.len() || self.tracks.len() == 1 {
             return false;
         }
-        if self.tracks[i].kind == TrackKind::Folder {
+        if self.tracks[i].is_stack_parent() {
             return self.release_track_stack(i);
         }
         self.tracks.remove(i);
@@ -2050,7 +2269,7 @@ impl Project {
         let mut allowed = 0u8;
         for t in &mut self.tracks {
             t.indent = t.indent.min(allowed);
-            allowed = t.indent + u8::from(t.kind == TrackKind::Folder);
+            allowed = t.indent + u8::from(t.is_stack_parent());
         }
     }
 
@@ -2522,11 +2741,10 @@ mod tests {
     fn test_audio() -> AudioRegion {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../prowave-engine/tests/fixtures");
-        AudioRegion {
-            file: prowave_engine::AudioFile::open(dir.join("tone.caf")).unwrap(),
-            peaks: Default::default(),
-            flex: None,
-        }
+        AudioRegion::whole(
+            prowave_engine::AudioFile::open(dir.join("tone.caf")).unwrap(),
+            Default::default(),
+        )
     }
 
     #[test]
@@ -2665,7 +2883,7 @@ mod tests {
         assert_eq!(p.tracks[1].kind, TrackKind::Vca);
         assert_eq!(p.tracks[0].vca, Some(1));
         // A folder is created in front: everything shifts down.
-        p.create_track_stack(0);
+        p.create_track_stack(&[0], false);
         assert_eq!(
             p.tracks[1].vca,
             Some(2),
@@ -2711,7 +2929,7 @@ mod tests {
 
         // A folder goes, the tracks inside it stay.
         let stacked = p.tracks[0].name.clone();
-        p.create_track_stack(0);
+        p.create_track_stack(&[0], false);
         assert!(p.delete_track(0));
         assert_eq!(
             (p.tracks[0].name.as_str(), p.tracks[0].indent),
@@ -2827,7 +3045,7 @@ mod tests {
         // A folded outer folder hides an open inner one's tracks as well.
         let mut p = stack_fixture();
         p.tracks[0].folded = false;
-        p.create_track_stack(0);
+        p.create_track_stack(&[0], false);
         p.tracks[0].folded = true;
         assert_eq!((1..4).filter(|i| p.hidden_by_fold(*i)).count(), 3);
     }
@@ -2844,10 +3062,10 @@ mod tests {
         let before = names(&p);
 
         // Wrap the plain track "d" (index 3).
-        let at = p.create_track_stack(3);
+        let at = p.create_track_stack(&[3], false);
         assert_eq!(
             (at, p.selected_track, p.tracks[3].kind),
-            (3, 3, TrackKind::Folder)
+            (Some(3), 3, TrackKind::Folder)
         );
         assert_eq!(p.tracks[3].name, "Folder 3");
         assert_eq!((p.tracks[4].name.as_str(), p.tracks[4].indent), ("d", 1));
@@ -2858,7 +3076,7 @@ mod tests {
         assert!(!p.release_track_stack(3), "d is not a folder");
 
         // Wrapping a folder takes everything inside it one level deeper.
-        p.create_track_stack(0);
+        p.create_track_stack(&[0], false);
         let nested: Vec<u8> = p.tracks[..4].iter().map(|t| t.indent).collect();
         assert_eq!(nested, [0, 1, 2, 2]);
         assert_eq!(p.folder_end(0), 4);
@@ -3187,5 +3405,248 @@ mod tests {
             .made_for ^= 1;
         p.song_rev += 1;
         assert!(p.refresh_generated());
+    }
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::*;
+    use crate::tracks_area::TracksView;
+
+    /// Four instrument tracks named a, b, c, d.
+    fn four() -> Project {
+        let mut p = Project::empty();
+        p.tracks = ["a", "b", "c", "d"]
+            .iter()
+            .map(|n| Track::new(*n, TrackKind::Instrument))
+            .collect();
+        p
+    }
+
+    fn names(p: &Project) -> Vec<(String, u8)> {
+        p.tracks
+            .iter()
+            .map(|t| (t.name.clone(), t.indent))
+            .collect()
+    }
+
+    #[test]
+    fn a_folder_stack_gathers_the_picked_tracks_under_a_parent() {
+        let mut p = four();
+        assert_eq!(p.create_track_stack(&[0, 2], false), Some(0));
+        assert_eq!(
+            names(&p),
+            [
+                ("Folder 1".to_string(), 0),
+                ("a".to_string(), 1),
+                ("c".to_string(), 1),
+                ("b".to_string(), 0),
+                ("d".to_string(), 0),
+            ],
+            "the picked tracks move in under the parent, the others keep their order"
+        );
+        assert_eq!(p.tracks[0].kind, TrackKind::Folder);
+        assert!(!p.tracks[0].summing_stack && p.tracks[0].aux_bus == 0);
+        assert_eq!((p.selected_track, p.tracks[0].color), (0, STACK_COLOR));
+        assert_eq!(p.folder_end(0), 3);
+    }
+
+    #[test]
+    fn a_folder_stack_needs_a_track_and_numbers_its_parents() {
+        let mut p = four();
+        assert_eq!(p.create_track_stack(&[], false), None);
+        assert_eq!(p.create_track_stack(&[9], true), None, "no such track");
+        assert_eq!(p.tracks.len(), 4, "nothing changed");
+        p.create_track_stack(&[1], false);
+        p.create_track_stack(&[3], false);
+        assert_eq!(
+            p.tracks[3].name, "Folder 2",
+            "after the first stack, c is at 3"
+        );
+    }
+
+    #[test]
+    fn picking_a_track_inside_another_pick_moves_it_with_that_one() {
+        let mut p = four();
+        p.create_track_stack(&[0, 2], false);
+        // The stack and its child are both picked: one block, so the stack goes under a new parent.
+        let at = p.create_track_stack(&[0, 1], false);
+        assert_eq!(at, Some(0));
+        assert_eq!(p.tracks[1].kind, TrackKind::Folder);
+        assert_eq!(p.tracks[1].indent, 1, "the old stack is one level deeper");
+        assert_eq!(
+            p.tracks
+                .iter()
+                .filter(|t| t.name == "a")
+                .map(|t| t.indent)
+                .collect::<Vec<_>>(),
+            [2]
+        );
+    }
+
+    #[test]
+    fn folding_a_folder_stack_hides_its_children_only() {
+        let mut p = four();
+        p.create_track_stack(&[0, 2], false);
+        let hidden = |p: &Project| {
+            (0..p.tracks.len())
+                .filter(|&i| p.hidden_by_fold(i))
+                .collect::<Vec<_>>()
+        };
+        assert!(hidden(&p).is_empty());
+        p.tracks[0].folded = true;
+        assert_eq!(
+            hidden(&p),
+            [1, 2],
+            "a and c are hidden; the parent and b, d stay"
+        );
+    }
+
+    #[test]
+    fn the_level_of_a_folder_stack_scales_its_children_only() {
+        let mut p = four();
+        p.create_track_stack(&[0, 2], false);
+        p.tracks[0].volume_db = -6.0;
+        assert_eq!(p.track_mix_of(1).0, -6.0, "a is inside the folder");
+        assert_eq!(p.track_mix_of(2).0, -6.0, "c is inside the folder");
+        assert_eq!(p.track_mix_of(3).0, 0.0, "b is outside it");
+        p.tracks[1].volume_db = -3.0;
+        assert_eq!(
+            p.track_mix_of(1).0,
+            -9.0,
+            "the track's own fader adds to the folder's"
+        );
+    }
+
+    #[test]
+    fn a_summing_stack_is_an_aux_strip_that_its_children_send_to() {
+        let mut p = four();
+        let at = p.create_track_stack(&[1, 2], true).expect("a bus is free");
+        assert_eq!(at, 1);
+        let parent = &p.tracks[1];
+        assert_eq!(
+            (parent.kind, parent.name.as_str()),
+            (TrackKind::Aux, "Sub 1")
+        );
+        assert!(parent.summing_stack && parent.is_stack_parent());
+        let bus = prowave_engine::MAX_BUSES as u16;
+        assert_eq!(parent.aux_bus, bus, "the highest free bus");
+        assert_eq!(p.aux_bus_of(1), bus, "the Aux strip listens to it");
+        assert_eq!((p.tracks[2].indent, p.tracks[3].indent), (1, 1));
+        assert_eq!((p.tracks[2].output, p.tracks[3].output), (bus, bus));
+        assert_eq!(
+            p.tracks[0].output, 0,
+            "a track outside the stack keeps Stereo Out"
+        );
+        assert_eq!(p.tracks[4].output, 0);
+    }
+
+    #[test]
+    fn the_summing_bus_skips_buses_in_use() {
+        let mut p = four();
+        let top = prowave_engine::MAX_BUSES as u16;
+        assert_eq!(p.free_bus(), Some(top));
+        // A send to the top bus takes it.
+        p.tracks[3].sends.push(SendSlot {
+            bus: Some(top),
+            level: 0.5,
+            pre: false,
+        });
+        assert_eq!(p.free_bus(), Some(top - 1));
+        // An output to the next one takes that too.
+        p.tracks[0].output = top - 1;
+        assert_eq!(p.free_bus(), Some(top - 2));
+        // An Aux strip that listens to a bus takes it.
+        let aux = p.add_track(TrackKind::Aux);
+        p.tracks[aux].aux_bus = top - 2;
+        assert_eq!(p.free_bus(), Some(top - 3));
+    }
+
+    #[test]
+    fn releasing_a_summing_stack_sends_its_children_back_to_stereo_out() {
+        let mut p = four();
+        let before = names(&p);
+        p.create_track_stack(&[1, 2], true);
+        assert!(p.release_track_stack(1));
+        assert_eq!(names(&p), before, "release undoes the grouping");
+        assert_eq!(p.tracks[1].output, 0);
+        assert_eq!(p.tracks[2].output, 0, "the children are back on Stereo Out");
+        assert!(p.tracks.iter().all(|t| !t.summing_stack));
+    }
+
+    #[test]
+    fn deleting_a_summing_parent_deletes_only_the_parent() {
+        let mut p = four();
+        p.create_track_stack(&[1, 2], true);
+        assert!(p.delete_track(1));
+        assert_eq!(
+            names(&p),
+            [
+                ("a".to_string(), 0),
+                ("b".to_string(), 0),
+                ("c".to_string(), 0),
+                ("d".to_string(), 0)
+            ]
+        );
+        assert!(
+            p.tracks.iter().all(|t| t.output == 0),
+            "the children play to Stereo Out"
+        );
+    }
+
+    #[test]
+    fn a_folder_stack_wrapping_the_selection_keeps_its_children_playing_the_same() {
+        let mut p = four();
+        p.create_track_stack(&[0], false);
+        // Wrapping the stack and what it holds: the old stack goes one level deeper.
+        p.create_track_stack(&[0, 1, 2], false);
+        assert_eq!(p.tracks[0].indent, 0);
+        assert_eq!(p.tracks[1].indent, 1);
+        assert_eq!(
+            p.tracks[2].indent, 2,
+            "the track under the old stack is two levels down"
+        );
+    }
+
+    #[test]
+    fn track_selection_by_click_shift_and_command() {
+        let mut p = four();
+        let mut v = TracksView::default();
+        v.click_track(&mut p, 1, false, false);
+        assert_eq!((p.selected_track, v.selected_tracks(&p)), (1, vec![1]));
+        v.click_track(&mut p, 3, true, false);
+        assert_eq!(
+            v.selected_tracks(&p),
+            vec![1, 2, 3],
+            "Shift selects the range"
+        );
+        v.click_track(&mut p, 2, false, true);
+        assert_eq!(v.selected_tracks(&p), vec![1, 3], "Command takes one out");
+        v.click_track(&mut p, 0, false, true);
+        assert_eq!(v.selected_tracks(&p), vec![0, 1, 3], "Command adds one");
+        v.click_track(&mut p, 0, false, false);
+        assert_eq!(
+            v.selected_tracks(&p),
+            vec![0],
+            "a plain click selects one track"
+        );
+    }
+
+    #[test]
+    fn a_stack_is_made_from_the_selected_tracks_in_order() {
+        let mut p = four();
+        let mut v = TracksView::default();
+        v.click_track(&mut p, 0, false, false);
+        v.click_track(&mut p, 3, false, true);
+        let picked = v.selected_tracks(&p);
+        assert_eq!(picked, [0, 3]);
+        p.create_track_stack(&picked, false);
+        assert_eq!(
+            names(&p)
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["Folder 1", "a", "d", "b", "c"]
+        );
     }
 }

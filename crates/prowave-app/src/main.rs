@@ -65,6 +65,7 @@ mod signature_track;
 mod smart_tempo;
 mod soundfonts;
 mod space_designer_ui;
+mod stack_dialog;
 mod start_screen;
 mod step_editor;
 mod sync_menu;
@@ -141,6 +142,8 @@ pub struct UiState {
     pub track_dialog: Option<track_dialogs::TrackDialog>,
     /// Logic's Create New Track dialog (the + above the track headers).
     pub new_track: new_track_dialog::NewTrackDialog,
+    /// Track > Create Track Stack…: the dialog choosing the kind of stack.
+    pub stack_dialog: stack_dialog::StackDialog,
     /// The audio output the engine plays on, for Project Settings > Audio.
     pub audio_info: Option<engine_sync::AudioInfo>,
     /// The output device and buffer size the user chose (remembered in `audio.txt`).
@@ -272,6 +275,7 @@ impl UiState {
             settings_tab: None,
             track_dialog: None,
             new_track: Default::default(),
+            stack_dialog: Default::default(),
             audio_info: None,
             audio_prefs: audio_prefs::AudioPrefs::default(),
             audio_request: None,
@@ -1450,6 +1454,7 @@ impl eframe::App for App {
         }
         track_dialogs::show(&ctx, &mut self.project, &mut self.ui);
         new_track_dialog::show(&ctx, &mut self.project, &mut self.ui);
+        stack_dialog::show(&ctx, &mut self.project, &mut self.ui);
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);

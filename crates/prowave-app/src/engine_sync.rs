@@ -171,7 +171,7 @@ fn monitors_of(p: &Project) -> Vec<MonitorTrack> {
 }
 
 /// Where track `i`'s signal goes: its sends, and for an Aux strip the bus it listens to.
-fn route_of(p: &Project, i: usize) -> Route {
+pub(crate) fn route_of(p: &Project, i: usize) -> Route {
     let Some(t) = p.tracks.get(i) else {
         return Route::default();
     };
@@ -488,7 +488,8 @@ fn song_notes(p: &Project) -> Vec<NoteEvent> {
 #[derive(PartialEq, Default, Debug)]
 struct AudioLayout {
     tracks: usize,
-    clips: Vec<(std::path::PathBuf, u16, u64, String)>,
+    /// File, track, start, edits, and the part of the file played (start frame, length).
+    clips: Vec<(std::path::PathBuf, u16, u64, String, u64, Option<u64>)>,
 }
 
 /// The edits of region `r` of track `t`: its own gain, fades and reverse, with the fades
@@ -510,7 +511,14 @@ fn audio_layout(p: &Project) -> AudioLayout {
                 let a = r.audio.as_ref()?;
                 // Gain, fades and reverse are set when a clip starts streaming.
                 let edit = format!("{:?}", clip_edit(p, t, r));
-                Some((a.file.path.clone(), track, origin.to_bits(), edit))
+                Some((
+                    a.file.path.clone(),
+                    track,
+                    origin.to_bits(),
+                    edit,
+                    a.start_frame,
+                    a.len_frames,
+                ))
             })
             .collect(),
     }
@@ -524,7 +532,14 @@ fn build_song(engine: &Engine, p: &Project) -> Song {
     let clips = playing_regions(p)
         .filter_map(|(track, t, r, origin)| {
             let a = r.audio.as_ref()?;
-            Some(engine.stream_clip_in(&a.file, track, origin, clip_edit(p, t, r), streamed))
+            Some(engine.stream_span_in(
+                &a.file,
+                track,
+                origin,
+                clip_edit(p, t, r),
+                streamed,
+                a.span(),
+            ))
         })
         .collect();
     let notes = song_notes(p);
@@ -1428,6 +1443,7 @@ mod tests {
             monitor: false,
             input: prowave_engine::InputSource::Mono(0),
             output: 0,
+            aux_bus: 0,
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
@@ -1458,6 +1474,7 @@ mod tests {
             sampler: None,
             epiano: None,
             drums: None,
+            summing_stack: false,
             midi_channel: 1,
             midi_program: None,
             midi_bank: None,
@@ -1503,11 +1520,11 @@ mod tests {
         let r = route_of(&p, 0);
         assert_eq!((r.bus_in, r.sends[0].bus, r.sends[0].pre), (0, 2, true));
         assert_eq!(r.sends[1].bus, 0, "an empty slot sends nothing");
-        // More than eight Aux strips: the ninth hears no bus.
+        // The tenth Aux strip takes Bus 10 (the buses are 256 now).
         for _ in 0..8 {
             p.add_track(TrackKind::Aux);
         }
-        assert_eq!(p.aux_bus_of(p.tracks.len() - 1), 0);
+        assert_eq!(p.aux_bus_of(p.tracks.len() - 1), 10);
 
         // Automation: the lanes sent are what the project has, and the comparison knows it.
         assert!(automation_unchanged(&p, &[]));

@@ -846,6 +846,9 @@ pub struct EngineCore {
     dirty: Vec<u16>,
     bus_l: [f64; MAX_BUSES],
     bus_r: [f64; MAX_BUSES],
+    /// The highest bus number any strip's route names: the buses past it stay silent and are
+    /// not cleared at every sample.
+    bus_top: usize,
     automation: Vec<AutoLane>,
     /// The value the automation gives each strip right now (None: its fader or knob rules).
     auto_vol: Vec<Option<f32>>,
@@ -987,6 +990,7 @@ impl EngineCore {
             dirty: Vec::with_capacity(MAX_TRACKS),
             bus_l: [0.0; MAX_BUSES],
             bus_r: [0.0; MAX_BUSES],
+            bus_top: 0,
             auto_any: false,
             automation: Vec::new(),
             auto_vol: vec![None; MAX_TRACKS],
@@ -1508,8 +1512,8 @@ impl EngineCore {
             self.run_strip(self.aux[k] as usize, &mut out);
         }
         if !self.aux.is_empty() || !self.complex.is_empty() {
-            self.bus_l = [0.0; MAX_BUSES];
-            self.bus_r = [0.0; MAX_BUSES];
+            self.bus_l[..self.bus_top].fill(0.0);
+            self.bus_r[..self.bus_top].fill(0.0);
         }
         out
     }
@@ -1789,6 +1793,7 @@ impl EngineCore {
                     let t = track as usize;
                     if t < MAX_TRACKS {
                         self.routes[t] = route.sanitized();
+                        self.bus_top = self.routes.iter().map(Route::top_bus).max().unwrap_or(0);
                         self.sort_strips();
                         self.rebuild_mix(true, Some(t));
                     }
@@ -4069,6 +4074,44 @@ mod tests {
         );
         assert!(energy(&wet, 0.2, 0.5) > 0.05, "{}", energy(&wet, 0.2, 0.5));
         assert!(wet.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn the_last_bus_works_and_a_bus_past_it_is_no_bus() {
+        // Logic has 256 buses; bus 256 does not fit in a byte, which is why they are `u16`.
+        let play = |bus: u16| {
+            let (mut e, mut tx, _s) = rig();
+            let mut mixes = vec![TrackMix::default(), TrackMix::default()];
+            mixes[0].gain_db = -96.0;
+            let song = Song::new(vec![strip_note(0, 2.0)], mixes);
+            assert!(tx.push(Command::SetSong(Box::new(song))).is_ok());
+            let mut route = Route::default();
+            route.sends[0] = SendSpec {
+                bus,
+                level: 0.7,
+                pre: true,
+            };
+            assert!(tx.push(Command::SetRoute { track: 0, route }).is_ok());
+            let aux = Route {
+                bus_in: bus,
+                ..Route::default()
+            };
+            assert!(tx
+                .push(Command::SetRoute {
+                    track: 1,
+                    route: aux
+                })
+                .is_ok());
+            assert!(tx.push(Command::Play).is_ok());
+            energy(&render(&mut e, 0.3), 0.0, 0.3)
+        };
+        assert!(play(MAX_BUSES as u16) > 0.01, "bus 256 carries the send");
+        assert!(play(MAX_BUSES as u16 + 1) < 1e-6, "bus 257 is no bus");
+        let mut route = Route::default();
+        assert_eq!(route.top_bus(), 0);
+        route.sends[3].bus = 40;
+        route.output = 12;
+        assert_eq!(route.top_bus(), 40);
     }
 
     #[test]
