@@ -170,10 +170,7 @@ impl State {
         let p = cheapest(&self.e);
         let step = (self.e[p].saturating_mul(3).saturating_add(36)) >> 7;
         // The energy index is the prediction order: how many history values are summed.
-        let mut predicted = 0i64;
-        for i in 0..p {
-            predicted += i64::from(self.s[i]);
-        }
+        let predicted: i64 = self.s[..p].iter().map(|&v| i64::from(v)).sum();
         let d = i64::from(target) - predicted;
         let d = i32::try_from(d).map_err(|_| "sample outside the predictor range".to_string())?;
         let val = zigzag_encode(d);
