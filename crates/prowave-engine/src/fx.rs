@@ -246,6 +246,7 @@ const PLUGIN_PARAMS: [ParamInfo; MAX_FX_PARAMS] = [
     p("Parameter 30", 0.0, 1.0, 0.5, ""),
     p("Parameter 31", 0.0, 1.0, 0.5, ""),
     p("Parameter 32", 0.0, 1.0, 0.5, ""),
+];
 /// Pult EQ's dials (see `pult_eq.rs`): the selectors are whole numbers, the boosts and cuts run
 /// 0 to 10 like the hardware's dials.
 const PULT_PARAMS: [ParamInfo; crate::pult_eq::idx::COUNT] = [

@@ -59,7 +59,6 @@ enum Family {
 fn family(kind: FxKind) -> (Family, &'static str, Color32) {
     match kind {
         FxKind::Plugin => (Family::Filter, "LADSPA", FILTER_TEAL),
-        FxKind::ChannelEq | FxKind::MultiEq => (Family::Eq, "EQ", EQ_BLUE),
         FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => (Family::Eq, "EQ", EQ_BLUE),
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => {
             (Family::Dynamics, "Dynamics", DYN_AMBER)
@@ -1473,12 +1472,6 @@ mod tests {
             name: "Gone Plugin".into(),
         });
         p.tracks[0].inserts = vec![Insert::new_plugin(gone)];
-    fn the_pult_eq_window_draws_names_its_selectors_and_survives_a_save() {
-        let mut p = Project::empty();
-        let mut ins = Insert::new(FxKind::PultEq);
-        ins.params[prowave_engine::pult_eq::idx::LOW_BOOST] = 6.0;
-        ins.params[prowave_engine::pult_eq::idx::HIGH_FREQ] = 6.0;
-        p.tracks[0].inserts = vec![ins];
         let mut s = UiState::new();
         s.mixer.fx_window = Some((0, 0));
         let meters = Meters::default();
@@ -1525,6 +1518,22 @@ mod tests {
             h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
         }
         assert_eq!(p.tracks[0].inserts[0].label(), "Known Plugin");
+    }
+
+    #[test]
+    fn the_pult_eq_window_draws_names_its_selectors_and_survives_a_save() {
+        let mut p = Project::empty();
+        let mut ins = Insert::new(FxKind::PultEq);
+        ins.params[prowave_engine::pult_eq::idx::LOW_BOOST] = 6.0;
+        ins.params[prowave_engine::pult_eq::idx::HIGH_FREQ] = 6.0;
+        p.tracks[0].inserts = vec![ins];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
         assert_eq!(s.mixer.fx_window, Some((0, 0)));
         assert_eq!(pult_text("Mode", 1.0).as_deref(), Some("Stereo"));
         assert_eq!(pult_text("Low Freq", 3.0).as_deref(), Some("100 Hz"));
