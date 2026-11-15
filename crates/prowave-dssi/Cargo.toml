@@ -1,0 +1,17 @@
+[package]
+name = "prowave-dssi"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: load DSSI plug-in libraries and read their metadata"
+license = "GPL-3.0-or-later"
+
+[features]
+default = []
+# The loader calls native plug-in code (`dlopen` and the descriptor callbacks). AGENTS.md keeps
+# plug-in hosting out of process by default, so the in-process path is opt-in: without this
+# feature the crate compiles to nothing and links neither `libc` nor `libloading`.
+in-process = ["dep:libc", "dep:libloading"]
+
+[dependencies]
+libc = { version = "0.2", optional = true }
+libloading = { version = "0.8", optional = true }
