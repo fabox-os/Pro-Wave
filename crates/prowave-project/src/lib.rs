@@ -267,6 +267,9 @@ pub struct TrackDoc {
     pub indent: u8,
     /// A `Folder` track whose tracks are hidden in the Tracks area.
     pub folded: bool,
+    /// An Aux strip that is the parent of a Summing Stack (its children send to its bus). Files
+    /// from before Summing Stacks have none.
+    pub summing_stack: bool,
     /// The `Vca` track (its index in `tracks`) that controls this track's level.
     pub vca: Option<usize>,
     /// External MIDI tracks: the MIDI output port (by name) and the channel, 1-16.
@@ -476,6 +479,7 @@ impl Default for TrackDoc {
             height: 1.0,
             indent: 0,
             folded: false,
+            summing_stack: false,
             vca: None,
             midi_port: None,
             midi_channel: 1,

@@ -71,6 +71,8 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **MIDI program changes:** a MIDI file's program changes are kept. On import the last program of each channel goes to the track's MIDI Program; on export an External MIDI track writes its program at the start, so a round trip no longer loses it.
 ✅ **Edit > Paste Replace:** pastes the copied regions at the playhead like Paste, after removing the regions on the selected track that the pasted span covers. A region that only overlaps the span partly is removed whole. The entry was greyed out.
 
+✅ **Track stacks (Folder and Summing):** select two or more tracks (Shift-click or Command-click their headers) and choose **Track > Create Track Stack…**. Logic's dialog asks for a **Folder Stack** or a **Summing Stack**, with a Details panel. A folder stack is a track named Folder 1 with the picked tracks indented under it: its arrow folds them away, its volume scales every track inside, its M and S buttons act on all of them, and its lane shows a band with its name at both ends. A summing stack is a sub-mix: an Aux strip named Sub 1 that the picked tracks send their output to over an internal bus, its own channel strip, fader, pan and output included, taken from the top of the 256 buses so your own sends keep the low numbers. Release Track Stack undoes either kind, and deleting the parent removes only the parent. The stacks are saved with the project, older files load unchanged, and each one is one undo step. Not done yet: the Summing Stack's "can be saved as a patch" and its recording controls, both described in its Details text; the Mixer shows each track's own level, not the level the folder adds; the folder icon is purple and the bands are drawn, but neither has been checked by eye on a screen.
+
 ### Fixed
 
 ✅ **Mixer on short windows:** on a 768-point-tall screen the Mixer panel was too short for a channel strip and cut off everything under the Pan knob. The panel is now never shorter than one whole strip (it follows the project's Audio FX slots and sends), and still no taller than the room there is.
@@ -133,7 +135,6 @@ and no MIDI hardware were used. Windows and macOS builds are not tested in this 
 ❌ **Bounce:** Bounce in Place and Bounce and Join need offline rendering, which the engine does not have yet.
 ❌ **Convert to New Sampler Track:** needs a sampler instrument, which the project does not have yet.
 ❌ **Chord and Arrangement tracks:** Show Chord Track and Show Arrangement Track need data that does not exist yet.
-❌ **Folder:** the Functions menu's Folder creates a track stack, our reading of Logic's "Folder".
 ❌ **Audio settings:** the output device and buffer size cannot be chosen yet. Project Settings > Audio shows them read only.
 ❌ **MIDI:** poly aftertouch is not read; SysEx cannot be edited byte by byte and is not made for audio, Pattern or Drummer regions; pitch bend and SysEx do not reach the internal instruments; a seek while stopped sends no clock, and while playing it sends a Song Position; a MIDI clock output on the same device as the followed input would echo back.
 ❌ **Follow MIDI Clock:** the Play and Stop buttons still work next to a followed clock; a sudden tempo change takes about two beats to follow.

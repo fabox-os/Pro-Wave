@@ -578,6 +578,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         // File > Show in File Manager: a project that has been saved is on disk.
         "Show in File Manager" => s.has_path,
         "Delete Track" => p.tracks.len() > 1,
+        // A stack needs two or more selected tracks to put into it.
+        "Create Track Stack…" => s.tracks.selected_tracks(p).len() >= 2,
         "Release Track Stack" => p
             .tracks
             .get(p.selected_track)
@@ -598,7 +600,6 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         | "New Aux Track"
         | "New VCA Track"
         | "New External MIDI Track"
-        | "Create Track Stack…"
         | "Go to Beginning"
         | "Go to End"
         | "Go to Left Locator"
@@ -867,10 +868,8 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             let w = s.tracks.lanes_w;
             crate::tracks_area::zoom_to_fit(p, &mut s.tracks, w);
         }
-        "Create Track Stack…" => {
-            p.create_track_stack(p.selected_track);
-            forget_region_selection(s);
-        }
+        // Track > Create Track Stack…: the dialog asks which kind, for the selected tracks.
+        "Create Track Stack…" => s.stack_dialog.open(),
         "Bigger Interface" | "Smaller Interface" | "Actual Interface Size" => {
             let dir = match label {
                 "Bigger Interface" => 1,
@@ -1450,22 +1449,26 @@ mod tests {
     }
 
     #[test]
-    fn track_stack_entries_group_and_release_the_selected_track() {
+    fn create_track_stack_needs_two_tracks_and_opens_the_dialog() {
         let (mut p, mut s) = (Project::demo(), crate::UiState::new());
         assert!(TRACK.contains(&"Create Track Stack…") && TRACK.contains(&"Release Track Stack"));
         p.selected_track = 2;
         s.tracks.select_only(2, 0);
-        let n = p.tracks.len();
+        assert!(
+            !enabled("Create Track Stack…", &p, &s),
+            "one track is not enough"
+        );
+        s.tracks.click_track(&mut p, 3, false, true);
+        assert!(enabled("Create Track Stack…", &p, &s));
         apply("Create Track Stack…", &mut p, &mut s);
+        assert!(s.stack_dialog.open, "the dialog asks which kind to make");
+        // The dialog's Create makes the stack from the tracks (Folder Stack by default).
+        let n = p.tracks.len();
+        let picked = s.tracks.selected_tracks(&p);
+        assert!(p.create_track_stack(&picked, false).is_some());
         assert_eq!(p.tracks.len(), n + 1);
-        assert_eq!(
-            (p.tracks[2].kind, p.tracks[3].indent),
-            (TrackKind::Folder, 1)
-        );
-        assert_eq!(
-            s.tracks.selected, None,
-            "indexes moved, so the selection is dropped"
-        );
+        assert_eq!(p.tracks[2].kind, TrackKind::Folder);
+        assert_eq!((p.tracks[3].indent, p.tracks[4].indent), (1, 1));
         apply("Release Track Stack", &mut p, &mut s);
         assert_eq!(p.tracks.len(), n);
         assert!(p

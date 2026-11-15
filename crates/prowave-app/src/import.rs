@@ -103,6 +103,7 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         midi_program: None,
         midi_bank: None,
         midi_fx: Vec::new(),
+        summing_stack: false,
     });
     p.selected_track = p.tracks.len() - 1;
     p.song_rev += 1;
