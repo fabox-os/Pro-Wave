@@ -845,8 +845,6 @@ The plug-in scan has not finished, so a plug-in shown as not found may still be 
 the Logic Pro project has no track Pro Wave can import = projekt Logic Pro nie ma ścieżek, które Pro Wave może zaimportować
 Only {} tracks fit in a Pro Wave project: the others are not imported = W projekcie Pro Wave mieści się tylko {} ścieżek, reszta nie zostanie zaimportowana
 {}: the sampler's instrument files ({}) are not carried over = {}: pliki instrumentów samplera ({}) nie zostały przeniesione
-{}: the audio file {} is not in Media/Audio Files, so its region is skipped = {}: plik audio {} nie znajduje się w Media/Audio Files, dlatego jego region zostanie pominięty
-{}: cannot read {}: {} = {}: nie można odczytać {}: {}
 {}: the plug-in {} has no codes, so it is not carried over = {}: wtyczka {} nie ma kodów, dlatego nie została przeniesiona
 {}: the instrument {} is not hosted yet, so the track keeps Pro Wave's default instrument = {}: instrument {} nie jest jeszcze obsługiwany, więc ścieżka zachowuje domyślny instrument Pro Wave
 {}: the plug-in {} is in a format Pro Wave does not know, so it is not carried over = {}: Pro Wave nie zna formatu wtyczki {}, dlatego nie została przeniesiona
@@ -855,3 +853,13 @@ Logic Pro Import = Import z Logic Pro
 Not found on this computer = Nieznalezione na tym komputerze
 Stock plug-ins not carried over = Wbudowane wtyczki nieprzeniesione
 Other things not carried over = Inne rzeczy nieprzeniesione
+
+the Logic Pro project's note times have no resolution, so its notes cannot be placed = czasy nut projektu Logic Pro nie mają rozdzielczości, więc jego nut nie można umieścić
+The volumes were not read from the Logic Pro project, so the tracks stay at 0 dB = Głośności nie zostały odczytane z projektu Logic Pro, więc ścieżki pozostają na 0 dB
+Mute, solo and plug-in bypass were not read from the Logic Pro project, so they are all off = Wyciszenie, solo i ominięcie wtyczek nie zostały odczytane z projektu Logic Pro, więc wszystkie są wyłączone
+The positions of the regions were not read from the Logic Pro project, so each one starts at bar 1 = Położenia regionów nie zostały odczytane z projektu Logic Pro, więc każdy zaczyna się od taktu 1
+The audio region {} names no file in the project, so it is skipped = Region audio {} nie wskazuje żadnego pliku w projekcie, więc zostaje pominięty
+The audio region {} is not placed in the project, so it is skipped = Region audio {} nie jest umieszczony w projekcie, więc zostaje pominięty
+The audio file {} is not in Media, so it is skipped = Pliku audio {} nie ma w Media, więc zostaje pominięty
+cannot read {}: {} = nie można odczytać {}: {}
+The audio file {} plays on no track that is imported, so it is on a track of its own = Plik audio {} nie jest odtwarzany na żadnej zaimportowanej ścieżce, więc jest na własnej ścieżce

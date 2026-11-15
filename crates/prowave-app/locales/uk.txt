@@ -845,8 +845,6 @@ The plug-in scan has not finished, so a plug-in shown as not found may still be 
 the Logic Pro project has no track Pro Wave can import = у проєкті Logic Pro немає доріжок, які Pro Wave може імпортувати
 Only {} tracks fit in a Pro Wave project: the others are not imported = У проєкт Pro Wave вміщується лише {} доріжок, решту не імпортовано
 {}: the sampler's instrument files ({}) are not carried over = {}: файли інструментів семплера ({}) не перенесено
-{}: the audio file {} is not in Media/Audio Files, so its region is skipped = {}: аудіофайл {} немає в Media/Audio Files, тому його регіон пропущено
-{}: cannot read {}: {} = {}: не вдалося прочитати {}: {}
 {}: the plug-in {} has no codes, so it is not carried over = {}: плагін {} не має кодів, тому його не перенесено
 {}: the instrument {} is not hosted yet, so the track keeps Pro Wave's default instrument = {}: інструмент {} ще не підтримується, тож доріжка лишається з типовим інструментом Pro Wave
 {}: the plug-in {} is in a format Pro Wave does not know, so it is not carried over = {}: Pro Wave не знає формату плагіна {}, тому його не перенесено
@@ -855,3 +853,13 @@ Logic Pro Import = Імпорт з Logic Pro
 Not found on this computer = Немає на цьому комп’ютері
 Stock plug-ins not carried over = Вбудовані плагіни не перенесено
 Other things not carried over = Інші речі не перенесено
+
+the Logic Pro project's note times have no resolution, so its notes cannot be placed = часи нот проєкту Logic Pro не мають роздільної здатності, тож його ноти не можна розмістити
+The volumes were not read from the Logic Pro project, so the tracks stay at 0 dB = Гучність не було зчитано з проєкту Logic Pro, тож доріжки лишаються на 0 дБ
+Mute, solo and plug-in bypass were not read from the Logic Pro project, so they are all off = Вимкнення звуку, соло і обхід плагінів не було зчитано з проєкту Logic Pro, тож усе вимкнено
+The positions of the regions were not read from the Logic Pro project, so each one starts at bar 1 = Положення регіонів не було зчитано з проєкту Logic Pro, тож кожен починається з такту 1
+The audio region {} names no file in the project, so it is skipped = Аудіорегіон {} не вказує жодного файлу в проєкті, тож його пропущено
+The audio region {} is not placed in the project, so it is skipped = Аудіорегіон {} не розміщено в проєкті, тож його пропущено
+The audio file {} is not in Media, so it is skipped = Аудіофайлу {} немає в Media, тож його пропущено
+cannot read {}: {} = не вдається прочитати {}: {}
+The audio file {} plays on no track that is imported, so it is on a track of its own = Аудіофайл {} не відтворюється на жодній імпортованій доріжці, тож він на окремій доріжці

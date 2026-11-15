@@ -3524,6 +3524,7 @@ name = "prowave-logicx-import"
 version = "0.1.0"
 dependencies = [
  "plist",
+ "prowave-plugin-host",
  "tempfile",
 ]
 

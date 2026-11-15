@@ -845,8 +845,6 @@ The plug-in scan has not finished, so a plug-in shown as not found may still be 
 the Logic Pro project has no track Pro Wave can import = Logic Pro -projektissa ei ole yhtään raitaa, jonka Pro Wave voi tuoda
 Only {} tracks fit in a Pro Wave project: the others are not imported = Pro Wave -projektiin mahtuu vain {} raitaa, muut jätetään tuomatta
 {}: the sampler's instrument files ({}) are not carried over = {}: samplerin instrumenttitiedostoja ({}) ei oteta mukaan
-{}: the audio file {} is not in Media/Audio Files, so its region is skipped = {}: äänitiedosto {} ei ole kansiossa Media/Audio Files, joten sen alue ohitetaan
-{}: cannot read {}: {} = {}: kohdetta {} ei voi lukea: {}
 {}: the plug-in {} has no codes, so it is not carried over = {}: liitännäisellä {} ei ole koodeja, joten sitä ei oteta mukaan
 {}: the instrument {} is not hosted yet, so the track keeps Pro Wave's default instrument = {}: instrumenttia {} ei vielä tueta, joten raita säilyttää Pro Waven oletusinstrumentin
 {}: the plug-in {} is in a format Pro Wave does not know, so it is not carried over = {}: liitännäisen {} muotoa Pro Wave ei tunne, joten sitä ei oteta mukaan
@@ -855,3 +853,13 @@ Logic Pro Import = Logic Pro -tuonti
 Not found on this computer = Ei löytynyt tältä tietokoneelta
 Stock plug-ins not carried over = Logic-liitännäisiä ei otettu mukaan
 Other things not carried over = Muita asioita ei otettu mukaan
+
+the Logic Pro project's note times have no resolution, so its notes cannot be placed = Logic Pro -projektin nuottiajoilla ei ole tarkkuutta, joten sen nuotteja ei voi sijoittaa
+The volumes were not read from the Logic Pro project, so the tracks stay at 0 dB = Voimakkuuksia ei luettu Logic Pro -projektista, joten raidat pysyvät 0 dB:ssä
+Mute, solo and plug-in bypass were not read from the Logic Pro project, so they are all off = Mykistystä, soolota ja liitännäisten ohitusta ei luettu Logic Pro -projektista, joten ne ovat kaikki pois päältä
+The positions of the regions were not read from the Logic Pro project, so each one starts at bar 1 = Alueiden sijaintia ei luettu Logic Pro -projektista, joten jokainen alkaa tahdista 1
+The audio region {} names no file in the project, so it is skipped = Äänialue {} ei nimeä projektissa yhtään tiedostoa, joten se ohitetaan
+The audio region {} is not placed in the project, so it is skipped = Äänialuetta {} ei ole sijoitettu projektiin, joten se ohitetaan
+The audio file {} is not in Media, so it is skipped = Äänitiedosto {} ei ole kansiossa Media, joten se ohitetaan
+cannot read {}: {} = kohdetta {} ei voi lukea: {}
+The audio file {} plays on no track that is imported, so it is on a track of its own = Äänitiedostoa {} ei soiteta yhdelläkään tuodulla raidalla, joten se on omalla raidallaan

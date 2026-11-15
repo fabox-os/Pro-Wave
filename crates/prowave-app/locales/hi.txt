@@ -845,8 +845,6 @@ The plug-in scan has not finished, so a plug-in shown as not found may still be 
 the Logic Pro project has no track Pro Wave can import = Logic Pro प्रोजेक्ट में कोई ऐसा ट्रैक नहीं है जिसे Pro Wave आयात कर सके
 Only {} tracks fit in a Pro Wave project: the others are not imported = Pro Wave प्रोजेक्ट में केवल {} ट्रैक आते हैं, बाकी आयात नहीं होंगे
 {}: the sampler's instrument files ({}) are not carried over = {}: सैम्पलर की इंस्ट्रूमेंट फ़ाइलें ({}) साथ नहीं ली गईं
-{}: the audio file {} is not in Media/Audio Files, so its region is skipped = {}: ऑडियो फ़ाइल {} Media/Audio Files में नहीं है, इसलिए उसका रीजन छोड़ दिया गया
-{}: cannot read {}: {} = {}: {} नहीं पढ़ा जा सका: {}
 {}: the plug-in {} has no codes, so it is not carried over = {}: प्लग-इन {} के कोड नहीं हैं, इसलिए यह साथ नहीं लिया गया
 {}: the instrument {} is not hosted yet, so the track keeps Pro Wave's default instrument = {}: इंस्ट्रूमेंट {} अभी समर्थित नहीं है, इसलिए ट्रैक Pro Wave का डिफ़ॉल्ट इंस्ट्रूमेंट रखता है
 {}: the plug-in {} is in a format Pro Wave does not know, so it is not carried over = {}: प्लग-इन {} का फ़ॉर्मेट Pro Wave नहीं जानता, इसलिए यह साथ नहीं लिया गया
@@ -855,3 +853,13 @@ Logic Pro Import = Logic Pro आयात
 Not found on this computer = इस कंप्यूटर पर नहीं मिला
 Stock plug-ins not carried over = स्टॉक प्लग-इन साथ नहीं लिए गए
 Other things not carried over = अन्य चीज़ें साथ नहीं ली गईं
+
+the Logic Pro project's note times have no resolution, so its notes cannot be placed = Logic Pro प्रोजेक्ट के नोट-समय की कोई रिज़ॉल्यूशन नहीं है, इसलिए उसके नोट्स नहीं रखे जा सकते
+The volumes were not read from the Logic Pro project, so the tracks stay at 0 dB = Logic Pro प्रोजेक्ट से वॉल्यूम नहीं पढ़े गए, इसलिए ट्रैक 0 dB पर रहते हैं
+Mute, solo and plug-in bypass were not read from the Logic Pro project, so they are all off = Logic Pro प्रोजेक्ट से म्यूट, सोलो और प्लग-इन बाईपास नहीं पढ़े गए, इसलिए ये सब बंद हैं
+The positions of the regions were not read from the Logic Pro project, so each one starts at bar 1 = Logic Pro प्रोजेक्ट से रीजनों की स्थिति नहीं पढ़ी गई, इसलिए हर एक बार 1 से शुरू होता है
+The audio region {} names no file in the project, so it is skipped = ऑडियो रीजन {} प्रोजेक्ट में किसी फ़ाइल का नाम नहीं देता, इसलिए इसे छोड़ दिया गया है
+The audio region {} is not placed in the project, so it is skipped = ऑडियो रीजन {} प्रोजेक्ट में नहीं रखा गया है, इसलिए इसे छोड़ दिया गया है
+The audio file {} is not in Media, so it is skipped = ऑडियो फ़ाइल {} Media में नहीं है, इसलिए इसे छोड़ दिया गया है
+cannot read {}: {} = {} पढ़ा नहीं जा सकता: {}
+The audio file {} plays on no track that is imported, so it is on a track of its own = ऑडियो फ़ाइल {} किसी आयात किए गए ट्रैक पर नहीं चलती, इसलिए वह अपने ट्रैक पर है

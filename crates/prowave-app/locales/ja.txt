@@ -845,8 +845,6 @@ The plug-in scan has not finished, so a plug-in shown as not found may still be 
 the Logic Pro project has no track Pro Wave can import = Pro Wave で取り込めるトラックが Logic Pro プロジェクトにありません
 Only {} tracks fit in a Pro Wave project: the others are not imported = Pro Wave のプロジェクトに入るのは {} トラックまでで、残りは取り込みません
 {}: the sampler's instrument files ({}) are not carried over = {}：サンプラーのインストゥルメントファイル（{}）は引き継ぎません
-{}: the audio file {} is not in Media/Audio Files, so its region is skipped = {}：オーディオファイル {} が Media/Audio Files にないため、そのリージョンは省きます
-{}: cannot read {}: {} = {}：{} を読み込めません：{}
 {}: the plug-in {} has no codes, so it is not carried over = {}：プラグイン {} にコードがないため、引き継ぎません
 {}: the instrument {} is not hosted yet, so the track keeps Pro Wave's default instrument = {}：インストゥルメント {} はまだ対応していないため、トラックは Pro Wave の標準のインストゥルメントを使います
 {}: the plug-in {} is in a format Pro Wave does not know, so it is not carried over = {}：プラグイン {} の形式を Pro Wave は扱えないため、引き継ぎません
@@ -855,3 +853,13 @@ Logic Pro Import = Logic Pro の取り込み
 Not found on this computer = このコンピュータに見つかりません
 Stock plug-ins not carried over = 引き継がない標準プラグイン
 Other things not carried over = 引き継がないその他の項目
+
+the Logic Pro project's note times have no resolution, so its notes cannot be placed = Logic Pro プロジェクトのノート時間に分解能がないため、ノートを配置できません
+The volumes were not read from the Logic Pro project, so the tracks stay at 0 dB = Logic Pro プロジェクトからボリュームを読み取れなかったため、トラックは 0 dB のままです
+Mute, solo and plug-in bypass were not read from the Logic Pro project, so they are all off = ミュート、ソロ、プラグインのバイパスは Logic Pro プロジェクトから読み取れなかったため、すべてオフです
+The positions of the regions were not read from the Logic Pro project, so each one starts at bar 1 = リージョンの位置は Logic Pro プロジェクトから読み取れなかったため、それぞれ小節 1 から始まります
+The audio region {} names no file in the project, so it is skipped = オーディオリージョン {} はプロジェクト内のファイルを指定していないため、スキップします
+The audio region {} is not placed in the project, so it is skipped = オーディオリージョン {} はプロジェクトに配置されていないため、スキップします
+The audio file {} is not in Media, so it is skipped = オーディオファイル {} が Media にないため、スキップします
+cannot read {}: {} = {} を読み込めません: {}
+The audio file {} plays on no track that is imported, so it is on a track of its own = オーディオファイル {} は取り込んだトラックのどれでも再生されないため、専用のトラックになります
