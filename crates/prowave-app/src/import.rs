@@ -99,6 +99,7 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         midi_port: None,
         soundfont: None,
         sampler: None,
+        epiano: None,
         icon: None,
         midi_channel: 1,
         midi_program: None,
