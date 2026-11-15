@@ -28,6 +28,7 @@ mod groups;
 mod i18n;
 mod import;
 mod inspector;
+mod ir_files;
 mod library;
 mod marker_track;
 mod menus;
@@ -45,7 +46,9 @@ mod note_edit;
 mod patches;
 mod pattern;
 mod piano_roll;
+mod plugin_manager;
 mod plugin_picker;
+mod plugins;
 mod project_io;
 mod project_settings;
 mod recent_files;
@@ -210,6 +213,8 @@ pub struct UiState {
     pub can_redo: bool,
     /// Mix > Edit Groups… window is open.
     pub show_groups: bool,
+    /// Window > Plugin Manager is open.
+    pub show_plugin_manager: bool,
     /// The track whose Drum Machine window is open, the selected pad, the pad being held by the
     /// mouse, and why the last sample could not be used.
     pub show_drum_machine: Option<usize>,
@@ -290,6 +295,7 @@ impl UiState {
             can_undo: false,
             can_redo: false,
             show_groups: false,
+            show_plugin_manager: false,
             show_drum_machine: None,
             drum_pad: 0,
             drum_held: None,
@@ -1329,6 +1335,7 @@ impl eframe::App for App {
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
         group_editor::show(&ctx, &mut self.project, &mut self.ui);
+        plugin_manager::show(&ctx, &mut self.ui);
         drum_machine_ui::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
@@ -1605,11 +1612,23 @@ fn print_help() {
         "  --layout-shots <folder>   save pictures of the layout at four window sizes, then exit"
     );
     println!("  --screenshot <file.png>   save one picture of the window, then exit");
+    println!("  --scan-ladspa <file>      list the plug-ins in a LADSPA library, then exit (the");
+    println!("                            Plugin Manager reads each library in a child process)");
     println!();
     println!("A .prowave path opens that project; other paths are imported as audio files.");
 }
 
 fn main() -> eframe::Result {
+    // The Plugin Manager reads each plug-in library in a copy of this program, so a plug-in
+    // that crashes or hangs does not take the app with it: print what is in it and go.
+    {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        if let [_, flag, path] = args.as_slice() {
+            if flag == "--scan-ladspa" {
+                std::process::exit(plugins::scan_main(std::path::Path::new(path)));
+            }
+        }
+    }
     bench::mark_start();
     // Started by an update that is waiting for the program to close: put the update in place.
     if updater::run_helper_if_requested() {

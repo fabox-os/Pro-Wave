@@ -73,6 +73,7 @@ fn use_soundfont_file(p: &mut Project, ti: usize, path: String) {
         bank: first.0,
         program: first.1,
     });
+    p.tracks[ti].epiano = None;
     p.tracks[ti].sampler = None;
     p.tracks[ti].drums = None;
 }
@@ -121,10 +122,11 @@ fn key_name(key: u8) -> String {
     )
 }
 
-/// Makes the track play the Sampler with `source`, and not a SoundFont.
+/// Makes the track play the Sampler with `source`, and not a SoundFont or the Electric Piano.
 fn use_sampler(p: &mut Project, ti: usize, source: crate::sampler_load::SamplerSource) {
     p.tracks[ti].sampler = Some(crate::model::SamplerUse::new(source));
     p.tracks[ti].soundfont = None;
+    p.tracks[ti].epiano = None;
     p.tracks[ti].drums = None;
 }
 
@@ -209,6 +211,85 @@ fn sampler_rows(
         *y += ROW_H;
     }
     changed.then_some(next)
+}
+
+/// The Electric Piano's dials as inspector rows: name, drag steps per unit, range in steps and
+/// the text for a value.
+pub(crate) type PianoRow = (usize, &'static str, f32, (i32, i32));
+
+pub(crate) const PIANO_ROWS: [PianoRow; prowave_engine::epiano::PARAMS] = [
+    (
+        prowave_engine::epiano::dial::TREMOLO_DEPTH,
+        "Tremolo:",
+        100.0,
+        (0, 100),
+    ),
+    (
+        prowave_engine::epiano::dial::TREMOLO_RATE,
+        "Tremolo Rate:",
+        10.0,
+        (10, 100),
+    ),
+    (prowave_engine::epiano::dial::BARK, "Bark:", 100.0, (0, 100)),
+    (prowave_engine::epiano::dial::TONE, "Tone:", 100.0, (0, 100)),
+    (
+        prowave_engine::epiano::dial::DECAY,
+        "Decay:",
+        100.0,
+        (50, 200),
+    ),
+    (
+        prowave_engine::epiano::dial::LEVEL,
+        "Level:",
+        2.0,
+        (-24, 12),
+    ),
+];
+
+/// The text of an Electric Piano dial at `steps` (see [`PIANO_ROWS`]).
+fn piano_text(dial: usize, steps: i32) -> String {
+    use prowave_engine::epiano::dial as d;
+    match dial {
+        d::TREMOLO_RATE => format!("{:.1} Hz", steps as f32 / 10.0),
+        d::DECAY => format!("{:.2}x", steps as f32 / 100.0),
+        d::LEVEL => format!("{:+.1} dB", steps as f32 / 2.0),
+        _ => format!("{steps} %"),
+    }
+}
+
+/// Draws the Electric Piano's dials under the instrument row and returns the new dials when one
+/// was dragged. Each row is one `ROW_H` tall; `y` moves past them.
+fn piano_rows(
+    ui: &Ui,
+    g: &Painter,
+    (left, vx, vw): (f32, f32, f32),
+    y: &mut f32,
+    dials: [f32; prowave_engine::epiano::PARAMS],
+) -> Option<[f32; prowave_engine::epiano::PARAMS]> {
+    let mut out = None;
+    for (dial, name, per_unit, range) in PIANO_ROWS {
+        label(g, left, *y, tr(name), true);
+        let r = Rect::from_min_size(pos2(vx, *y + 2.0), vec2(vw, ROW_H - 4.0));
+        let steps = (dials[dial] * per_unit).round() as i32;
+        let default = (prowave_engine::epiano::defaults()[dial] * per_unit).round() as i32;
+        if let Some(v) = drag_value(
+            ui,
+            g,
+            r,
+            &format!("piano{dial}"),
+            steps,
+            range,
+            default,
+            piano_text(dial, steps),
+            true,
+        ) {
+            let mut next = out.unwrap_or(dials);
+            next[dial] = v as f32 / per_unit;
+            out = Some(prowave_engine::epiano::clamp(next));
+        }
+        *y += ROW_H;
+    }
+    out
 }
 
 fn gain_text(db: f32) -> String {
@@ -907,11 +988,19 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                 // The SoundFont instrument this track plays instead of its synth patch.
                 label(&g, left, y, tr("SoundFont:"), true);
                 let current = p.tracks[ti].soundfont.clone();
+                let piano = p.tracks[ti].epiano;
                 let sampler = p.tracks[ti].sampler.clone();
                 let has_drums = p.tracks[ti].drums.is_some();
-                let shown = match (&current, &sampler) {
+                let shown = match (&current, piano) {
                     _ if has_drums => tr("Drum Machine").to_string(),
-                    (_, Some(s)) => format!("{} · {}", tr("Sampler"), s.source.name()),
+                    _ if sampler.is_some() => {
+                        let name = sampler
+                            .as_ref()
+                            .map(|s| s.source.name())
+                            .unwrap_or_default();
+                        format!("{} · {}", tr("Sampler"), name)
+                    }
+                    (_, Some(_)) => tr("Electric Piano").to_string(),
                     (None, None) => tr("None").to_string(),
                     (Some(sf), None) => soundfont_label(sf),
                 };
@@ -936,10 +1025,18 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                             }
                             ui.close();
                         }
+                        if ui.button(tr("Electric Piano")).clicked() {
+                            p.tracks[ti].epiano = Some(crate::model::EPianoUse::default());
+                            p.tracks[ti].soundfont = None;
+                            p.tracks[ti].sampler = None;
+                            p.tracks[ti].drums = None;
+                            ui.close();
+                        }
                         ui.separator();
                         if ui.button(tr("Drum Machine")).clicked() {
                             p.tracks[ti].drums = Some(crate::drum_kit::DrumsUse::new());
                             p.tracks[ti].sampler = None;
+                            p.tracks[ti].epiano = None;
                             p.tracks[ti].soundfont = None;
                             s.show_drum_machine = Some(ti);
                             ui.close();
@@ -1009,7 +1106,15 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                                 }
                             }
                         });
-                        if let (Some(sf), None) = (current.as_ref(), sampler.as_ref()) {
+                        if piano.is_some() {
+                            ui.separator();
+                            if ui.button(tr("Remove Electric Piano")).clicked() {
+                                p.tracks[ti].epiano = None;
+                                ui.close();
+                            }
+                        }
+                        if let (Some(sf), None, None) = (current.as_ref(), piano, sampler.as_ref())
+                        {
                             if let Some(bank) = crate::soundfonts::loaded(&sf.path) {
                                 ui.separator();
                                 egui::ScrollArea::vertical()
@@ -1038,6 +1143,11 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                     });
                 }
                 y += ROW_H;
+                if let Some(ep) = p.tracks[ti].epiano {
+                    if let Some(dials) = piano_rows(ui, &g, (left, vx, vw), &mut y, ep.params) {
+                        p.tracks[ti].epiano = Some(crate::model::EPianoUse { params: dials });
+                    }
+                }
                 if let Some(current) = p.tracks[ti].sampler.clone() {
                     if let Some(next) = sampler_rows(ui, &g, (left, vx, vw), &mut y, &current) {
                         p.tracks[ti].sampler = Some(next);
@@ -1234,6 +1344,33 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
 }
 
 #[cfg(test)]
+mod piano_tests {
+    use super::*;
+
+    #[test]
+    fn every_dial_has_a_row_and_its_text_names_the_unit() {
+        let mut seen = [false; prowave_engine::epiano::PARAMS];
+        for (dial, _, per_unit, (lo, hi)) in PIANO_ROWS {
+            seen[dial] = true;
+            // The range of the drag steps is the dial's own range.
+            let info = prowave_engine::epiano::DIALS[dial];
+            assert!((lo as f32 / per_unit - info.min).abs() < 1e-4, "{dial}");
+            assert!((hi as f32 / per_unit - info.max).abs() < 1e-4, "{dial}");
+        }
+        assert!(seen.iter().all(|s| *s));
+        assert_eq!(
+            piano_text(prowave_engine::epiano::dial::TREMOLO_RATE, 55),
+            "5.5 Hz"
+        );
+        assert_eq!(
+            piano_text(prowave_engine::epiano::dial::LEVEL, -4),
+            "-2.0 dB"
+        );
+        assert_eq!(piano_text(prowave_engine::epiano::dial::BARK, 50), "50 %");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1278,6 +1415,29 @@ mod tests {
             p.tracks[0].soundfont.as_ref().map(|s| s.program),
             Some(19),
             "drawing the row changes nothing"
+        );
+    }
+
+    #[test]
+    fn an_electric_piano_track_draws_its_dials_and_keeps_them() {
+        let mut p = Project::empty();
+        p.tracks.clear();
+        let mut t = crate::model::Track::new("Wurli", TrackKind::Instrument);
+        let mut dials = prowave_engine::epiano::defaults();
+        dials[prowave_engine::epiano::dial::BARK] = 0.8;
+        t.epiano = Some(crate::model::EPianoUse { params: dials });
+        p.tracks.push(t);
+        p.selected_track = 0;
+        let mut s = UiState::new();
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(360.0, 900.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui, &mut p, &mut s, &meters));
+        }
+        assert_eq!(
+            p.tracks[0].epiano,
+            Some(crate::model::EPianoUse { params: dials }),
+            "drawing the dials changes nothing"
         );
     }
 

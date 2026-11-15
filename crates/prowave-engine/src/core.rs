@@ -454,6 +454,12 @@ pub enum Command {
         track: u16,
         params: [f32; crate::sampler::PARAMS],
     },
+    /// Moves the dials of the Electric Piano on `track` while it plays (no allocation). Ignored
+    /// when the track's instrument is not an Electric Piano.
+    SetPianoParams {
+        track: u16,
+        params: [f32; crate::epiano::PARAMS],
+    },
     /// The effects of a channel strip (Logic: Audio FX slots), made off the audio thread. The
     /// strip's old effects come back through the garbage queue; their tails stop.
     SetInserts {
@@ -1686,6 +1692,11 @@ impl EngineCore {
                         player.set_sampler_params(params);
                     }
                 }
+                Command::SetPianoParams { track, params } => {
+                    if let Some(Some(player)) = self.sf.get_mut(track as usize) {
+                        player.set_piano_params(params);
+                    }
+                }
                 Command::SetInserts { track, chain } => {
                     let t = track as usize;
                     if t < MAX_TRACKS {
@@ -2843,15 +2854,13 @@ mod tests {
     }
 
     #[test]
-    fn a_sampler_track_plays_its_notes_and_takes_new_dials_while_playing() {
-        use crate::sampler::{defaults, SampleData, Sampler, Zone};
+    fn an_electric_piano_track_plays_its_notes_and_takes_new_dials_while_playing() {
         let (mut e, mut tx, mut s) = rig();
-        let sample = std::sync::Arc::new(SampleData::new(vec![[0.5, 0.5]; 24_000], 48_000));
-        let sampler = Sampler::new(vec![Zone::new(sample)], 48_000.0, defaults());
+        let piano = SfPlayer::electric_piano(crate::epiano::defaults(), 48_000.0);
         assert!(tx
             .push(Command::SetTrackSoundFont {
                 track: 0,
-                player: Some(Box::new(SfPlayer::sampler(sampler))),
+                player: Some(Box::new(piano)),
             })
             .is_ok());
         assert!(tx
@@ -2865,18 +2874,19 @@ mod tests {
         e.process(&mut buf);
         assert!(buf.iter().all(|x| x.is_finite()));
         let first: f32 = buf[..48_000].iter().map(|x| x.abs()).sum();
-        assert!(first > 1.0, "the sampler sounds: {first}");
+        assert!(first > 1.0, "the piano sounds: {first}");
         assert!(s.read().track_peaks(0).0 > 0.01, "the track's meter moves");
-        let mut dials = defaults();
-        dials[crate::sampler::dial::LEVEL] = -12.0;
+        // New dials arrive while it plays; a track with no piano ignores them.
+        let mut dials = crate::epiano::defaults();
+        dials[crate::epiano::dial::BARK] = 1.0;
         assert!(tx
-            .push(Command::SetSamplerParams {
+            .push(Command::SetPianoParams {
                 track: 0,
                 params: dials
             })
             .is_ok());
         assert!(tx
-            .push(Command::SetSamplerParams {
+            .push(Command::SetPianoParams {
                 track: 5,
                 params: dials
             })

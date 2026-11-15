@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use crate::drum_machine::DrumMachine;
+use crate::epiano::EPiano;
 use crate::sampler::Sampler;
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 
@@ -89,6 +90,8 @@ pub struct SfPlayer {
     synth: Option<Synthesizer>,
     /// The Sampler, when this player is one (`SfPlayer::sampler`).
     sampler: Option<Box<Sampler>>,
+    /// The Electric Piano, when this player is one (`SfPlayer::electric_piano`).
+    piano: Option<Box<EPiano>>,
     /// The Drum Machine, when this player is one (`SfPlayer::drum_machine`).
     drums: Option<Box<DrumMachine>>,
     channel: i32,
@@ -116,6 +119,7 @@ impl SfPlayer {
         Ok(Self {
             synth: Some(synth),
             sampler: None,
+            piano: None,
             drums: None,
             channel,
             sample_rate: rate,
@@ -128,6 +132,7 @@ impl SfPlayer {
         Self {
             synth: None,
             sampler: None,
+            piano: None,
             drums: Some(Box::new(drums)),
             channel: 0,
             sample_rate: 0,
@@ -148,6 +153,7 @@ impl SfPlayer {
         Self {
             synth: None,
             sampler: Some(Box::new(sampler)),
+            piano: None,
             drums: None,
             channel: 0,
             sample_rate: 0,
@@ -162,6 +168,28 @@ impl SfPlayer {
         }
     }
 
+    /// A player that plays the physically modelled Electric Piano (`crate::epiano`) with the
+    /// dials at `params`. Allocates; call off the audio thread.
+    pub fn electric_piano(params: [f32; crate::epiano::PARAMS], sample_rate: f32) -> Self {
+        let rate = sample_rate.round().clamp(16_000.0, 192_000.0) as i32;
+        Self {
+            synth: None,
+            sampler: None,
+            piano: Some(Box::new(EPiano::new(rate as f32, params))),
+            drums: None,
+            channel: 0,
+            sample_rate: rate,
+        }
+    }
+
+    /// Moves the Electric Piano's dials while it plays (nothing for a SoundFont player).
+    /// Allocation free.
+    pub fn set_piano_params(&mut self, params: [f32; crate::epiano::PARAMS]) {
+        if let Some(p) = self.piano.as_mut() {
+            p.set_params(params);
+        }
+    }
+
     /// The sample rate the player renders at (Hz).
     pub fn sample_rate(&self) -> f32 {
         self.sample_rate as f32
@@ -172,6 +200,9 @@ impl SfPlayer {
         let velocity = i32::from(vel.clamp(1, 127));
         if let Some(s) = self.sampler.as_mut() {
             s.note_on(pitch, vel);
+        }
+        if let Some(p) = self.piano.as_mut() {
+            p.note_on(pitch, vel);
         }
         if let Some(d) = self.drums.as_mut() {
             d.note_on(pitch, vel);
@@ -186,6 +217,9 @@ impl SfPlayer {
         if let Some(s) = self.sampler.as_mut() {
             s.note_off(pitch);
         }
+        if let Some(p) = self.piano.as_mut() {
+            p.note_off(pitch);
+        }
         if let Some(d) = self.drums.as_mut() {
             d.note_off(pitch);
         }
@@ -199,6 +233,9 @@ impl SfPlayer {
         if let Some(s) = self.sampler.as_mut() {
             s.all_notes_off();
         }
+        if let Some(p) = self.piano.as_mut() {
+            p.all_notes_off();
+        }
         if let Some(d) = self.drums.as_mut() {
             d.all_notes_off();
         }
@@ -211,6 +248,9 @@ impl SfPlayer {
     pub fn render(&mut self) -> (f32, f32) {
         if let Some(s) = self.sampler.as_mut() {
             return s.render();
+        }
+        if let Some(p) = self.piano.as_mut() {
+            return p.render();
         }
         if let Some(d) = self.drums.as_mut() {
             return d.render();

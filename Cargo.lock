@@ -3437,6 +3437,7 @@ dependencies = [
  "prowave-engine",
  "prowave-exs",
  "prowave-garageband-import",
+ "prowave-ladspa",
  "prowave-project",
  "prowave-sfz",
  "rfd",

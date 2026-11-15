@@ -277,6 +277,8 @@ pub struct TrackDoc {
     pub soundfont_program: u8,
     /// The Sampler the track plays (none: not a Sampler).
     pub sampler: Option<SamplerDoc>,
+    /// The dials of an Electric Piano the track plays (none: not an Electric Piano).
+    pub epiano: Option<Vec<f32>>,
     /// The Drum Machine the track plays (none: not a Drum Machine).
     pub drums: Option<DrumsDoc>,
     /// The icon the user picked (`IconKind::name`); absent or unknown names give the automatic one.
@@ -303,6 +305,26 @@ pub struct InsertDoc {
     pub kind: String,
     pub bypass: bool,
     pub params: Vec<f32>,
+    /// A Space Designer's impulse-response file (its path), when it plays one.
+    pub ir_file: Option<String>,
+    /// The LADSPA plug-in of a `Plug-in` effect.
+    pub plugin: Option<PluginDoc>,
+}
+
+/// A hosted plug-in a project uses (a LADSPA effect): which library file, and which plug-in in
+/// it. The settings of an effect are the insert's `params`, as positions 0 to 1 along each
+/// control's range.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct PluginDoc {
+    /// `LADSPA`.
+    pub format: String,
+    /// The library file when the project was saved; on another machine the file name is
+    /// looked for in the plug-in folders.
+    pub library: String,
+    pub label: String,
+    pub unique_id: u64,
+    pub name: String,
 }
 
 /// A track's Sampler in a project file: where its sounds come from and its dials.
@@ -456,6 +478,7 @@ impl Default for TrackDoc {
             soundfont_bank: 0,
             soundfont_program: 0,
             sampler: None,
+            epiano: None,
             drums: None,
             icon: None,
             input: 0,
