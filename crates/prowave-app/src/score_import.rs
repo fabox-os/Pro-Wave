@@ -274,6 +274,11 @@ fn commit(
     tempo: Option<f64>,
     sig: Option<(u8, u8)>,
 ) -> usize {
+    // Nothing to add, or no room for it: leave the project alone, tempo and signature included.
+    let has_notes = tracks.iter().any(|t| !t.notes.is_empty());
+    if !has_notes || p.tracks.len() >= prowave_engine::MAX_TRACKS {
+        return 0;
+    }
     if p.tracks.iter().all(|t| t.regions.is_empty()) {
         if let Some(bpm) = tempo {
             if bpm.is_finite() {
@@ -485,6 +490,35 @@ mod tests {
             hydrogen_starts("six_eight", &[(144, 8, 0), (144, 8, 0)]),
             [0.0, 3.0]
         );
+    }
+
+    #[test]
+    fn a_score_with_no_notes_leaves_the_project_alone() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <score-partwise version="4.0">
+          <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+          <part id="P1">
+            <measure number="1">
+              <attributes><divisions>1</divisions><time><beats>3</beats><beat-type>4</beat-type></time></attributes>
+              <direction><sound tempo="96"/></direction>
+              <note><rest/><duration>3</duration></note>
+            </measure>
+          </part>
+        </score-partwise>"#;
+        let dir = std::env::temp_dir().join(format!("prowave-score-empty-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("rests.musicxml");
+        std::fs::write(&path, xml).expect("write the test score");
+        let mut p = Project::empty();
+        let tempo = p.tempo;
+        let sig = p.sig;
+        let tracks = p.tracks.len();
+        let made = import_musicxml(&mut p, &path).expect("the score parses");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(made, 0);
+        assert_eq!(p.tempo, tempo, "no note means no tempo change");
+        assert_eq!(p.sig, sig, "no note means no signature change");
+        assert_eq!(p.tracks.len(), tracks);
     }
 
     #[test]

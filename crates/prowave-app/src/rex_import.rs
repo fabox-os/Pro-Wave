@@ -37,6 +37,16 @@ pub fn import(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result<Strin
         .tempo
         .or(rex.original_tempo)
         .unwrap_or(f64::from(p.tempo));
+
+    // Everything that can fail happens before the project changes, so a failed import leaves
+    // the tempo and tracks as they were.
+    let waveform = stereo_samples(&rex);
+    let wav = temporary_wav(path);
+    prowave_engine::write_wav(&wav, &waveform, rex.sample_rate)
+        .map_err(|e| format!("cannot decode the REX loop: {e}"))?;
+    let file = prowave_engine::AudioFile::open(&wav)
+        .map_err(|e| format!("cannot read the decoded REX loop: {e}"))?;
+
     if p.tracks.iter().all(|t| t.regions.is_empty()) && bpm.is_finite() && bpm > 0.0 {
         p.tempo = bpm.clamp(
             f64::from(crate::model::MIN_BPM),
@@ -44,13 +54,6 @@ pub fn import(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result<Strin
         ) as f32;
         p.tempo_changes.clear();
     }
-
-    let waveform = stereo_samples(&rex);
-    let wav = temporary_wav(path);
-    prowave_engine::write_wav(&wav, &waveform, rex.sample_rate)
-        .map_err(|e| format!("cannot decode the REX loop: {e}"))?;
-    let file = prowave_engine::AudioFile::open(&wav)
-        .map_err(|e| format!("cannot read the decoded REX loop: {e}"))?;
     let bps = f64::from(p.tempo) / 60.0;
 
     let ti = p.add_track(crate::model::TrackKind::Audio);
