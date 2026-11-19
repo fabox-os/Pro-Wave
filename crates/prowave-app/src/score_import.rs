@@ -17,6 +17,17 @@ const MAX_BAR: f64 = 9999.0;
 const MIN_LEN: f64 = 1.0 / 960.0;
 /// A track's notes are capped as well, so a generous file cannot exhaust memory.
 const MAX_NOTES_PER_TRACK: usize = 250_000;
+/// Hydrogen's pattern `<size>` and note positions are in ticks, 48 to a quarter note.
+const H2_TICKS_PER_QUARTER: f64 = 48.0;
+/// The `<size>` Hydrogen gives a pattern that does not say (four quarter notes).
+const DEFAULT_PATTERN_TICKS: u32 = 192;
+/// The longest pattern imported, in quarter notes, so a bad `<size>` cannot make one huge.
+const MAX_PATTERN_BEATS: f64 = 1024.0;
+
+/// A Hydrogen pattern's length in quarter notes, from its `<size>` in ticks.
+fn pattern_beats(size_ticks: u32) -> f64 {
+    (f64::from(size_ticks.max(1)) / H2_TICKS_PER_QUARTER).min(MAX_PATTERN_BEATS)
+}
 
 /// File > Import entries handled by the format-specific readers rather than the MIDI or audio
 /// importers. The string labels are the menu IDs.
@@ -200,25 +211,33 @@ pub fn import_hydrogen(p: &mut Project, path: &Path) -> Result<usize, String> {
         }
     }
     let mut notes = Vec::new();
+    // Each sequence step plays one pattern, one after another. A pattern's length comes from
+    // its `<size>` in ticks; `denominator` only names the time signature's note value and does
+    // not change the length.
+    let mut base = 0.0f64;
     for step in 0..song.sequence.len().min(4096) {
-        let Some(pattern) = song.pattern_at(step) else {
-            continue;
-        };
-        let size = f64::from(pattern.size.max(1));
-        let beats = f64::from(pattern.denominator.max(1)).min(64.0);
-        let base = step as f64 * 4.0;
-        for note in pattern.notes.iter().take(MAX_NOTES_PER_TRACK) {
+        let pattern = song.pattern_at(step);
+        // A missing pattern plays nothing but still takes a default pattern's length.
+        let beats = pattern.map_or_else(
+            || pattern_beats(DEFAULT_PATTERN_TICKS),
+            |p| pattern_beats(p.size),
+        );
+        for note in pattern
+            .into_iter()
+            .flat_map(|p| p.notes.iter())
+            .take(MAX_NOTES_PER_TRACK)
+        {
             if note.note_off || note.probability <= 0.0 {
                 continue;
             }
             let Some(&pitch) = pitches.get(&note.instrument) else {
                 continue;
             };
-            let start = base + (f64::from(note.position) / size * beats).clamp(0.0, beats);
+            let start = base + (f64::from(note.position) / H2_TICKS_PER_QUARTER).clamp(0.0, beats);
             let len = if note.length < 0 {
                 0.25
             } else {
-                (f64::from(note.length) / size * beats).clamp(MIN_LEN, beats)
+                (f64::from(note.length) / H2_TICKS_PER_QUARTER).clamp(MIN_LEN, beats)
             };
             notes.push(ImportedNote {
                 start,
@@ -229,6 +248,7 @@ pub fn import_hydrogen(p: &mut Project, path: &Path) -> Result<usize, String> {
                     .max(1.0) as u8,
             });
         }
+        base += beats;
     }
     let name = if song.name.is_empty() {
         "Hydrogen".into()
@@ -399,6 +419,72 @@ mod tests {
         assert_eq!(notes[0].pitch, 36);
         assert_eq!(notes[0].start, 0.0);
         assert!(notes[0].vel > 1);
+    }
+
+    /// A one-instrument Hydrogen song: `patterns` is (size, denominator, note position) per
+    /// pattern, and the sequence plays them in the order given.
+    fn hydrogen_song(name: &str, patterns: &[(u32, u32, u32)]) -> String {
+        let mut list = String::new();
+        let mut sequence = String::new();
+        for (i, (size, denom, position)) in patterns.iter().enumerate() {
+            list.push_str(&format!(
+                "<pattern><name>P{i}</name><size>{size}</size><denominator>{denom}</denominator>\
+                 <noteList><note><position>{position}</position><velocity>0.8</velocity>\
+                 <length>-1</length><instrument>0</instrument></note></noteList></pattern>"
+            ));
+            sequence.push_str(&format!("<group><patternID>P{i}</patternID></group>"));
+        }
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+            <song><version>1.2.0</version><bpm>120</bpm><name>{name}</name>
+              <instrumentList><instrument><id>0</id><name>Kick</name><midiOutNote>36</midiOutNote></instrument></instrumentList>
+              <patternList>{list}</patternList>
+              <patternSequence>{sequence}</patternSequence>
+            </song>"#
+        )
+    }
+
+    fn hydrogen_starts(name: &str, patterns: &[(u32, u32, u32)]) -> Vec<f32> {
+        let dir = std::env::temp_dir().join(format!("prowave-h2-timing-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("{name}.h2song"));
+        std::fs::write(&path, hydrogen_song(name, patterns)).expect("write the test song");
+        let mut p = Project::empty();
+        let made = import_hydrogen(&mut p, &path).expect("import the test song");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(made, 1);
+        let track = p.tracks.last().expect("the imported track is appended");
+        let mut starts: Vec<f32> = track.regions[0].notes.iter().map(|n| n.start).collect();
+        starts.sort_by(f32::total_cmp);
+        starts
+    }
+
+    #[test]
+    fn hydrogen_pattern_positions_follow_pattern_size() {
+        // A 4/4 bar (192 ticks): tick 48 is beat 1, and the next pattern starts at beat 4.
+        assert_eq!(
+            hydrogen_starts("four_four", &[(192, 4, 48), (192, 4, 48)]),
+            [1.0, 5.0]
+        );
+        // A 2/4 bar (96 ticks): tick 48 is beat 1, not beat 2, and the next bar starts at beat 2.
+        assert_eq!(
+            hydrogen_starts("two_four", &[(96, 4, 48), (96, 4, 48)]),
+            [1.0, 3.0]
+        );
+        // A 3/4 bar (144 ticks): the second bar starts at beat 3, not beat 4.
+        assert_eq!(
+            hydrogen_starts("three_four", &[(144, 4, 0), (144, 4, 0)]),
+            [0.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn hydrogen_denominator_does_not_change_pattern_length() {
+        // 6/8 in 144 ticks is three quarter notes long whatever the denominator says.
+        assert_eq!(
+            hydrogen_starts("six_eight", &[(144, 8, 0), (144, 8, 0)]),
+            [0.0, 3.0]
+        );
     }
 
     #[test]
