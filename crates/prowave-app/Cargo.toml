@@ -43,11 +43,18 @@ egui = "0.37"
 human-panic = "2.0.8"
 prowave-engine = { version = "0.1.0", path = "../prowave-engine" }
 prowave-garageband-import = { version = "0.1.0", path = "../prowave-garageband-import" }
+prowave-guitarpro = { version = "0.1.0", path = "../prowave-guitarpro" }
+prowave-hydrogen-import = { version = "0.1.0", path = "../prowave-hydrogen-import" }
 prowave-ladspa = { version = "0.1.0", path = "../prowave-ladspa" }
+prowave-logicx-import = { version = "0.1.0", path = "../prowave-logicx-import" }
+prowave-musicxml = { version = "0.1.0", path = "../prowave-musicxml" }
+prowave-mxl = { version = "0.1.0", path = "../prowave-mxl" }
 prowave-plugin-host = { version = "0.1.0", path = "../prowave-plugin-host" }
+prowave-rex = { version = "0.1.0", path = "../prowave-rex" }
 prowave-project = { version = "0.1.0", path = "../prowave-project" }
 prowave-sfz = { version = "0.1.0", path = "../prowave-sfz" }
 prowave-exs = { version = "0.1.0", path = "../prowave-exs" }
+prowave-vamp = { version = "0.1.0", path = "../prowave-vamp" }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 rfd = "0.17.2"
 rtrb = "0.4.0"
