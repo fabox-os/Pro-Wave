@@ -41,7 +41,7 @@ pub fn import(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result<Strin
     // Everything that can fail happens before the project changes, so a failed import leaves
     // the tempo and tracks as they were.
     let waveform = stereo_samples(&rex);
-    let wav = temporary_wav(path);
+    let wav = temporary_wav(path).map_err(|e| format!("cannot decode the REX loop: {e}"))?;
     prowave_engine::write_wav(&wav, &waveform, rex.sample_rate)
         .map_err(|e| format!("cannot decode the REX loop: {e}"))?;
     let file = prowave_engine::AudioFile::open(&wav)
@@ -156,9 +156,13 @@ fn stereo_samples(rex: &prowave_rex::RexFile) -> Vec<f32> {
     }
 }
 
-/// A stable, unique path next to the project's other decoded audio. The file is intentionally
-/// kept after import because the regions keep a path-backed `AudioFile`.
-fn temporary_wav(source: &Path) -> std::path::PathBuf {
+/// A fresh WAV path inside a directory this process just created with a random name. Creating
+/// the directory fails if the name exists, so a file another user pre-created in the shared
+/// temporary directory (a symlink, say) is never written through. On Unix the directory is
+/// private (0700). The file is intentionally kept after import because the regions keep a
+/// path-backed `AudioFile`.
+fn temporary_wav(source: &Path) -> std::io::Result<std::path::PathBuf> {
+    use std::hash::{BuildHasher, Hasher};
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
@@ -173,13 +177,27 @@ fn temporary_wav(source: &Path) -> std::path::PathBuf {
         })
         .take(48)
         .collect::<String>();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    std::env::temp_dir().join(format!(
-        "prowave-rex-{}-{nanos}-{stem}.wav",
-        std::process::id()
+    let base = std::env::temp_dir();
+    for _ in 0..16 {
+        // RandomState is seeded from the OS, so the name is not guessable.
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u32(std::process::id());
+        let dir = base.join(format!("prowave-rex-{:016x}", hasher.finish()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&dir) {
+            Ok(()) => return Ok(dir.join(format!("{stem}.wav"))),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "no free temporary folder name",
     ))
 }
 

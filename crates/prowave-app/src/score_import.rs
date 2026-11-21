@@ -222,11 +222,11 @@ pub fn import_hydrogen(p: &mut Project, path: &Path) -> Result<usize, String> {
             || pattern_beats(DEFAULT_PATTERN_TICKS),
             |p| pattern_beats(p.size),
         );
-        for note in pattern
-            .into_iter()
-            .flat_map(|p| p.notes.iter())
-            .take(MAX_NOTES_PER_TRACK)
-        {
+        for note in pattern.into_iter().flat_map(|p| p.notes.iter()) {
+            // The cap is for the whole song: a short pattern can be played many times over.
+            if notes.len() >= MAX_NOTES_PER_TRACK {
+                break;
+            }
             if note.note_off || note.probability <= 0.0 {
                 continue;
             }
@@ -490,6 +490,43 @@ mod tests {
             hydrogen_starts("six_eight", &[(144, 8, 0), (144, 8, 0)]),
             [0.0, 3.0]
         );
+    }
+
+    #[test]
+    fn hydrogen_note_cap_applies_to_the_whole_song() {
+        // One 1000-note pattern played 300 times is 300 000 notes, past the cap. A small file
+        // must not be able to expand past it.
+        let mut notes = String::new();
+        for i in 0..1000u32 {
+            notes.push_str(&format!(
+                "<note><position>{}</position><velocity>0.8</velocity><length>-1</length>\
+                 <instrument>0</instrument></note>",
+                i % 192
+            ));
+        }
+        let mut sequence = String::new();
+        for _ in 0..300 {
+            sequence.push_str("<group><patternID>P</patternID></group>");
+        }
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+            <song><version>1.2.0</version><bpm>120</bpm><name>Cap</name>
+              <instrumentList><instrument><id>0</id><name>Kick</name><midiOutNote>36</midiOutNote></instrument></instrumentList>
+              <patternList><pattern><name>P</name><size>192</size><denominator>4</denominator>
+                <noteList>{notes}</noteList></pattern></patternList>
+              <patternSequence>{sequence}</patternSequence>
+            </song>"#
+        );
+        let dir = std::env::temp_dir().join(format!("prowave-h2-cap-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("cap.h2song");
+        std::fs::write(&path, xml).expect("write the test song");
+        let mut p = Project::empty();
+        let made = import_hydrogen(&mut p, &path).expect("import the test song");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(made, 1);
+        let track = p.tracks.last().expect("the imported track is appended");
+        assert_eq!(track.regions[0].notes.len(), MAX_NOTES_PER_TRACK);
     }
 
     #[test]
