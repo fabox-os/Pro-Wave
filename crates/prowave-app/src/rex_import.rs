@@ -156,6 +156,19 @@ fn stereo_samples(rex: &prowave_rex::RexFile) -> Vec<f32> {
     }
 }
 
+/// Creates `dir` only if nothing exists there yet, readable by this user alone where the
+/// platform has permission bits.
+#[cfg(unix)]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().mode(0o700).create(dir)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir(dir)
+}
+
 /// A fresh WAV path inside a directory this process just created with a random name. Creating
 /// the directory fails if the name exists, so a file another user pre-created in the shared
 /// temporary directory (a symlink, say) is never written through. On Unix the directory is
@@ -183,13 +196,7 @@ fn temporary_wav(source: &Path) -> std::io::Result<std::path::PathBuf> {
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
         hasher.write_u32(std::process::id());
         let dir = base.join(format!("prowave-rex-{:016x}", hasher.finish()));
-        let mut builder = std::fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        match builder.create(&dir) {
+        match create_private_dir(&dir) {
             Ok(()) => return Ok(dir.join(format!("{stem}.wav"))),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
