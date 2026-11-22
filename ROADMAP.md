@@ -388,7 +388,7 @@ Done and merged into `main` (CHANGELOG.md, section 0.3.0, has the details):
 
 - **Space Designer** (convolution reverb, own window, six built-in impulse responses, Volume and
   Filter envelopes, X-Over with Spread, Output EQ, synthesized IR tab) and three mastering presets.
-  Not done: loading the user's own impulse-response files, tempo-synced Predelay.
+  Not done: tempo-synced Predelay.
 - **Effects on the Stereo Out (master) strip**, saved with the project. No automation lanes for them yet.
 - **Bounce:** Project or Section, Export Track as Audio File, Bounce in Place, Bounce and Join (WAV). Offline by default (faster than real time, on a background thread); the real-time bounce stays with `PROWAVE_BOUNCE_REALTIME=1`.
 - **Menus that were greyed out and now work:** Record Toggle, Record Enable, Record Project Settings,
@@ -403,9 +403,13 @@ Done and merged into `main` (CHANGELOG.md, section 0.3.0, has the details):
 - **Logic Pro `.logicx` bundles:** the `prowave-logicx-import` crate finds the bundle in either
   save shape, follows the active alternative and reads `MetaData.plist` and
   `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
-  with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
-  regions, plug-ins, Session Players) is the next step.
+  with plist and ProjectData size caps and a symlink check. The `ProjectData` scan is imported by
+  File > Import > Other Projects… and File > Open (tracks, MIDI and audio regions, Audio Unit plug-ins with their saved
+  state). Not decoded yet: volumes, mute, solo, stock plug-in settings and instrument files (`LOGICX-FORMAT-SPEC.md`).
 
+- **Import of more formats:** File > Import > MusicXML Score, Guitar Pro, Hydrogen Song, REX Loop and LogicX Project (Preview), with drops. Notes only; see the changelog.
+- **Vamp analysers** are listed in the Plugin Manager (catalogue only, not run in tracks yet).
+- **Piano Roll and Score follow the playhead** while playing or recording (issue #150).
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.

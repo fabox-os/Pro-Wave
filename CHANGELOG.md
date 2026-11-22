@@ -9,6 +9,10 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ✅ **One plug-in system for LADSPA, CLAP, VST3 and Audio Unit:** every plug-in format now shares the same Audio FX slot, the same project file entry, the same picker menus and one **Window > Plugin Manager**, which lists all of them by manufacturer (a LADSPA library that could not be read is listed at the bottom with the scan folders). CLAP, VST3 and Audio Unit plug-ins keep their own settings and, on macOS and Linux, run in a process of their own; LADSPA effects keep their settings in the effect window. Every plug-in adds one 128-sample block of delay, which the mixer compensates for.
 
+✅ **Import of more formats (File > Import):** MusicXML Score (`.musicxml`, `.xml`, `.mxl`), Guitar Pro (`.gp`), Hydrogen Song (`.h2song`, as a Drummer track) and REX Loop (`.rx2`, `.rex`, one region per slice, with the loop's tempo applied to an empty project) are in the menu and accept drops. MusicXML and Guitar Pro notes become instrument tracks. A file with no notes, or one that cannot be read, leaves the project as it was. Not done: the score's own tempo changes, and notation beyond the notes.
+
+✅ **Vamp analysers in the Plugin Manager:** the Plugin Manager lists installed Vamp analysers, read in a child process with a time limit, and the folders it looks in (`VAMP_PATH`, or the system's). A library that fails three times is left alone until **Retry Failed Plug-ins**.
+
 ✅ **Bounce to FLAC:** **File > Bounce > Project or Section…** now offers a FLAC file next to WAV: pick FLAC in the file type list, or name the file `.flac`. The file is lossless 24-bit stereo and smaller than the WAV; Pro Wave already read FLAC, so a bounce can be dragged straight back in. The encoder is written in plain Rust (no extra libraries) and the tests decode what it writes. Track and region bounces still write WAV.
 
 ✅ **Audio output device and I/O buffer size:** Project Settings > Audio chooses the output device (System Default first, then the system's outputs) and the I/O buffer size (32 to 1024 samples, limited to what the device supports), as Logic's Settings > Audio does. The engine restarts on the new output at once: playback stops and the playhead stays where it was, and a recording or a bounce has to finish first. Output Latency shows the buffer's latency in ms, plus the device's reported output latency when the engine knows it. The choice is remembered between runs (`audio.txt`); if the saved device is gone, the system's default is used and the status line says so. Not done yet: choosing the sample rate, choosing the input device (inputs are still chosen on each audio track), aggregate and multi-channel outputs, and a round-trip latency figure.
@@ -96,19 +100,21 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### Fixed
 
+✅ **Piano Roll and Score lose the playhead (issue #150):** while the transport plays or records, both views only scrolled when the user scrolled, so once the playhead left the visible range it was out of sight. They now page to the playhead when it leaves the view, keeping it near the left edge, as Logic does. Only the playhead inside the region being edited is followed.
+
 ✅ **Piano Roll no longer crashes when its panel is made very small:** the scrollbar thumbs were sized with a minimum larger than the bar, which stopped the program. They now keep their 24 px minimum when there is room and shrink to fit when there is not (thanks to Ethan Curtis).
 
 ✅ **Mixer on short windows:** on a 768-point-tall screen the Mixer panel was too short for a channel strip and cut off everything under the Pan knob. The panel is now never shorter than one whole strip (it follows the project's Audio FX slots and sends), and still no taller than the room there is.
 
-### New libraries, not in the app yet
+### New libraries
 
-These read or run a format and have tests, but there is no menu or window for them yet.
+These read or run a format and have tests. Some are in the app (see the entries above); the others have no menu or window yet.
 
 ✅ **REX2 loops, read:** the new `prowave-rex` crate opens a Propellerhead ReCycle/Reason `.rx2` (and `.rex`) loop: the IFF container, the preview and original tempo, the sample rate, channel count and frame count, the sliced waveform (the DWOP adaptive-predictor decoder), and each slice as a frame range with its mute, lock and selected flags. Damaged, truncated and hostile files are refused or reported in `warnings`; decoding stops when the bitstream ends instead of running on. The crate's writer produces files the reader decodes back, which is how both halves are tested (mono and stereo round trips, truncation at every offset, 2000 random inputs). `REX-FORMAT-SPEC.md` documents the layout and the codec. **Not yet:** an Import menu entry that puts a loop on a track (the crate is not wired into the app), and 24-bit files are decoded through the same 16-bit codec (the crate says so in `warnings`).
 
 ✅ **Time stretching and pitch shifting:** the new `prowave-stretch` crate changes a region's duration without changing its pitch (WSOLA with a waveform-similarity search and Hann overlap-add) and shifts pitch without changing duration (stretch by the pitch ratio, then resample back). It works on interleaved audio with any channel count, using one alignment for all channels so stereo stays in step. Tests cover length and pitch on sine tones, stereo channels, and bounded output. It is an offline algorithm for now; Flex Time and the app are not wired to it yet.
 
-✅ **Compressed MusicXML (.mxl):** the new `prowave-mxl` crate opens a compressed MusicXML bundle, follows `META-INF/container.xml` to its root score (or falls back to the first XML entry), and returns the score text for `prowave-musicxml`. Entry count and uncompressed sizes are capped; UTF-16 scores are refused for now. It is not wired into the app's import menu yet.
+✅ **Compressed MusicXML (.mxl):** the new `prowave-mxl` crate opens a compressed MusicXML bundle, follows `META-INF/container.xml` to its root score (or falls back to the first XML entry), and returns the score text for `prowave-musicxml`. Entry count and uncompressed sizes are capped; UTF-16 scores are refused for now. It is the reader behind File > Import > MusicXML Score… for `.mxl` files.
 
 ✅ **Guitar Pro 7/8 scores (`prowave-guitarpro`):** reads a `.gp` file (a ZIP holding `score.gpif`): the score's metadata, tracks, measures and notes. Guitar Pro 6 `.gpx` is refused with a message asking for a `.gp` export, and the old binary `.gp3`, `.gp4` and `.gp5` are not read. Sizes and counts are capped and a damaged file is an error, never a crash (issue #71).
 
@@ -116,9 +122,9 @@ These read or run a format and have tests, but there is no menu or window for th
 
 ✅ **MusicXML scores (`prowave-musicxml`):** reads an uncompressed MusicXML `score-partwise` document into parts, measures (divisions, key, time signature, tempo) and notes (pitch, duration, voice, staff, chords and rests). The file is treated as untrusted input.
 
-✅ **Logic Pro `.logicx` bundles (`prowave-logicx-import`):** the first part of Logic project support: it finds the bundle (a `.logicx` package, or a folder holding exactly one), reads the active alternative and the Logic version from its property lists, and reads the envelope of the `ProjectData` file. Reading the tracks, regions and plug-ins, and importing them into a project, is not in 0.3.0 (see `LOGICX-FORMAT-SPEC.md`).
+✅ **Logic Pro `.logicx` bundles (`prowave-logicx-import`):** the first part of Logic project support: it finds the bundle (a `.logicx` package, or a folder holding exactly one), reads the active alternative and the Logic version from its property lists, and reads the envelope of the `ProjectData` file. Its tracks, regions and plug-ins are imported by the Logic Pro entry above (see `LOGICX-FORMAT-SPEC.md`).
 
-✅ **Vamp analysis plug-ins (`prowave-vamp`):** loads Vamp analysers (the open format for tempo, beat, key and pitch analysis, issue #69) and runs them over blocks of audio, with their parameters, programs and outputs.
+✅ **Vamp analysis plug-ins (`prowave-vamp`):** loads Vamp analysers (the open format for tempo, beat, key and pitch analysis, issue #69) and runs them over blocks of audio, with their parameters, programs and outputs. They are listed in Window > Plugin Manager; they are not run in tracks yet.
 
 ✅ **DSSI synths (`prowave-dssi`):** loads DSSI plug-in libraries and reads their metadata (issue #64). The loader that runs plug-in code is off unless the crate's `in-process` feature is on.
 
@@ -140,7 +146,7 @@ And the people whose issues and reports shaped this release:
 
 ❌ Not yet tried by hand on Windows and macOS: the Drum Machine window, the Sampler rows in the Inspector, Musical Typing, Split and Join, Track Stacks, the audio device and buffer settings, Bounce to FLAC and the plug-in hosting (LADSPA, CLAP, VST3, Audio Unit). Their tests run on all three systems, but the screens were checked on Linux only. On Windows a CLAP, VST3 or LADSPA plug-in that crashes takes Pro Wave down with it (macOS and Linux run CLAP, VST3 and Audio Unit plug-ins in a process of their own). Hosted plug-in instruments are not supported yet, only effects.
 
-❌ MusicXML import; GarageBand tempo, signature and arrangement (see `GARAGEBAND-FORMAT-SPEC.md`); Hydrogen kits and the new menu entries (Import Audio File, Show in File Manager, Undo History) were tested by automated tests on Linux only, not on Windows or macOS
+❌ GarageBand tempo, signature and arrangement (see `GARAGEBAND-FORMAT-SPEC.md`); Hydrogen kits and the new menu entries (Import Audio File, Show in File Manager, Undo History) were tested by automated tests on Linux only, not on Windows or macOS
 
 ❌ Space Designer: the four-channel (true stereo) cross responses (left-to-right and right-to-left) are not used; the six built-in responses are made in code, none is shipped as a WAV; tempo-synced Predelay (the note button is only drawn); Quality Low cuts the highs above 8 kHz and the silent tail, it does not run at half the sample rate
 
