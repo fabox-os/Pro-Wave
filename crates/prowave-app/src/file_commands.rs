@@ -84,6 +84,11 @@ fn dialog() -> FileDialog {
     FileDialog::new().add_filter(tr("Pro Wave Project"), &[prowave_project::EXTENSION])
 }
 
+/// File > Open's picker: Pro Wave projects, and Logic Pro bundles (which open as a new project).
+fn open_dialog() -> FileDialog {
+    dialog().add_filter(tr("Logic Pro Project"), &["logicx"])
+}
+
 /// Opens the system's file manager with `path` (the project file) selected.
 pub fn reveal(path: &Path) -> std::io::Result<()> {
     reveal_command(path).spawn().map(|_| ())
@@ -151,7 +156,7 @@ impl App {
             FileCmd::New | FileCmd::Close => self.replace(Project::empty(), None),
             FileCmd::NewFrom(t) => self.replace(t.project(), None),
             FileCmd::Open => {
-                if let Some(path) = dialog().set_title(tr("Open Project")).pick_file() {
+                if let Some(path) = open_dialog().set_title(tr("Open Project")).pick_file() {
                     self.open(&path, ctx);
                 }
             }
@@ -281,8 +286,13 @@ impl App {
         }
     }
 
-    /// Opens `path`, replacing the current project (no prompt; callers ask first).
+    /// Opens `path`, replacing the current project (no prompt; callers ask first). A Logic Pro
+    /// bundle opens as a new project that has no file yet.
     pub fn open(&mut self, path: &Path, ctx: &egui::Context) {
+        if crate::logicx::is_bundle(path) {
+            self.open_logicx(path, ctx);
+            return;
+        }
         match project_io::open_project(path, ctx) {
             Ok((p, warnings)) => {
                 self.replace(p, Some(path.to_path_buf()));
@@ -295,6 +305,23 @@ impl App {
                 self.ui.recent.remove(path);
                 self.ui.status = Some(trf("cannot open {}: {}", &[&path.display(), &e]));
             }
+        }
+    }
+
+    /// Makes a new project from a Logic Pro bundle. The project has no file, so Save asks where
+    /// to put it: the bundle is never written to.
+    fn open_logicx(&mut self, path: &Path, ctx: &egui::Context) {
+        match crate::logicx::new_project(path, ctx) {
+            Ok((p, report)) => {
+                let tracks = report.tracks;
+                self.replace(p, None);
+                self.ui.logicx_report = Some(report);
+                self.ui.status = Some(trf(
+                    "imported {} tracks from {}",
+                    &[&tracks, &path.display()],
+                ));
+            }
+            Err(e) => self.ui.status = Some(trf("cannot open {}: {}", &[&path.display(), &e])),
         }
     }
 

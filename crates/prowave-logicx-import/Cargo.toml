@@ -10,3 +10,7 @@ plist = "1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Only the macOS host test loads an Audio Unit; everything else runs without it.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+prowave-plugin-host = { path = "../prowave-plugin-host" }
