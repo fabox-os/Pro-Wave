@@ -383,6 +383,12 @@ impl Library {
     }
 }
 
+/// The shared library built by this crate's build script for tests, when there is one. Hosts can
+/// use it to check that their catalog scanners read real Vamp descriptors.
+pub fn test_fixture_path() -> Option<&'static str> {
+    option_env!("VAMP_FIXTURE")
+}
+
 impl std::fmt::Debug for Library {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Library")

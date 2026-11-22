@@ -14,6 +14,7 @@ use crate::i18n::{tr, trf};
 use crate::mixer::PLUGIN_NOT_FOUND;
 use crate::model::Project;
 use crate::plugins;
+use crate::vamp;
 use crate::UiState;
 
 const ROW: f32 = 18.0;
@@ -73,8 +74,12 @@ struct Entry {
     latency: String,
 }
 
-/// Everything installed: the hosted plug-ins and the LADSPA effects, by manufacturer.
-fn entries(hosted: &[hosted_plugins::PluginInfo], ladspa: &plugins::Catalog) -> Vec<Entry> {
+/// Everything installed: hosted plug-ins, LADSPA effects and Vamp analysers, by manufacturer.
+fn entries(
+    hosted: &[hosted_plugins::PluginInfo],
+    ladspa: &plugins::Catalog,
+    vamp_catalog: &vamp::Catalog,
+) -> Vec<Entry> {
     let loaded = hosted_plugins::loaded();
     let mut all: Vec<Entry> = hosted
         .iter()
@@ -94,11 +99,17 @@ fn entries(hosted: &[hosted_plugins::PluginInfo], ladspa: &plugins::Catalog) -> 
         vendor: info.maker.clone(),
         latency: String::new(),
     }));
+    all.extend(vamp_catalog.plugins.iter().map(|info| Entry {
+        name: info.name.clone(),
+        format: "Vamp".to_string(),
+        vendor: info.maker.clone(),
+        latency: String::new(),
+    }));
     all.sort_by_cached_key(|e| (e.vendor.to_lowercase(), e.name.to_lowercase()));
     all
 }
 
-/// The LADSPA libraries that could not be read, and where plug-ins are looked for.
+/// The LADSPA libraries that could not be read, and where they are looked for.
 fn ladspa_problems(ui: &mut egui::Ui, ladspa: &plugins::Catalog) {
     if !ladspa.failed.is_empty() {
         ui.strong(tr("Could not be read"));
@@ -118,6 +129,26 @@ fn ladspa_problems(ui: &mut egui::Ui, ladspa: &plugins::Catalog) {
     }
 }
 
+/// The Vamp libraries that could not be read, and where analysers are looked for.
+fn vamp_problems(ui: &mut egui::Ui, vamp_catalog: &vamp::Catalog) {
+    if !vamp_catalog.failed.is_empty() {
+        ui.strong(tr("Could not be read"));
+        for (path, why) in &vamp_catalog.failed {
+            ui.label(format!("{} — {why}", path.display()));
+        }
+    }
+    if !vamp_catalog.skipped.is_empty() {
+        ui.strong(tr("Left alone after failing three times"));
+        for path in &vamp_catalog.skipped {
+            ui.label(path.display().to_string());
+        }
+    }
+    ui.strong(tr("Plug-in folders"));
+    for dir in vamp::search_paths() {
+        ui.weak(dir.display().to_string());
+    }
+}
+
 /// The Plugin Manager window, while `UiState::show_plugin_manager` is on.
 pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
     if !s.show_plugin_manager {
@@ -125,9 +156,11 @@ pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
     }
     hosted_plugins::scan(false);
     plugins::ensure_scanned();
+    vamp::ensure_scanned();
     let status = hosted_plugins::scan_status();
     let ladspa = plugins::catalog();
-    let catalog = entries(&hosted_plugins::catalog(), &ladspa);
+    let vamp_catalog = vamp::catalog();
+    let catalog = entries(&hosted_plugins::catalog(), &ladspa, &vamp_catalog);
     let in_use = not_found(p);
     let mut open = true;
     let mut done = false;
@@ -144,7 +177,7 @@ pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
                         // The scan runs on another thread: keep drawing until it is done.
                         ui.ctx().request_repaint();
                     }
-                    _ if ladspa.scanning => {
+                    _ if ladspa.scanning || vamp_catalog.scanning => {
                         ui.weak(tr("Scanning plug-ins…"));
                         ui.ctx().request_repaint();
                     }
@@ -164,22 +197,27 @@ pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
             egui::Panel::bottom("plugin_manager_buttons").show(ui, |ui| {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    let scanning = matches!(status, Scan::Running(..)) || ladspa.scanning;
+                    let scanning = matches!(status, Scan::Running(..))
+                        || ladspa.scanning
+                        || vamp_catalog.scanning;
                     if ui
                         .add_enabled(!scanning, egui::Button::new(tr("Rescan")))
                         .clicked()
                     {
                         hosted_plugins::scan(true);
                         plugins::rescan(false);
+                        vamp::rescan(false);
                     }
                     if ui
                         .add_enabled(
-                            !scanning && !ladspa.skipped.is_empty(),
+                            !scanning
+                                && (!ladspa.skipped.is_empty() || !vamp_catalog.skipped.is_empty()),
                             egui::Button::new(tr("Retry Failed Plug-ins")),
                         )
                         .clicked()
                     {
                         plugins::rescan(true);
+                        vamp::rescan(true);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(tr("Done")).clicked() {
@@ -252,7 +290,11 @@ pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
                     ],
                 );
                 ui.separator();
-                if rows.is_empty() && status == Scan::Done {
+                if rows.is_empty()
+                    && status == Scan::Done
+                    && !ladspa.scanning
+                    && !vamp_catalog.scanning
+                {
                     ui.weak(tr("No plug-ins match"));
                 }
                 egui::ScrollArea::vertical()
@@ -275,6 +317,9 @@ pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
                 egui::CollapsingHeader::new(tr("LADSPA scan"))
                     .id_salt("plugin_manager_ladspa")
                     .show(ui, |ui| ladspa_problems(ui, &ladspa));
+                egui::CollapsingHeader::new(tr("Vamp scan"))
+                    .id_salt("plugin_manager_vamp")
+                    .show(ui, |ui| vamp_problems(ui, &vamp_catalog));
             });
         });
     if !open || done {
@@ -285,6 +330,30 @@ pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entries_include_vamp_analysers() {
+        let mut vamp_catalog = vamp::Catalog::default();
+        vamp_catalog.plugins.push(prowave_vamp::PluginInfo {
+            api_version: 2,
+            identifier: "vamp-example:rms".into(),
+            name: "Test RMS".into(),
+            description: "A test analyser".into(),
+            maker: "Pro Wave".into(),
+            plugin_version: 1,
+            copyright: "CC0".into(),
+            input_domain: prowave_vamp::InputDomain::Time,
+            parameters: Vec::new(),
+            programs: Vec::new(),
+        });
+        let found = entries(&[], &plugins::Catalog::default(), &vamp_catalog);
+        assert!(
+            found
+                .iter()
+                .any(|e| e.name == "Test RMS" && e.format == "Vamp"),
+            "the analyser is in the catalog"
+        );
+    }
 
     #[test]
     fn the_window_opens_from_the_menu_and_closes_again() {

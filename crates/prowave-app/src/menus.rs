@@ -74,7 +74,19 @@ const SUBMENUS: &[(&str, &[&str])] = &[
         ],
     ),
     ("Movie", &["Open Movie…", "Remove Movie"]),
-    ("Import", &["Audio File…", "MIDI File…", "Other Projects…"]),
+    (
+        "Import",
+        &[
+            "Audio File…",
+            "MIDI File…",
+            "MusicXML Score…",
+            "Guitar Pro…",
+            "Hydrogen Song…",
+            "REX Loop…",
+            "LogicX Project (Preview)…",
+            "Other Projects…",
+        ],
+    ),
     (
         "Export",
         &[
@@ -550,6 +562,12 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Audio File…" => true,
         // File > Import > Other Projects…: imports a GarageBand bundle's audio.
         "Other Projects…" => true,
+        // File > Import > MusicXML / Guitar Pro / Hydrogen Song: any file the readers accept.
+        "MusicXML Score…"
+        | "Guitar Pro…"
+        | "Hydrogen Song…"
+        | "REX Loop…"
+        | "LogicX Project (Preview)…" => true,
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -786,6 +804,13 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         }
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
         "Audio File…" => s.import_audio_cmd = true,
+        "MusicXML Score…" => s.import_cmd = Some(crate::score_import::ImportCmd::MusicXml),
+        "Guitar Pro…" => s.import_cmd = Some(crate::score_import::ImportCmd::GuitarPro),
+        "Hydrogen Song…" => s.import_cmd = Some(crate::score_import::ImportCmd::Hydrogen),
+        "REX Loop…" => s.import_cmd = Some(crate::score_import::ImportCmd::Rex),
+        "LogicX Project (Preview)…" => {
+            s.import_cmd = Some(crate::score_import::ImportCmd::LogicX)
+        }
         "Other Projects…" => s.open_band_cmd = true,
         "Selection as MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Export),
         "Score as MusicXML…" => s.export_xml_cmd = true,
@@ -1265,6 +1290,7 @@ mod tests {
                         s.import_audio_cmd,
                         s.export_xml_cmd,
                         s.open_band_cmd,
+                        s.import_cmd,
                     ),
                 ),
                 (

@@ -32,6 +32,7 @@ mod import;
 mod inspector;
 mod ir_files;
 mod library;
+mod logicx_import;
 mod marker_track;
 mod menus;
 mod midi_file;
@@ -57,9 +58,11 @@ mod project_settings;
 mod recent_files;
 mod recorder;
 mod region_edit;
+mod rex_import;
 mod sampler_load;
 mod score;
 mod score_export;
+mod score_import;
 mod scripter;
 mod side_panes;
 mod signature_track;
@@ -87,6 +90,7 @@ mod ui_test;
 mod undo;
 mod undo_history;
 mod updater;
+mod vamp;
 mod widgets;
 mod window_chrome;
 
@@ -176,6 +180,8 @@ pub struct UiState {
     pub midi_cmd: Option<midi_file::MidiCmd>,
     /// File > Export > Score as MusicXML… picked this frame.
     pub export_xml_cmd: bool,
+    /// File > Import > MusicXML / Guitar Pro / Hydrogen Song picked this frame.
+    pub import_cmd: Option<score_import::ImportCmd>,
     /// Edit > Undo History… picked this frame: the history window is showing.
     pub show_undo_history: bool,
     /// File > Import > Audio File… picked this frame.
@@ -297,6 +303,7 @@ impl UiState {
             groove: groove::GrooveState::default(),
             midi_cmd: None,
             export_xml_cmd: false,
+            import_cmd: None,
             show_undo_history: false,
             import_audio_cmd: false,
             export_track_cmd: false,
@@ -504,6 +511,48 @@ impl App {
             });
             return;
         }
+        if logicx_import::is_supported_path(path) {
+            self.ui.status = Some(match logicx_import::preview(&mut self.project, path) {
+                Ok(status) => {
+                    self.history.record(&self.project);
+                    status
+                }
+                Err(e) => i18n::trf("cannot import {}: {}", &[&path.display(), &e]),
+            });
+            return;
+        }
+        if rex_import::is_supported_path(path) {
+            self.ui.status = Some(match rex_import::import(&mut self.project, path, ctx) {
+                Ok(status) => {
+                    self.history.record(&self.project);
+                    status
+                }
+                Err(e) => i18n::trf("cannot import {}: {}", &[&path.display(), &e]),
+            });
+            return;
+        }
+        if score_import::is_supported_path(path) {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let result = match ext.as_str() {
+                "mxl" | "xml" | "musicxml" => {
+                    score_import::import_musicxml(&mut self.project, path)
+                }
+                "gp" => score_import::import_guitarpro(&mut self.project, path),
+                _ => score_import::import_hydrogen(&mut self.project, path),
+            };
+            self.ui.status = Some(match result {
+                Ok(n) => {
+                    self.history.record(&self.project);
+                    i18n::trf("imported {} tracks from {}", &[&n, &path.display()])
+                }
+                Err(e) => i18n::trf("cannot import {}: {}", &[&path.display(), &e]),
+            });
+            return;
+        }
         if !import::is_audio_path(path) {
             self.ui.status = Some(i18n::trf("not an audio file: {}", &[&path.display()]));
             return;
@@ -525,6 +574,52 @@ impl App {
         self.ui.status = Some(match score_export::export(&self.project, &path) {
             Ok(notes) => i18n::trf("exported {} notes to {}", &[&notes, &path.display()]),
             Err(e) => e,
+        });
+    }
+
+    /// File > Import entries handled by the format-specific readers.
+    fn run_import_cmd(&mut self, cmd: score_import::ImportCmd, ctx: &egui::Context) {
+        use score_import::ImportCmd;
+        let path = match cmd {
+            ImportCmd::LogicX => rfd::FileDialog::new()
+                .set_title(i18n::tr("LogicX Project (Preview)…"))
+                .pick_folder(),
+            ImportCmd::MusicXml => rfd::FileDialog::new()
+                .set_title(i18n::tr("MusicXML Score…"))
+                .add_filter(i18n::tr("MusicXML"), &["musicxml", "xml", "mxl"])
+                .pick_file(),
+            ImportCmd::GuitarPro => rfd::FileDialog::new()
+                .set_title(i18n::tr("Guitar Pro…"))
+                .add_filter(i18n::tr("Guitar Pro"), &["gp"])
+                .pick_file(),
+            ImportCmd::Hydrogen => rfd::FileDialog::new()
+                .set_title(i18n::tr("Hydrogen Song…"))
+                .add_filter(i18n::tr("Hydrogen Song"), &["h2song"])
+                .pick_file(),
+            ImportCmd::Rex => rfd::FileDialog::new()
+                .set_title(i18n::tr("REX Loop…"))
+                .add_filter(i18n::tr("REX Loop"), &["rx2", "rex"])
+                .pick_file(),
+        };
+        let Some(path) = path else {
+            return;
+        };
+        let result = match cmd {
+            ImportCmd::MusicXml => score_import::import_musicxml(&mut self.project, &path)
+                .map(|n| i18n::trf("imported {} tracks from {}", &[&n, &path.display()])),
+            ImportCmd::GuitarPro => score_import::import_guitarpro(&mut self.project, &path)
+                .map(|n| i18n::trf("imported {} tracks from {}", &[&n, &path.display()])),
+            ImportCmd::Hydrogen => score_import::import_hydrogen(&mut self.project, &path)
+                .map(|n| i18n::trf("imported {} tracks from {}", &[&n, &path.display()])),
+            ImportCmd::Rex => rex_import::import(&mut self.project, &path, ctx),
+            ImportCmd::LogicX => logicx_import::preview(&mut self.project, &path),
+        };
+        self.ui.status = Some(match result {
+            Ok(status) => {
+                self.history.record(&self.project);
+                status
+            }
+            Err(e) => i18n::trf("cannot import {}: {}", &[&path.display(), &e]),
         });
     }
 
@@ -1432,6 +1527,9 @@ impl eframe::App for App {
         if std::mem::take(&mut self.ui.export_xml_cmd) {
             self.export_score();
         }
+        if let Some(cmd) = self.ui.import_cmd.take() {
+            self.run_import_cmd(cmd, &ctx);
+        }
         if std::mem::take(&mut self.ui.import_audio_cmd) {
             self.import_audio_file(&ctx);
         }
@@ -1790,6 +1888,7 @@ fn print_help() {
     println!("  --screenshot <file.png>   save one picture of the window, then exit");
     println!("  --scan-ladspa <file>      list the plug-ins in a LADSPA library, then exit (the");
     println!("                            Plugin Manager reads each library in a child process)");
+    println!("  --scan-vamp <file>        list the analysers in a Vamp library, then exit");
     println!();
     println!("A .prowave path opens that project; other paths are imported as audio files.");
 }
@@ -1802,6 +1901,9 @@ fn main() -> eframe::Result {
         if let [_, flag, path] = args.as_slice() {
             if flag == "--scan-ladspa" {
                 std::process::exit(plugins::scan_main(std::path::Path::new(path)));
+            }
+            if flag == "--scan-vamp" {
+                std::process::exit(vamp::scan_main(std::path::Path::new(path)));
             }
         }
     }
