@@ -572,6 +572,15 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, ti: usize, ri: usize,
             v.scroll_x -= d.x + d.y;
         }
     }
+    // While the transport plays or records, the staff follows the playhead (issue 150), as the
+    // Piano Roll does: see `piano_roll::follow_scroll`.
+    if (p.playing || p.recording) && (origin..=origin + len_beats).contains(&p.position_beats) {
+        v.scroll_x = crate::piano_roll::follow_scroll(
+            v.scroll_x,
+            body.width() - CLEF_W - lead,
+            (p.position_beats - origin) as f32 * v.beat_px,
+        );
+    }
     let max_scroll =
         (len_beats as f32 * v.beat_px + 40.0 - (body.width() - CLEF_W - lead)).max(0.0);
     v.scroll_x = v.scroll_x.clamp(0.0, max_scroll);
