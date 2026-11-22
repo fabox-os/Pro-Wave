@@ -940,3 +940,6 @@ The audio region {} is not placed in the project, so it is skipped = region audi
 The audio file {} is not in Media, so it is skipped = file audio {} tidak ada di Media, jadi dilewati
 cannot read {}: {} = tidak dapat membaca {}: {}
 The audio file {} plays on no track that is imported, so it is on a track of its own = file audio {} tidak diputar di trek mana pun yang diimpor, jadi berada di trek tersendiri
+the engine did not take the project in time; no file was written = engine tidak menerima proyek tepat waktu; tidak ada berkas yang ditulis
+the bounce has not finished = bounce belum selesai
+cannot bounce: there is no audio output = tidak dapat bounce: tidak ada output audio

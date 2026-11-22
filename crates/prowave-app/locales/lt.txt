@@ -940,3 +940,6 @@ The audio region {} is not placed in the project, so it is skipped = Garso sriti
 The audio file {} is not in Media, so it is skipped = Garso failo {} nėra aplanke Media, todėl jis praleidžiamas
 cannot read {}: {} = negalima skaityti {}: {}
 The audio file {} plays on no track that is imported, so it is on a track of its own = Garso failas {} negroja në jokiame importuotame takelyje, todėl jis yra atskirame takelyje
+the engine did not take the project in time; no file was written = variklis per nustatytą laiką neperėmė projekto; failas neįrašytas
+the bounce has not finished = bounce dar nesibaigė
+cannot bounce: there is no audio output = negalima atlikti bounce: nėra garso išvesties

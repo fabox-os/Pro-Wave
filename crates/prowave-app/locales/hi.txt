@@ -940,3 +940,6 @@ The audio region {} is not placed in the project, so it is skipped = ऑडि�
 The audio file {} is not in Media, so it is skipped = ऑडियो फ़ाइल {} Media में नहीं है, इसलिए इसे छोड़ दिया गया है
 cannot read {}: {} = {} पढ़ा नहीं जा सकता: {}
 The audio file {} plays on no track that is imported, so it is on a track of its own = ऑडियो फ़ाइल {} किसी आयात किए गए ट्रैक पर नहीं चलती, इसलिए वह अपने ट्रैक पर है
+the engine did not take the project in time; no file was written = इंजन ने प्रोजेक्ट समय पर स्वीकार नहीं किया; कोई फ़ाइल नहीं लिखी गई
+the bounce has not finished = बाउंस अभी पूरा नहीं हुआ है
+cannot bounce: there is no audio output = बाउंस नहीं हो सकता: कोई ऑडियो आउटपुट नहीं है

@@ -1255,6 +1255,13 @@ impl Fx {
         }
     }
 
+    /// Passes offline rendering on to a hosted plug-in (see [`BlockEffect::set_offline`]).
+    pub fn set_offline(&mut self, offline: bool) {
+        if let State::Plugin(s) = &mut self.state {
+            s.set_offline(offline);
+        }
+    }
+
     /// Whether this is a [`FxKind::Plugin`] effect with its plug-in loaded.
     pub fn has_plugin(&self) -> bool {
         matches!(&self.state, State::Plugin(s) if s.has_plugin())
@@ -1804,6 +1811,13 @@ impl Chain {
     pub fn new(mut fx: Vec<Fx>) -> Self {
         fx.truncate(MAX_INSERTS);
         Self { fx }
+    }
+
+    /// Offline rendering on or off for every hosted plug-in in the chain.
+    pub fn set_offline(&mut self, offline: bool) {
+        for f in self.fx.iter_mut() {
+            f.set_offline(offline);
+        }
     }
 
     #[inline]

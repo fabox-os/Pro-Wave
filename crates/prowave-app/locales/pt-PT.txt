@@ -940,3 +940,6 @@ The audio region {} is not placed in the project, so it is skipped = A região d
 The audio file {} is not in Media, so it is skipped = O ficheiro de áudio {} não está em Media, pelo que é ignorado
 cannot read {}: {} = não é possível ler {}: {}
 The audio file {} plays on no track that is imported, so it is on a track of its own = O ficheiro de áudio {} não é reproduzido em nenhuma faixa importada, pelo que fica numa faixa própria
+the engine did not take the project in time; no file was written = o motor não recebeu o projeto a tempo; nenhum ficheiro foi gravado
+the bounce has not finished = o bounce ainda não terminou
+cannot bounce: there is no audio output = não é possível fazer o bounce: não há saída de áudio

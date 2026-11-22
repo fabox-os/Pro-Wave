@@ -940,3 +940,6 @@ The audio region {} is not placed in the project, so it is skipped = Ljudregione
 The audio file {} is not in Media, so it is skipped = Ljudfilen {} finns inte i Media, så den hoppas över
 cannot read {}: {} = kan inte läsa {}: {}
 The audio file {} plays on no track that is imported, so it is on a track of its own = Ljudfilen {} spelas inte upp av något importerat spår, så det ligger på ett eget spår
+the engine did not take the project in time; no file was written = motorn tog inte emot projektet i tid; ingen fil skrevs
+the bounce has not finished = bounce är inte klar
+cannot bounce: there is no audio output = kan inte bounca: ingen ljudutgång

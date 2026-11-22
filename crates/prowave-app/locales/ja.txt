@@ -940,3 +940,6 @@ The audio region {} is not placed in the project, so it is skipped = オーデ�
 The audio file {} is not in Media, so it is skipped = オーディオファイル {} が Media にないため、スキップします
 cannot read {}: {} = {} を読み込めません: {}
 The audio file {} plays on no track that is imported, so it is on a track of its own = オーディオファイル {} は取り込んだトラックのどれでも再生されないため、専用のトラックになります
+the engine did not take the project in time; no file was written = エンジンがプロジェクトを時間内に受け取れなかったため、ファイルは書き出されませんでした
+the bounce has not finished = バウンスはまだ終わっていません
+cannot bounce: there is no audio output = バウンスできません: オーディオ出力がありません
