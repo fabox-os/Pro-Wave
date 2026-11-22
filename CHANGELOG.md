@@ -7,6 +7,9 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### All systems (Windows, macOS, Linux)
 
+✅ **Pencil tool draws MIDI regions (issue #154):** the Pencil is now in the Tracks area's left-click tool menu, with its own icon. On a MIDI or instrument track, a click on an empty lane adds a one-bar empty region, and a drag sets its length; both snap to the grid. Audio tracks are not affected.
+✅ **Piano Roll and Score follow the playhead (issue #150):** while playing or recording, the Piano Roll and the Score scroll with the playhead.
+
 ✅ **One plug-in system for LADSPA, CLAP, VST3 and Audio Unit:** every plug-in format now shares the same Audio FX slot, the same project file entry, the same picker menus and one **Window > Plugin Manager**, which lists all of them by manufacturer (a LADSPA library that could not be read is listed at the bottom with the scan folders). CLAP, VST3 and Audio Unit plug-ins keep their own settings and, on macOS and Linux, run in a process of their own; LADSPA effects keep their settings in the effect window. Every plug-in adds one 128-sample block of delay, which the mixer compensates for.
 
 ✅ **Import of more formats (File > Import):** MusicXML Score (`.musicxml`, `.xml`, `.mxl`), Guitar Pro (`.gp`), Hydrogen Song (`.h2song`, as a Drummer track) and REX Loop (`.rx2`, `.rex`, one region per slice, with the loop's tempo applied to an empty project) are in the menu and accept drops. MusicXML and Guitar Pro notes become instrument tracks. A file with no notes, or one that cannot be read, leaves the project as it was. Not done: the score's own tempo changes, and notation beyond the notes.
