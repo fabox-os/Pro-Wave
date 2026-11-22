@@ -4012,6 +4012,105 @@ mod row_tests {
         assert_eq!(s.status, None);
     }
 
+    /// Runs one frame of the Tracks area with `events` and returns nothing: the project and
+    /// the UI state are changed in place, as the app does each frame.
+    fn run_tracks_frame(
+        ctx: &egui::Context,
+        p: &mut Project,
+        s: &mut UiState,
+        meters: &crate::mixer::Meters,
+        events: Vec<egui::Event>,
+    ) {
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| show(ui, p, s, meters));
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn the_pencil_draws_a_midi_region_by_click_and_drag_in_the_tracks_area() {
+        use egui::{Event, PointerButton};
+        let mut p = Project::empty();
+        p.tracks.clear();
+        let ti = p.add_track(TrackKind::Instrument);
+        let mut s = UiState::new();
+        s.tracks.tool = TrackTool::Pencil;
+        let meters = crate::mixer::Meters::default();
+        let ctx = egui::Context::default();
+        // The first track's lane: its top is the top of the lanes (56 points down), and a bar is
+        // 62 points wide from the lanes' left edge (340 points).
+        let lane_y = 76.0;
+        let bar_x = |bar: f32| 340.0 + bar * 62.0 + 4.0;
+        let press = |pos: Pos2, pressed: bool| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![]);
+
+        // A click on empty lane space: one bar long, from where the pointer is.
+        let click = pos2(bar_x(2.0), lane_y);
+        run_tracks_frame(
+            &ctx,
+            &mut p,
+            &mut s,
+            &meters,
+            vec![Event::PointerMoved(click)],
+        );
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![press(click, true)]);
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![press(click, false)]);
+        let regions = &p.tracks[ti].regions;
+        assert_eq!(regions.len(), 1, "a click adds one region");
+        assert_eq!(regions[0].len_bars, 1.0, "a click makes a one-bar region");
+        assert!(
+            regions[0].notes.is_empty(),
+            "the region is empty, ready to draw in"
+        );
+        let clicked_start = regions[0].start_bar;
+        assert!(
+            (clicked_start - 3.0).abs() < 0.5,
+            "starts where clicked: {clicked_start}"
+        );
+
+        // A drag across empty lane space further along: the region grows with the pointer.
+        let (from, to) = (pos2(bar_x(6.0), lane_y), pos2(bar_x(9.0), lane_y));
+        run_tracks_frame(
+            &ctx,
+            &mut p,
+            &mut s,
+            &meters,
+            vec![Event::PointerMoved(from)],
+        );
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![press(from, true)]);
+        run_tracks_frame(
+            &ctx,
+            &mut p,
+            &mut s,
+            &meters,
+            vec![Event::PointerMoved(pos2(from.x + 10.0, lane_y))],
+        );
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![Event::PointerMoved(to)]);
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![press(to, false)]);
+        let regions = &p.tracks[ti].regions;
+        assert_eq!(regions.len(), 2, "the drag adds a second region");
+        let dragged = &regions[1];
+        assert!(
+            dragged.len_bars > 2.0,
+            "the drag sets the length: {}",
+            dragged.len_bars
+        );
+        assert!(
+            dragged.start_bar > regions[0].start_bar,
+            "the drag starts later"
+        );
+        assert!(s.tracks.pencil_drag.is_none(), "the drag is finished");
+    }
+
     #[test]
     fn the_pencil_and_fade_tools_sit_where_their_menu_entries_are() {
         assert_eq!(TOOLS[PENCIL_TOOL], "Pencil Tool");
