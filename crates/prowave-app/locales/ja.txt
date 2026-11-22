@@ -916,3 +916,6 @@ Not found = 見つかりません
 In Use = 使用中
 LADSPA scan = LADSPAスキャン
 Vamp scan = Vampスキャン
+the engine did not take the project in time; no file was written = エンジンがプロジェクトを時間内に受け取れなかったため、ファイルは書き出されませんでした
+the bounce has not finished = バウンスはまだ終わっていません
+cannot bounce: there is no audio output = バウンスできません: オーディオ出力がありません

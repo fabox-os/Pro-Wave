@@ -333,7 +333,8 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    the playhead, the others keep their distances), Quantize (the notes of selected MIDI regions go to
    the region's Quantize grid, 1/16 when Off; destructive), and Folder (the selected track goes into a
    track stack, as Track > Create Track Stack; this is our reading of Logic's "Folder"). Not done:
-   Bounce in Place (needs offline rendering) and Convert to New Sampler Track (needs a sampler track).
+   Convert to New Sampler Track (needs a sampler track). Bounce in Place came later, with offline
+   rendering (see "Since 0.2.2").
 
 ✅ Done 2026-11-06: MIDI outputs. The sender (`midi_out.rs`) now works on a `Sink` trait, so its logic is tested with recording ports and a real ALSA virtual port (midir creates it; the notes and the clock arrive). Fixes: a note that was sounding when its track was moved to another port or channel is now released on the port it started on (before, it stayed on). New: each external track sends a Bank Select and a Program Change when it is routed (Inspector: MIDI Program and MIDI Bank, Off at the top of each range); MIDI Clock (Timing Clock 24 per beat, Start, Continue, Stop, Song Position) to the port chosen under Synchronization > Send MIDI Clock, made on the audio clock (`clock.rs`, the engine); Project Settings > MIDI > Send MIDI Panic (All Sound Off and All Notes Off on all 16 channels of every output in use). Saved in `.prowave` (`midi_program`, `midi_bank`, `midi_clock_out`). Not done (the last two were done later, see the next entries): pitch bend, channel aftertouch and SysEx; following MIDI clock from an input; a seek while stopped sends nothing, and a seek while playing sends a Song Position; no test on a real hardware synth.
 
@@ -374,7 +375,7 @@ The items below marked done are in 0.2.2 (see CHANGELOG.md for the full list, an
 limitations at the end of the section). Still open, in the order the work would take them:
 
 - Plug-in hosting: CLAP, VST3 and Audio Unit effects load in the Audio FX slots (`prowave-plugin-host`, done 2026-11-14), with the Plugin Manager and a scan in a separate process. Each plug-in runs in a process of its own on macOS and Linux, shows its own window on macOS, and its parameters can be automated. Not done: instruments, the process of its own on Windows, the plug-ins' own windows on Windows and Linux.
-- An offline (faster than real time) bounce: Bounce, Export Track, Bounce in Place and Bounce and Join all work now, but at playing speed.
+- Audio output device and I/O buffer size in Project Settings > Audio (needs an engine stream restart).
 - Convert to New Sampler Track (needs a sampler instrument).
 - Show Chord Track and Show Arrangement Track (new data models).
 - Split and Join on audio, Pattern and Drummer regions (audio needs a start offset into the file).
@@ -389,7 +390,7 @@ Done and merged into `main` (CHANGELOG.md, section 0.3.0, has the details):
   Filter envelopes, X-Over with Spread, Output EQ, synthesized IR tab) and three mastering presets.
   Not done: loading the user's own impulse-response files, tempo-synced Predelay.
 - **Effects on the Stereo Out (master) strip**, saved with the project. No automation lanes for them yet.
-- **Bounce:** Project or Section, Export Track as Audio File, Bounce in Place, Bounce and Join (real time, WAV).
+- **Bounce:** Project or Section, Export Track as Audio File, Bounce in Place, Bounce and Join (WAV). Offline by default (faster than real time, on a background thread); the real-time bounce stays with `PROWAVE_BOUNCE_REALTIME=1`.
 - **Menus that were greyed out and now work:** Record Toggle, Record Enable, Record Project Settings,
   Record / Record Repeat, Mix > Edit Groups, Show Automation, Delete Automation, Rename Project,
   Edit > Undo History, Paste Replace, File > Import > Audio File, Show in File Manager,
@@ -563,7 +564,7 @@ test of all the features above on Windows and macOS.
 - [ ] Compile `prowave-engine` to WASM + AudioWorklet (128-sample blocks, SharedArrayBuffer + Atomics)
 - [ ] `prowave-wasm`: OPFS for project storage, Web UI via `egui_web` (same egui code), Web Remote (like Logic Remote but via browser/WebSocket)
 - [ ] Collaboration: Project file with Ed25519 signing, simple CRDT for arrangement (optional)
-- [ ] Export: Bounce Project/Region/Track in Place (offline/real-time, normalize, dither Apogee UV22HR via `r8brain`), Export All Tracks as Audio, Export MIDI, MusicXML, AAF, ADM BWF (Atmos)
+- [ ] Export: Bounce Project/Region/Track in Place (offline rendering done; normalize, dither Apogee UV22HR via `r8brain`, Export All Tracks as Audio), Export MIDI, MusicXML, AAF, ADM BWF (Atmos)
 - [ ] Performance: SIMD (`wide`, `std::simd`), benchmarks vs Logic/Reaper
 - **DoD:** Open in Chrome/Firefox, play 16-track project <30ms latency, bounce to WAV
 

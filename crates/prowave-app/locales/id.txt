@@ -916,3 +916,6 @@ Not found = Tidak ditemukan
 In Use = Digunakan
 LADSPA scan = Pindai LADSPA
 Vamp scan = Pindai Vamp
+the engine did not take the project in time; no file was written = engine tidak menerima proyek tepat waktu; tidak ada berkas yang ditulis
+the bounce has not finished = bounce belum selesai
+cannot bounce: there is no audio output = tidak dapat bounce: tidak ada output audio
