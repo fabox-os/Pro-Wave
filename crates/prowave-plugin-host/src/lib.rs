@@ -585,6 +585,9 @@ impl Processor {
     /// by block, instead of its late blocks passing dry. A plug-in in this process runs at the
     /// engine's own pace, so nothing changes for it.
     pub fn set_offline(&mut self, offline: bool) {
+        // Only a process-isolated plug-in (Unix) has anything to wait for.
+        #[cfg(not(unix))]
+        let _ = offline;
         match &mut self.0 {
             ProcessorKind::Local(_) => {}
             #[cfg(unix)]
