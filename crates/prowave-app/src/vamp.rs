@@ -500,7 +500,15 @@ mod tests {
 
     #[test]
     fn only_shared_libraries_are_listed() {
-        assert!(is_library(Path::new("libvamp.so")));
+        // Each platform's shared-library extension is listed, and nothing else.
+        let lib = if cfg!(windows) {
+            "vamp.dll"
+        } else if cfg!(target_os = "macos") {
+            "libvamp.dylib"
+        } else {
+            "libvamp.so"
+        };
+        assert!(is_library(Path::new(lib)), "{lib} is a library here");
         assert!(!is_library(Path::new("readme.txt")));
     }
 
