@@ -1846,6 +1846,32 @@ impl Project {
         Some(track.regions.len() - 1)
     }
 
+    /// Adds an empty MIDI region of `len_bars` bars to track `ti`, starting at the bar
+    /// `start_bar` (1-based). This is what the Pencil tool draws on a MIDI track (Logic: Pencil
+    /// tool, click or drag on an empty stretch of a software or external MIDI track); the notes
+    /// are then drawn in the Piano Roll. Returns its index; `None` for a track that holds no
+    /// MIDI regions or for a region with no length.
+    pub fn add_midi_region(&mut self, ti: usize, start_bar: f32, len_bars: f32) -> Option<usize> {
+        let track = self.tracks.get_mut(ti)?;
+        if !track.kind.has_regions() || track.kind == TrackKind::Audio || len_bars <= 0.0 {
+            return None;
+        }
+        track.regions.push(Region {
+            name: track.name.clone(),
+            start_bar: start_bar.max(1.0),
+            len_bars,
+            notes: Vec::new(),
+            controls: Vec::new(),
+            folder: None,
+            audio: None,
+            params: RegionParams::default(),
+            generated: None,
+        });
+        let ri = track.regions.len() - 1;
+        self.song_rev += 1;
+        Some(ri)
+    }
+
     /// Turns a generated region into an ordinary MIDI region with the notes it has now, which
     /// can then be edited note by note.
     pub fn convert_to_midi_region(&mut self, ti: usize, ri: usize) {
@@ -3239,6 +3265,28 @@ mod tests {
             let t = p.add_track(kind);
             assert!(p.add_generated_region(t, true, 1.0).is_none(), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn the_pencil_draws_an_empty_midi_region_on_a_midi_track_only() {
+        let mut p = Project::empty();
+        let synth = p.add_track(TrackKind::Instrument);
+        let rev = p.song_rev;
+        let r = p
+            .add_midi_region(synth, 3.0, 2.0)
+            .expect("a MIDI track takes a region");
+        let region = &p.tracks[synth].regions[r];
+        assert!(region.notes.is_empty() && region.generated.is_none() && region.audio.is_none());
+        assert_eq!((region.start_bar, region.len_bars), (3.0, 2.0));
+        assert_eq!(region.name, p.tracks[synth].name);
+        assert_ne!(p.song_rev, rev, "the engine is told about the new region");
+
+        // Audio and bus tracks take no MIDI region, and an empty region is no region.
+        let audio = p.add_track(TrackKind::Audio);
+        assert!(p.add_midi_region(audio, 1.0, 1.0).is_none());
+        let aux = p.add_track(TrackKind::Aux);
+        assert!(p.add_midi_region(aux, 1.0, 1.0).is_none());
+        assert!(p.add_midi_region(synth, 1.0, 0.0).is_none());
     }
 
     #[test]
