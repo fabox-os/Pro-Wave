@@ -17,6 +17,8 @@ A small release that fixes the plug-in menu and the Library's instrument names. 
 
 ### Fixed
 
+✅ **Recording no longer ends empty on some sound cards (issue: "no audio arrived from the input"):** a take was cut that much later than the delay the audio system reported for the input, and some systems report a capture time on another clock, which came out as a delay of hours, so no sample ever belonged to the recording. A delay above half a second is now taken as unknown (nothing is cut). If a take still holds nothing, the message names the input and says how many frames it ever delivered (0 means the system never sent any audio: check the input in the system's sound settings and that the microphone is allowed and not muted).
+
 ✅ **The plug-in menu scrolls and stays open (issue #163):** a submenu with hundreds of plug-ins (one manufacturer's whole VST3 bundle, for example) ran off the bottom of the screen and could not be scrolled. Every list in the Audio FX menu (the categories, the manufacturers, the formats, LADSPA and the search results) now scrolls and is about as tall as the main menu, never more than three quarters of the window, and a submenu opens level with the name that opened it (its first row sat 7 points too low). Clicking the search field no longer closes the menu: the menu closes when you choose something or click outside it. The search used to show only the first 24 plug-ins it found; it now lists all of them.
 
 ✅ **More VST3 plug-ins found on Linux (issue #163):** a VST3 bundle whose library has another name than the bundle (for example `DejaVu.vst3` holding `libdejavu.so`) was skipped without a message; it is now listed.

@@ -379,7 +379,16 @@ impl AudioRecorder {
             let open = is_open(p, take.track, take.region);
             let file = match &done {
                 Ok(d) if d.frames > 0 => AudioFile::open(&d.path).map_err(|e| e.to_string()),
-                Ok(_) => Err(tr("no audio arrived from the input").to_string()),
+                Ok(_) => {
+                    // Name the input, and say whether it ever called back: that tells a
+                    // device that is silent to the system from a recording that was too short.
+                    let heard = self.capture.as_ref().map_or(0, Capture::frames_received);
+                    let device = self.capture.as_ref().map_or("", Capture::device_name);
+                    Err(format!(
+                        "{} ({device}, {heard} frames)",
+                        tr("no audio arrived from the input")
+                    ))
+                }
                 Err(e) => Err(e.to_string()),
             };
             match (open, file) {

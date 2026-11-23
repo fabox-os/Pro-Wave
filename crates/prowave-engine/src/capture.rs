@@ -135,6 +135,20 @@ pub struct Recorded {
     pub lost: bool,
 }
 
+/// The longest delay an input or an output is believed to have. Some audio systems report
+/// timestamps in clocks that do not agree (the "capture time" is zero, say), which came out as
+/// a delay of hours: the recording was then cut that much later and so never held a sample.
+const MAX_PLAUSIBLE_LATENCY_US: u64 = 500_000;
+
+/// `us` if it can be a real device delay, else 0 (unknown).
+fn plausible_latency(us: u64) -> u64 {
+    if us <= MAX_PLAUSIBLE_LATENCY_US {
+        us
+    } else {
+        0
+    }
+}
+
 /// State shared by the device callback, the writer thread and the UI.
 struct Shared {
     /// Frames the callback has put in the ring since the stream started.
@@ -664,6 +678,11 @@ impl Capture {
         &self.device_name
     }
 
+    /// Frames the device has delivered since it was opened (0 means it never called back).
+    pub fn frames_received(&self) -> u64 {
+        self.shared.frames_pushed.load(Ordering::Acquire)
+    }
+
     /// Callbacks whose audio was lost because the writer thread could not keep up.
     pub fn overruns(&self) -> u64 {
         self.shared.overruns.load(Ordering::Relaxed)
@@ -697,8 +716,8 @@ impl Capture {
         source: InputSource,
         latency_us: u32,
     ) -> Result<u32, CaptureError> {
-        let total_us =
-            u64::from(latency_us) + u64::from(self.shared.latency_us.load(Ordering::Relaxed));
+        let total_us = plausible_latency(u64::from(latency_us))
+            + plausible_latency(u64::from(self.shared.latency_us.load(Ordering::Relaxed)));
         let skip = total_us * u64::from(self.sample_rate) / 1_000_000;
         let from_frame = self.shared.frames_pushed.load(Ordering::Acquire) + skip;
         let id = self.next_id;
@@ -762,9 +781,8 @@ where
             move |data: &[T], info: &InputCallbackInfo| {
                 let ts = info.timestamp();
                 let lag = ts.callback.duration_since(ts.capture).as_micros();
-                cb_shared
-                    .latency_us
-                    .store(lag.min(u128::from(u32::MAX)) as u32, Ordering::Relaxed);
+                let lag = plausible_latency(lag.min(u128::from(u32::MAX)) as u64);
+                cb_shared.latency_us.store(lag as u32, Ordering::Relaxed);
                 assert_no_alloc::assert_no_alloc(|| {
                     push(data, channels, &mut producer, &cb_shared);
                     push_monitor(data, &mut monitor);
@@ -1039,5 +1057,32 @@ mod tests {
         assert_eq!(InputSource::Mono(0).needs(), 1);
         assert_eq!(InputSource::Stereo(2).needs(), 4);
         assert_eq!(InputSource::Stereo(0).file_channels(), 2);
+    }
+
+    #[test]
+    fn an_absurd_reported_delay_does_not_swallow_the_recording() {
+        // Some systems report a capture time that is not on the callback's clock: the input
+        // "lag" came out as hours and the recording was cut that much later, so it was empty.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("take.wav");
+        let (mut cap, mut tx, shared) = fake(1, 48_000);
+        shared.latency_us.store(u32::MAX, Ordering::Relaxed);
+        let id = cap.start(&path, InputSource::Mono(0), u32::MAX).unwrap();
+        let wave = vec![0.25f32; 48_000];
+        for block in wave.chunks(512) {
+            push(block, 1, &mut tx, &shared);
+        }
+        settle();
+        assert_eq!(cap.frames_received(), 48_000);
+        let done = cap.stop(id).unwrap();
+        assert_eq!(done.frames, 48_000, "every frame is kept");
+    }
+
+    #[test]
+    fn a_believable_delay_still_cuts_the_start() {
+        assert_eq!(plausible_latency(12_000), 12_000);
+        assert_eq!(plausible_latency(500_000), 500_000);
+        assert_eq!(plausible_latency(500_001), 0);
+        assert_eq!(plausible_latency(u64::from(u32::MAX)), 0);
     }
 }
