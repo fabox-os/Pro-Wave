@@ -3,6 +3,12 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### Fixed
+
+✅ **The plug-in picker scrolls (issue #163):** a submenu with hundreds of plug-ins (one manufacturer's whole VST3 bundle, for example) ran off the bottom of the screen and could not be scrolled. Every list in the picker (the categories, the manufacturers, the formats, LADSPA and the search results) now scrolls and is never taller than three quarters of the window. The search used to show only the first 24 plug-ins it found; it now lists all of them.
+
 ## 0.3.0
 
 ### All systems (Windows, macOS, Linux)

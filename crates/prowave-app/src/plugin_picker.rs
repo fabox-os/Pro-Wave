@@ -64,6 +64,24 @@ pub fn matches(kind: FxKind, query: &str) -> bool {
     query.is_empty() || kind.name().to_lowercase().contains(&query)
 }
 
+/// The tallest a list in a menu may be: three quarters of the window, so a submenu with
+/// hundreds of plug-ins (one vendor's whole bundle) scrolls instead of running off the screen,
+/// and a small window gets a short list rather than a cut-off one.
+fn list_height(ui: &Ui) -> f32 {
+    (ui.ctx().content_rect().height() * 0.75).max(120.0)
+}
+
+/// Runs `add_rows` inside a vertical scroll area as tall as the window allows. The area
+/// shrinks to its content, so a short list is as tall as its rows.
+fn scrolled<R>(ui: &mut Ui, add_rows: impl FnOnce(&mut Ui) -> R) -> R {
+    let height = list_height(ui);
+    egui::ScrollArea::vertical()
+        .max_height(height)
+        .auto_shrink([true, true])
+        .show(ui, add_rows)
+        .inner
+}
+
 /// Draws the picker into `ui` and returns the choice, if the user made one. `search` is kept
 /// by the caller so the field survives the frames the menu is open.
 pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
@@ -86,11 +104,13 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
                 .collect();
             ui.add_enabled_ui(!kinds.is_empty(), |ui| {
                 ui.menu_button(tr(name), |ui| {
-                    for kind in kinds {
-                        if ui.button(kind.name()).clicked() {
-                            picked = Some(Pick::Effect(kind));
+                    scrolled(ui, |ui| {
+                        for kind in kinds {
+                            if ui.button(kind.name()).clicked() {
+                                picked = Some(Pick::Effect(kind));
+                            }
                         }
-                    }
+                    });
                 });
             });
         }
@@ -99,35 +119,36 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
     } else {
         let mut any = false;
         let query = search.trim().to_lowercase();
-        for info in crate::plugins::catalog().effects() {
-            if info.name.to_lowercase().contains(&query) {
-                any = true;
-                if ui.button(&info.name).clicked() {
-                    picked = Some(Pick::Plugin(crate::plugins::intern(&info.plugin_ref())));
+        // Every match is listed, in a list that scrolls: a bundle of hundreds of plug-ins
+        // must not hide the ones past the first few.
+        scrolled(ui, |ui| {
+            for info in crate::plugins::catalog().effects() {
+                if info.name.to_lowercase().contains(&query) {
+                    any = true;
+                    if ui.button(&info.name).clicked() {
+                        picked = Some(Pick::Plugin(crate::plugins::intern(&info.plugin_ref())));
+                    }
                 }
             }
-        }
-        for kind in FxKind::ALL {
-            if matches(kind, search) {
-                any = true;
-                if ui.button(kind.name()).clicked() {
-                    picked = Some(Pick::Effect(kind));
+            for kind in FxKind::ALL {
+                if matches(kind, search) {
+                    any = true;
+                    if ui.button(kind.name()).clicked() {
+                        picked = Some(Pick::Effect(kind));
+                    }
                 }
             }
-        }
-        let query = search.trim().to_lowercase();
-        // A long list in a menu is no use: the search is narrowed until it fits.
-        for info in catalog
-            .iter()
-            .filter(|info| info.name.to_lowercase().contains(&query))
-            .take(24)
-        {
-            any = true;
-            let label = format!("{} ({})", info.name, info.format.name());
-            if ui.button(label).clicked() {
-                picked = Some(Pick::Hosted(info.clone()));
+            for info in catalog
+                .iter()
+                .filter(|info| info.name.to_lowercase().contains(&query))
+            {
+                any = true;
+                let label = format!("{} ({})", info.name, info.format.name());
+                if ui.button(label).clicked() {
+                    picked = Some(Pick::Hosted(info.clone()));
+                }
             }
-        }
+        });
         if !any {
             ui.weak(tr("No plug-ins match"));
         }
@@ -143,17 +164,15 @@ fn plugin_menu(ui: &mut Ui) -> Option<Pick> {
     ui.menu_button(tr("LADSPA Plug-ins"), |ui| {
         let catalog = crate::plugins::catalog();
         let mut any = false;
-        egui::ScrollArea::vertical()
-            .max_height(360.0)
-            .show(ui, |ui| {
-                for info in catalog.effects() {
-                    any = true;
-                    if ui.button(&info.name).clicked() {
-                        picked = Some(Pick::Plugin(crate::plugins::intern(&info.plugin_ref())));
-                        ui.close();
-                    }
+        scrolled(ui, |ui| {
+            for info in catalog.effects() {
+                any = true;
+                if ui.button(&info.name).clicked() {
+                    picked = Some(Pick::Plugin(crate::plugins::intern(&info.plugin_ref())));
+                    ui.close();
                 }
-            });
+            }
+        });
         if !any {
             ui.add_enabled(
                 false,
@@ -186,19 +205,24 @@ fn hosted_menus(ui: &mut Ui, catalog: &[PluginInfo], picked: &mut Option<Pick>) 
         }
         ui.menu_button(format.name(), |ui| {
             // The catalog is sorted by manufacturer, so each one's plug-ins are together.
-            for group in of_format.chunk_by(|a, b| a.vendor.eq_ignore_ascii_case(&b.vendor)) {
-                let vendor = match group[0].vendor.as_str() {
-                    "" => "—",
-                    vendor => vendor,
-                };
-                ui.menu_button(vendor, |ui| {
-                    for info in group {
-                        if ui.button(&info.name).clicked() {
-                            *picked = Some(Pick::Hosted((*info).clone()));
-                        }
-                    }
-                });
-            }
+            scrolled(ui, |ui| {
+                for group in of_format.chunk_by(|a, b| a.vendor.eq_ignore_ascii_case(&b.vendor)) {
+                    let vendor = match group[0].vendor.as_str() {
+                        "" => "—",
+                        vendor => vendor,
+                    };
+                    ui.menu_button(vendor, |ui| {
+                        // One manufacturer can have hundreds (a whole bundle): scroll them.
+                        scrolled(ui, |ui| {
+                            for info in group {
+                                if ui.button(&info.name).clicked() {
+                                    *picked = Some(Pick::Hosted((*info).clone()));
+                                }
+                            }
+                        });
+                    });
+                }
+            });
         });
     }
 }
@@ -265,5 +289,47 @@ mod tests {
         assert!(matches(FxKind::MultiComp, "band"));
         assert!(!matches(FxKind::Delay, "reverb"));
         assert!(matches(FxKind::Delay, ""), "an empty search shows all");
+    }
+
+    #[test]
+    fn a_long_list_scrolls_instead_of_running_off_the_screen() {
+        use crate::ui_test::Harness;
+        // A bundle with hundreds of plug-ins (issue #163) in a 768-point-tall window.
+        let mut h = Harness::new(1366.0, 768.0);
+        let mut height = 0.0;
+        h.settle(|ui| {
+            let before = ui.cursor().top();
+            scrolled(ui, |ui| {
+                for n in 0..500 {
+                    let _ = ui.button(format!("Plug-in {n}"));
+                }
+            });
+            height = ui.cursor().top() - before;
+        });
+        assert!(
+            height <= 768.0 * 0.75 + 8.0,
+            "500 rows take {height} points, more than the window allows"
+        );
+        assert!(
+            height > 300.0,
+            "the list is still tall enough to use ({height})"
+        );
+    }
+
+    #[test]
+    fn a_short_list_is_only_as_tall_as_its_rows() {
+        use crate::ui_test::Harness;
+        let mut h = Harness::new(1366.0, 768.0);
+        let mut height = 0.0;
+        h.settle(|ui| {
+            let before = ui.cursor().top();
+            scrolled(ui, |ui| {
+                for n in 0..3 {
+                    let _ = ui.button(format!("Plug-in {n}"));
+                }
+            });
+            height = ui.cursor().top() - before;
+        });
+        assert!(height < 120.0, "three rows take {height} points");
     }
 }
