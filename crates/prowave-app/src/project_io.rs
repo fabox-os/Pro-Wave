@@ -140,9 +140,6 @@ pub(crate) fn builtin_name(s: &str) -> Option<&'static str> {
         if c.name == s {
             return Some(c.name);
         }
-        if c.instrument == Some(s) {
-            return c.instrument;
-        }
         if let Some(fx) = c.fx.iter().find(|f| **f == s) {
             return Some(fx);
         }
