@@ -8,6 +8,7 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ### All systems (Windows, macOS, Linux)
 
 ✅ **Plug-in menu fixes (issue #163):** clicking the plug-in search field no longer closes the Audio FX menu, and the format and manufacturer lists of installed CLAP, VST3 and Audio Unit plug-ins scroll instead of running off the screen.
+✅ **Library names only what it plays (issue #167):** the Library's Sampler, Vintage B3, Alchemy, ES2 and E-Piano entries named an instrument that was never created; the sound is the built-in synth patch for each category. The mixer and Inspector now agree: a patch names no instrument, a new software instrument starts with none, and a Library drum kit still gets drum patterns. Not done: a Vintage B3 panel and Sampler content for the Library.
 ✅ **More VST3 plug-ins found on Linux (issue #163):** a VST3 bundle whose library has another name than the bundle (for example `DejaVu.vst3` holding `libdejavu.so`) was skipped without a message; it is now listed.
 
 ## 0.3.0

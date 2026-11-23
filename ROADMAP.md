@@ -524,7 +524,7 @@ test of all the features above on Windows and macOS.
 - [ ] Drum Machine Designer: 48 pads, each pad = Quick Sampler + strip
 - [ ] Drum Kit Designer: acoustic kits with multi-mic (Close, Overhead, Room, Bleed controls)
 - [ ] ES2: Vector synth clone - 3 osc (Saw, Pulse, Sine with FM), Filter, Distortion, Vector Envelope, Router 10 slots. Must match Logic presets byte-for-byte parameter wise
-- [ ] Vintage Series: B3 Organ (drawbars 9 + percussion + Leslie with Horn/Rotor speed, distortion), Vintage Clav (D6 pickup), Vintage E-Piano
+- [ ] Vintage Series: B3 Organ (drawbars 9 + percussion + Leslie with Horn/Rotor speed, distortion), Vintage Clav (D6 pickup), Vintage E-Piano (2026-11-23, #167: the Library no longer names a B3 it does not create; the panel is still to do)
 - [ ] Retro Synth: 4 engines Analog/Sync/Wavetable/FM in one UI
 - **DoD:** Load Sampler instrument, play with MIDI, patch saving
 
@@ -547,7 +547,7 @@ test of all the features above on Windows and macOS.
 
 ### Phase 8: UI - The Logic Look + Live Loops (Weeks 57-66)
 - [~] Main window: Tracks area (with Track Headers, Track Inspector left, Library right), Mixer (separate window or bottom), Editors (Piano Roll bottom, Score, Audio Editor)
-- [ ] Library: Patches (Channel Strip + Instrument + FX), save/load, search
+- [ ] Library: Patches (Channel Strip + Instrument + FX), save/load, search (2026-11-23, #167: the Library names only the instruments a track really plays; the Sampler, B3, Alchemy and ES2 entries play synth patches and say so)
 - [ ] Smart Controls: 8 knobs per patch, mapping editor (map knob to multiple params with range scaling), Learn
 - [ ] Key Commands: 1200+ commands, searchable, customizable, Presets, Conflict detection
 - [ ] Live Loops: Grid (Cells, Scenes, Trigger modes, Quantize Start), Record Live Loops performance to Tracks, Remix FX (X/Y pad with Gate, Filter, Repeater, Reverse)
