@@ -57,6 +57,18 @@ fn soundfont_label(sf: &SoundFontUse) -> String {
     }
 }
 
+/// The `drumkit.xml` to play for what the user picked: an archive is unpacked first.
+fn hydrogen_kit_file(path: &std::path::Path) -> Result<String, String> {
+    let file = if crate::hydrogen_archive::is_archive(path) {
+        let into = crate::hydrogen_archive::kits_dir()
+            .ok_or_else(|| "there is no folder to unpack the drum kit into".to_string())?;
+        crate::hydrogen_archive::unpack(path, &into)?
+    } else {
+        path.to_path_buf()
+    };
+    Ok(file.to_string_lossy().into_owned())
+}
+
 /// Gives track `ti` the SoundFont or Hydrogen drum kit at `path`, playing its first preset.
 fn use_soundfont_file(p: &mut Project, ti: usize, path: String) {
     // Read the file again, even if it was loaded before.
@@ -1020,11 +1032,19 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                             ui.close();
                         }
                         if ui.button(tr("Choose Hydrogen Drum Kit…")).clicked() {
+                            // A kit is a downloaded `.h2drumkit` archive, or the `drumkit.xml`
+                            // of one that is already unpacked.
                             if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("Hydrogen drum kit", &["xml", "XML"])
+                                .add_filter("Hydrogen drum kit", &["h2drumkit", "xml"])
                                 .pick_file()
                             {
-                                use_soundfont_file(p, ti, path.to_string_lossy().into_owned());
+                                match hydrogen_kit_file(&path) {
+                                    Ok(file) => use_soundfont_file(p, ti, file),
+                                    Err(e) => {
+                                        tracing::warn!("{e}");
+                                        s.status = Some(e);
+                                    }
+                                }
                             }
                             ui.close();
                         }
