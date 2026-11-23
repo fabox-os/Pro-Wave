@@ -68,11 +68,7 @@ impl Template {
             Template::Empty => return p,
             Template::Songwriter => {
                 p.tracks = vec![
-                    track(
-                        "Steinway Grand Piano",
-                        TrackKind::Instrument,
-                        Some("Sampler"),
-                    ),
+                    track("Steinway Grand Piano", TrackKind::Instrument, None),
                     track("Drummer", TrackKind::Drummer, Some("Drum Kit")),
                     track("Bass", TrackKind::Audio, None),
                     track("Lead Vocal", TrackKind::Audio, None),

@@ -829,11 +829,12 @@ impl Track {
     pub const MIN_HEIGHT: f32 = 0.5;
     pub const MAX_HEIGHT: f32 = 6.0;
 
-    /// A new track of `kind` with default settings and no regions: software instruments get
-    /// the Sampler, and every kind its own colour.
+    /// A new track of `kind` with default settings and no regions. A software instrument names
+    /// no instrument until one is chosen: it plays the built-in synth patch until then. Every
+    /// kind has its own colour.
     pub fn new(name: impl Into<String>, kind: TrackKind) -> Self {
         let (color, instrument) = match kind {
-            TrackKind::Instrument => (Color32::from_rgb(0x4e, 0xb0, 0x4a), Some("Sampler")),
+            TrackKind::Instrument => (Color32::from_rgb(0x4e, 0xb0, 0x4a), None),
             TrackKind::Drummer => (Color32::from_rgb(0xd9, 0xaa, 0x2a), Some("Drum Kit")),
             TrackKind::Audio => (Color32::from_rgb(0x3f, 0x5f, 0xc0), None),
             TrackKind::Aux => (Color32::from_rgb(0x2a, 0xa8, 0xa8), None),
@@ -1083,7 +1084,7 @@ impl Project {
             volume_db: 0.0,
             pan: 0.0,
             inserts: vec![],
-            instrument: Some("Sampler"),
+            instrument: None,
             regions: vec![],
             params: TrackParams::default(),
             category: None,
@@ -1179,7 +1180,7 @@ impl Project {
                 "Classic Electric Piano",
                 TrackKind::Instrument,
                 green,
-                Some("E-Piano"),
+                None,
                 vec!["Tape Delay", "Channel EQ"],
                 1,
                 -3.2,
@@ -1188,7 +1189,7 @@ impl Project {
                 "Steinway Grand Piano",
                 TrackKind::Instrument,
                 green,
-                Some("Sampler"),
+                None,
                 vec!["Channel EQ", "Compressor"],
                 2,
                 -2.7,
@@ -1796,8 +1797,10 @@ impl Project {
         if !track.kind.has_regions() || track.kind == TrackKind::Audio {
             return None;
         }
+        // A drum track: a Drummer track, a Drum Machine, or a Library drum kit.
         let drums = track.kind == TrackKind::Drummer
-            || track.instrument.is_some_and(|i| i.contains("Drum"));
+            || track.drums.is_some()
+            || track.category.is_some_and(|c| c.contains("Drum"));
         let (name, source) = if drummer {
             (
                 "Drummer",
@@ -2948,7 +2951,7 @@ mod tests {
     #[test]
     fn new_tracks_have_the_defaults_of_their_kind() {
         let inst = Track::new("Inst 1", TrackKind::Instrument);
-        assert_eq!((inst.instrument, inst.regions.len()), (Some("Sampler"), 0));
+        assert_eq!((inst.instrument, inst.regions.len()), (None, 0));
         for kind in [TrackKind::Aux, TrackKind::Folder] {
             let t = Track::new("x", kind);
             assert!(t.instrument.is_none() && !kind.has_regions());
@@ -3265,6 +3268,32 @@ mod tests {
             let t = p.add_track(kind);
             assert!(p.add_generated_region(t, true, 1.0).is_none(), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_library_drum_kit_gets_a_drum_pattern_and_a_synth_patch_a_melodic_one() {
+        let mut p = Project::empty();
+        let kit = p.add_track(TrackKind::Instrument);
+        p.tracks[kit].category = Some("Drum Kit");
+        let r = p
+            .add_generated_region(kit, false, 1.0)
+            .expect("a MIDI track");
+        let got = p.tracks[kit].regions[r]
+            .generated
+            .as_ref()
+            .map(|g| g.source.clone());
+        assert_eq!(got, Some(Generator::Pattern(PatternParams::drums())));
+
+        let synth = p.add_track(TrackKind::Instrument);
+        p.tracks[synth].category = Some("Synthesizer");
+        let r = p
+            .add_generated_region(synth, false, 1.0)
+            .expect("a MIDI track");
+        let got = p.tracks[synth].regions[r]
+            .generated
+            .as_ref()
+            .map(|g| g.source.clone());
+        assert_eq!(got, Some(Generator::Pattern(PatternParams::melodic())));
     }
 
     #[test]

@@ -19,8 +19,6 @@ const SEL_BG: Color32 = Color32::from_rgb(0x5a, 0x5a, 0x5a);
 
 pub struct Category {
     pub name: &'static str,
-    /// Instrument shown in the channel strip's instrument slot.
-    pub instrument: Option<&'static str>,
     pub fx: &'static [&'static str],
     pub patches: &'static [&'static str],
 }
@@ -33,13 +31,11 @@ const SYNTH_FX: &[&str] = &["Channel EQ", "Chorus", "Tape Delay", "Space D"];
 pub static CATEGORIES: &[Category] = &[
     Category {
         name: "User Patches",
-        instrument: None,
         fx: &[],
         patches: &[],
     },
     Category {
         name: "Bass",
-        instrument: Some("Sampler"),
         fx: EQ_COMP,
         patches: &[
             "Deep Finger Bass",
@@ -53,7 +49,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Drum Kit",
-        instrument: Some("Drum Kit"),
         fx: EQ_COMP_VERB,
         patches: &[
             "Brushed Jazz Kit",
@@ -66,7 +61,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Electronic Drum Kit",
-        instrument: Some("Drum Machine"),
         fx: EQ_COMP,
         patches: &[
             "Boom Bap Machine",
@@ -79,7 +73,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Guitar",
-        instrument: Some("Sampler"),
         fx: &["Channel EQ", "Compressor", "Space D"],
         patches: &[
             "Bright Steel String",
@@ -91,7 +84,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Guitar Amp",
-        instrument: Some("Sampler"),
         fx: &["Amp Designer", "Channel EQ", "Space D"],
         patches: &[
             "British Crunch",
@@ -104,7 +96,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Keyboards",
-        instrument: Some("E-Piano"),
         fx: KEYS_FX,
         patches: &[
             "Bright Tine Piano",
@@ -119,7 +110,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Mallet",
-        instrument: Some("Sampler"),
         fx: &["Channel EQ", "Space D"],
         patches: &[
             "Concert Marimba",
@@ -130,7 +120,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Orchestral",
-        instrument: Some("Studio Strings"),
         fx: &["Channel EQ", "Space D"],
         patches: &[
             "Chamber Ensemble",
@@ -141,7 +130,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Percussion",
-        instrument: Some("Sampler"),
         fx: EQ_COMP,
         patches: &[
             "Conga Set",
@@ -152,7 +140,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Piano",
-        instrument: Some("Sampler"),
         fx: &["Channel EQ", "Compressor", "Space D"],
         patches: &[
             "Bright Concert Grand",
@@ -164,13 +151,11 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Quick Sampler",
-        instrument: Some("Q-Sampler"),
         fx: EQ_COMP,
         patches: &["Chopped Vocal", "One Shot Hit", "Sliced Breakbeat"],
     },
     Category {
         name: "Studio Horns",
-        instrument: Some("Studio Horns"),
         fx: &["Channel EQ", "Space D"],
         patches: &[
             "Brass Section",
@@ -181,7 +166,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Studio Strings",
-        instrument: Some("Studio Strings"),
         fx: &["Channel EQ", "Space D"],
         patches: &[
             "Cello Section",
@@ -192,7 +176,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Synthesizer",
-        instrument: Some("Alchemy"),
         fx: SYNTH_FX,
         patches: &[
             "Airy Glass Pad",
@@ -211,7 +194,6 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Vintage B3 Organ",
-        instrument: Some("Vintage B3"),
         fx: &["Channel EQ", "Overdrive"],
         patches: &[
             "Classic Rock Organ",
@@ -222,13 +204,11 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Vintage Clav",
-        instrument: Some("Vintage Clav"),
         fx: &["Channel EQ", "Phaser"],
         patches: &["Funky Clav", "Muted Clav", "Wah Clav"],
     },
     Category {
         name: "Vintage Electric Piano",
-        instrument: Some("E-Piano"),
         fx: KEYS_FX,
         patches: &[
             "Classic Tine Piano",
@@ -238,31 +218,26 @@ pub static CATEGORIES: &[Category] = &[
     },
     Category {
         name: "Vintage Mellotron",
-        instrument: Some("Mellotron"),
         fx: &["Channel EQ", "Space D"],
         patches: &["Tape Choir", "Tape Flutes", "Tape Strings"],
     },
     Category {
         name: "World",
-        instrument: Some("Sampler"),
         fx: &["Channel EQ", "Space D"],
         patches: &["Kalimba", "Koto", "Sitar", "Steel Drums"],
     },
     Category {
         name: "Arpeggiator",
-        instrument: Some("Alchemy"),
         fx: SYNTH_FX,
         patches: &["Bouncing Arp", "Gated Pluck Arp", "Rising Sequence"],
     },
     Category {
         name: "Cinematic",
-        instrument: Some("Alchemy"),
         fx: SYNTH_FX,
         patches: &["Dark Atmosphere", "Epic Riser", "Tension Drone"],
     },
     Category {
         name: "Legacy",
-        instrument: Some("ES2"),
         fx: EQ_COMP,
         patches: &["Analog Brass", "Classic Pluck", "Retro Lead"],
     },
@@ -273,7 +248,6 @@ pub static CATEGORIES: &[Category] = &[
 struct Saved {
     track: usize,
     name: String,
-    instrument: Option<&'static str>,
     inserts: Vec<crate::model::Insert>,
     category: Option<&'static str>,
 }
@@ -310,7 +284,6 @@ fn load_patch(p: &mut Project, v: &mut LibraryView, cat: usize, patch: usize) {
         v.saved = Some(Saved {
             track: ti,
             name: t.name.clone(),
-            instrument: t.instrument,
             inserts: t.inserts.clone(),
             category: t.category,
         });
@@ -318,11 +291,6 @@ fn load_patch(p: &mut Project, v: &mut LibraryView, cat: usize, patch: usize) {
     t.name = (*name).to_string();
     t.category = Some(c.name);
     t.inserts = crate::model::inserts_from_names(c.fx);
-    // Only software instruments get an instrument: audio tracks keep their input and an aux
-    // track its bus.
-    if matches!(t.kind, TrackKind::Instrument | TrackKind::Drummer) {
-        t.instrument = c.instrument;
-    }
     v.loaded = Some((cat, patch));
 }
 
@@ -330,7 +298,6 @@ fn revert(p: &mut Project, v: &mut LibraryView) {
     if let Some(s) = v.saved.take() {
         if let Some(t) = p.tracks.get_mut(s.track) {
             t.name = s.name;
-            t.instrument = s.instrument;
             t.inserts = s.inserts;
             t.category = s.category;
         }
@@ -666,17 +633,14 @@ mod tests {
     fn loading_a_patch_updates_the_selected_track_and_revert_restores_it() {
         let mut p = Project::demo();
         p.selected_track = 0;
-        let before = (
-            p.tracks[0].name.clone(),
-            p.tracks[0].instrument,
-            p.tracks[0].inserts.clone(),
-        );
+        let before = (p.tracks[0].name.clone(), p.tracks[0].inserts.clone());
         let mut v = LibraryView::default();
         let synth = category("Synthesizer");
         load_patch(&mut p, &mut v, synth, 0);
         let t = &p.tracks[0];
         assert_eq!(t.name, CATEGORIES[synth].patches[0]);
-        assert_eq!(t.instrument, Some("Alchemy"));
+        // A patch names no instrument: the track keeps its own, and the sound is the patch's.
+        assert_eq!(t.instrument, p.tracks[0].instrument);
         assert_eq!(
             t.inserts,
             crate::model::inserts_from_names(CATEGORIES[synth].fx)
@@ -686,7 +650,7 @@ mod tests {
         load_patch(&mut p, &mut v, category("Bass"), 1);
         revert(&mut p, &mut v);
         let t = &p.tracks[0];
-        assert_eq!((t.name.clone(), t.instrument, t.inserts.clone()), before);
+        assert_eq!((t.name.clone(), t.inserts.clone()), before);
         assert_eq!(t.category, None);
         assert!(v.loaded.is_none());
     }
