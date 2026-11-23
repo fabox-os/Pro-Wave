@@ -38,6 +38,9 @@ pub enum Pick {
     Hosted(crate::hosted_plugins::PluginInfo),
 }
 
+/// The tallest a plug-in submenu gets before it scrolls: about as tall as the category list.
+const MENU_MAX_HEIGHT: f32 = 360.0;
+
 /// The formats of hosted plug-ins, in the order of the picker's submenus (Logic has one,
 /// "Audio Units").
 const FORMATS: [Format; 3] = [Format::AudioUnit, Format::Clap, Format::Vst3];
@@ -64,6 +67,11 @@ pub fn matches(kind: FxKind, query: &str) -> bool {
     query.is_empty() || kind.name().to_lowercase().contains(&query)
 }
 
+/// The id of the search field, so a test can find where it is drawn.
+fn search_field_id() -> egui::Id {
+    egui::Id::unique("plugin_picker_search")
+}
+
 /// Draws the picker into `ui` and returns the choice, if the user made one. `search` is kept
 /// by the caller so the field survives the frames the menu is open.
 pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
@@ -73,6 +81,7 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
     ui.set_min_width(200.0);
     ui.add(
         egui::TextEdit::singleline(search)
+            .id(search_field_id())
             .hint_text(tr("Search"))
             .desired_width(f32::INFINITY),
     );
@@ -185,20 +194,30 @@ fn hosted_menus(ui: &mut Ui, catalog: &[PluginInfo], picked: &mut Option<Pick>) 
             continue;
         }
         ui.menu_button(format.name(), |ui| {
-            // The catalog is sorted by manufacturer, so each one's plug-ins are together.
-            for group in of_format.chunk_by(|a, b| a.vendor.eq_ignore_ascii_case(&b.vendor)) {
-                let vendor = match group[0].vendor.as_str() {
-                    "" => "—",
-                    vendor => vendor,
-                };
-                ui.menu_button(vendor, |ui| {
-                    for info in group {
-                        if ui.button(&info.name).clicked() {
-                            *picked = Some(Pick::Hosted((*info).clone()));
-                        }
+            // Like the LADSPA list, a long menu scrolls within the height of the others.
+            egui::ScrollArea::vertical()
+                .max_height(MENU_MAX_HEIGHT)
+                .show(ui, |ui| {
+                    // The catalog is sorted by manufacturer, so each one's plug-ins are together.
+                    for group in of_format.chunk_by(|a, b| a.vendor.eq_ignore_ascii_case(&b.vendor))
+                    {
+                        let vendor = match group[0].vendor.as_str() {
+                            "" => "—",
+                            vendor => vendor,
+                        };
+                        ui.menu_button(vendor, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(MENU_MAX_HEIGHT)
+                                .show(ui, |ui| {
+                                    for info in group {
+                                        if ui.button(&info.name).clicked() {
+                                            *picked = Some(Pick::Hosted((*info).clone()));
+                                        }
+                                    }
+                                });
+                        });
                     }
                 });
-            }
         });
     }
 }
@@ -256,6 +275,55 @@ mod tests {
             }
         }
         assert_eq!(picked, Some(Pick::Effect(FxKind::ChannelEq)));
+    }
+
+    #[test]
+    fn clicking_the_search_field_keeps_the_menu_open() {
+        use crate::ui_test::Harness;
+        let mut h = Harness::new(400.0, 800.0);
+        let mut search = String::new();
+        let mut button_at = egui::Rect::NOTHING;
+        let mut drawn = 0usize;
+        // The picker inside a menu, as the insert slot and "Replace With" show it.
+        let draw =
+            |ui: &mut Ui, search: &mut String, button_at: &mut egui::Rect, drawn: &mut usize| {
+                let button = ui.button("Open");
+                *button_at = button.rect;
+                egui::Popup::menu(&button)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        *drawn += 1;
+                        show(ui, search);
+                    });
+            };
+        h.frame(vec![], |ui| {
+            draw(ui, &mut search, &mut button_at, &mut drawn)
+        });
+        h.click(button_at.center(), |ui| {
+            draw(ui, &mut search, &mut button_at, &mut drawn)
+        });
+        h.frame(vec![], |ui| {
+            draw(ui, &mut search, &mut button_at, &mut drawn)
+        });
+        assert!(drawn > 0, "the menu opens");
+        let field = h
+            .ctx
+            .read_response(search_field_id())
+            .expect("the search field is drawn")
+            .rect;
+        h.click(field.center(), |ui| {
+            draw(ui, &mut search, &mut button_at, &mut drawn)
+        });
+        // The click's own frame always draws the menu, so only the frame after it can show
+        // whether the menu closed.
+        let after_click = drawn;
+        h.frame(vec![], |ui| {
+            draw(ui, &mut search, &mut button_at, &mut drawn)
+        });
+        assert!(
+            drawn > after_click,
+            "clicking the search field keeps the menu open"
+        );
     }
 
     #[test]
