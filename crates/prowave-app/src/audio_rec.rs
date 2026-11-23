@@ -15,6 +15,36 @@ use std::path::PathBuf;
 /// How much of a level meter's value is left at the next frame.
 const METER_FALL: f32 = 0.85;
 
+/// How long an input that was just opened may stay silent (no callbacks at all, not quiet
+/// sound) before it is given up on: a driver that never starts, the wrong device, or a
+/// microphone the system has not allowed yet.
+const STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How many silent inputs are tried (the chosen one, then the system's default) before the
+/// recorder says the system sends no audio.
+const MAX_STALLS: u8 = 2;
+
+/// What to do about an open input.
+#[derive(Debug, PartialEq, Eq)]
+enum Stall {
+    /// It delivers, or it has not had the time yet.
+    Fine,
+    /// It delivered nothing: open the system's default input (or the same one again).
+    Reopen,
+    /// Tried enough: report it.
+    GiveUp,
+}
+
+fn stall_action(frames_received: u64, open_for: std::time::Duration, stalls: u8) -> Stall {
+    if frames_received > 0 || open_for < STALL_AFTER {
+        Stall::Fine
+    } else if stalls + 1 >= MAX_STALLS {
+        Stall::GiveUp
+    } else {
+        Stall::Reopen
+    }
+}
+
 /// The audio input device of this computer that Pro Wave records from (Logic: Settings >
 /// Audio > Input Device). It belongs to the computer, not to a project. `default()` never
 /// touches the disk (used by tests); [`InputChoice::load`] is the real, remembered one.
@@ -110,6 +140,10 @@ struct Take {
 #[derive(Default)]
 pub struct AudioRecorder {
     capture: Option<Capture>,
+    /// When the open input was opened, to see whether it ever delivers audio.
+    opened_at: Option<std::time::Instant>,
+    /// Inputs that opened but delivered nothing since the user last changed something.
+    stalls: u8,
     /// Opening the input failed: not tried again until something changes.
     failed: bool,
     takes: Vec<Take>,
@@ -181,15 +215,27 @@ fn apply_take(
     r: usize,
     start: f64,
     file: AudioFile,
+    latency_frames: u64,
     ctx: &egui::Context,
 ) {
-    let end = p.tempo_map().advance(start, file.duration_secs());
+    // The take sounds late by the delay of the output and the input, so the region starts that
+    // far into the file. It never skips more than the file has: a short take, or a delay that
+    // is wrong, then costs some alignment instead of the whole recording.
+    let skip = if file.frames > latency_frames * 2 {
+        latency_frames
+    } else {
+        0
+    };
+    let kept = (file.frames - skip) as f64 / f64::from(file.sample_rate.max(1));
+    let end = p.tempo_map().advance(start, kept);
     let len_bars = (p.beats_to_bar(end) - p.beats_to_bar(start)) as f32;
     let name = p.tracks[t].name.clone();
     let region = &mut p.tracks[t].regions[r];
     region.name = name;
     region.len_bars = len_bars;
-    region.audio = Some(crate::import::audio_region(file, ctx));
+    let mut audio = crate::import::audio_region(file, ctx);
+    audio.start_frame = skip;
+    region.audio = Some(audio);
     p.song_rev += 1;
 }
 
@@ -234,7 +280,9 @@ impl AudioRecorder {
     pub fn forget_input(&mut self) {
         if self.takes.is_empty() {
             self.capture = None;
+            self.opened_at = None;
             self.failed = false;
+            self.stalls = 0;
             self.levels.clear();
         }
     }
@@ -256,12 +304,20 @@ impl AudioRecorder {
         let wanted = needs_input(p);
         if self.takes.is_empty() && (changed || !wanted) {
             self.capture = None;
+            self.opened_at = None;
             self.failed = false;
+            self.stalls = 0;
             self.levels.clear();
         }
         let mut error = None;
         if wanted && self.capture.is_none() && !self.failed {
-            match Capture::open(choice.device.as_deref()) {
+            // After an input that delivered nothing, the system's default is tried.
+            let device = if self.stalls > 0 {
+                None
+            } else {
+                choice.device.as_deref()
+            };
+            match Capture::open(device) {
                 Ok(capture) => {
                     tracing::info!(
                         "audio input {} ({} channels at {} Hz)",
@@ -270,10 +326,42 @@ impl AudioRecorder {
                         capture.sample_rate()
                     );
                     self.capture = Some(capture);
+                    self.opened_at = Some(std::time::Instant::now());
                 }
                 Err(e) => {
                     self.failed = true;
                     error = Some(trf("Cannot open the audio input: {}", &[&e]));
+                }
+            }
+        }
+        if self.takes.is_empty() {
+            if let (Some(capture), Some(since)) = (&self.capture, self.opened_at) {
+                match stall_action(capture.frames_received(), since.elapsed(), self.stalls) {
+                    Stall::Fine => {}
+                    Stall::Reopen => {
+                        tracing::warn!(
+                            "audio input {} delivered nothing in {} s; opening the default input",
+                            capture.device_name(),
+                            STALL_AFTER.as_secs()
+                        );
+                        self.stalls += 1;
+                        self.capture = None;
+                        self.opened_at = None;
+                        self.levels.clear();
+                    }
+                    Stall::GiveUp => {
+                        let name = capture.device_name().to_string();
+                        self.failed = true;
+                        self.capture = None;
+                        self.opened_at = None;
+                        self.levels.clear();
+                        error = Some(trf(
+                            "Cannot open the audio input: {}",
+                            &[&format!(
+                                "{name} sends no audio. Check the system's sound settings (the input device, its volume and the microphone permission)."
+                            )],
+                        ));
+                    }
                 }
             }
         }
@@ -393,7 +481,15 @@ impl AudioRecorder {
             };
             match (open, file) {
                 (true, Ok(file)) => {
-                    apply_take(p, take.track, take.region, take.start, file, ctx);
+                    apply_take(
+                        p,
+                        take.track,
+                        take.region,
+                        take.start,
+                        file,
+                        done.as_ref().map_or(0, |d| d.latency_frames),
+                        ctx,
+                    );
                     kept = Some((take.track, take.region));
                     if done.is_ok_and(|d| d.lost) {
                         warning = Some(tr("Part of the recording was lost").to_string());
@@ -535,13 +631,65 @@ mod tests {
         let rev = p.song_rev;
         assert!(is_open(&p, 0, 0));
         let file = AudioFile::open(&path).unwrap();
-        apply_take(&mut p, 0, 0, 4.0, file, &egui::Context::default());
+        apply_take(&mut p, 0, 0, 4.0, file, 0, &egui::Context::default());
         let region = &p.tracks[0].regions[0];
         assert_eq!(region.name, "Vox");
         assert!((region.len_bars - 1.0).abs() < 1e-3, "{}", region.len_bars);
         assert!(region.audio.is_some());
         assert!(!is_open(&p, 0, 0), "no longer being recorded");
         assert_eq!(p.song_rev, rev + 1, "the engine hears about it");
+    }
+
+    /// A two second file with a delay of `latency` frames.
+    fn take_with_latency(latency: u64) -> (Project, u64) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("take.wav");
+        prowave_engine::write_wav(&path, &vec![0.1; 48_000 * 2 * 2], 48_000).unwrap();
+        let mut p = project(&[TrackKind::Audio]);
+        p.tempo = 120.0;
+        p.tracks[0].regions.push(Region {
+            name: "*T".into(),
+            start_bar: 1.0,
+            len_bars: 0.01,
+            notes: Vec::new(),
+            controls: Vec::new(),
+            folder: None,
+            generated: None,
+            audio: None,
+            params: RegionParams::default(),
+        });
+        let file = AudioFile::open(&path).unwrap();
+        let frames = file.frames;
+        apply_take(&mut p, 0, 0, 0.0, file, latency, &egui::Context::default());
+        (p, frames)
+    }
+
+    #[test]
+    fn a_take_skips_the_delay_of_the_devices() {
+        let (p, _) = take_with_latency(2_400); // 50 ms
+        let audio = p.tracks[0].regions[0].audio.as_ref().unwrap();
+        assert_eq!(audio.start_frame, 2_400);
+    }
+
+    #[test]
+    fn a_delay_that_is_longer_than_the_take_does_not_empty_it() {
+        // The whole take is 2 s; a delay of 1.5 s (wrong, but it was reported) would leave
+        // 0.5 s, so nothing is skipped and the take is kept whole.
+        let (p, frames) = take_with_latency(72_000);
+        let region = &p.tracks[0].regions[0];
+        assert_eq!(region.audio.as_ref().unwrap().start_frame, 0);
+        assert_eq!(frames, 96_000);
+        assert!(region.len_bars > 0.9, "{}", region.len_bars);
+    }
+
+    #[test]
+    fn an_input_that_never_delivers_is_reopened_once_and_then_reported() {
+        use std::time::Duration;
+        let late = Duration::from_secs(3);
+        assert_eq!(stall_action(0, Duration::from_millis(500), 0), Stall::Fine);
+        assert_eq!(stall_action(480, late, 0), Stall::Fine, "it delivers");
+        assert_eq!(stall_action(0, late, 0), Stall::Reopen);
+        assert_eq!(stall_action(0, late, 1), Stall::GiveUp);
     }
 
     #[test]

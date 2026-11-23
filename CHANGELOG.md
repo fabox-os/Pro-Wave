@@ -3,6 +3,12 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### Fixed
+
+✅ **A take is never emptied by the input's delay, and a silent input is noticed:** a recording used to start that many frames late (the output delay plus the input's own delay, to line the take up with the song), and a delay that was wrong or longer than the take left a file with no audio and the message "no audio arrived from the input". The file now keeps everything from the moment you press record, and the region skips the delay inside it (the same alignment, but a wrong delay costs a little alignment, never the take; a take shorter than twice the delay is kept whole). An input that opens but sends no audio at all for two seconds is dropped for the system's default input, and if that is silent too the status line says so and names the input (check the system's input device and volume and, on Windows and macOS, the microphone permission). Choosing an input no longer fails when one of the audio systems on the computer (JACK, say) cannot list its inputs.
+
 ## 0.3.2
 
 A small release: Italian, a fix for recordings that came out empty on some sound cards, and downloaded Hydrogen drum kits. Everything in 0.3.1 is unchanged.
