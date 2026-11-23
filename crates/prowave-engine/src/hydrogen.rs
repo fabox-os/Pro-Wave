@@ -68,7 +68,13 @@ pub fn parse(xml: &[u8]) -> Result<Drumkit, String> {
     }
     let src = std::str::from_utf8(xml).map_err(|_| "the drumkit.xml is not UTF-8".to_string())?;
     let root = parse_xml(src)?;
-    let name = child(&root, "drumkit_info")
+    // The kit's own file has `<drumkit_info>` as its root; an older or wrapped one holds it.
+    let info = if root.name.eq_ignore_ascii_case("drumkit_info") {
+        Some(&root)
+    } else {
+        child(&root, "drumkit_info")
+    };
+    let name = info
         .and_then(|info| child(info, "name"))
         .map(text)
         .filter(|n| !n.is_empty())
@@ -88,7 +94,9 @@ pub fn parse(xml: &[u8]) -> Result<Drumkit, String> {
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("Instrument {}", index + 1));
         // Hydrogen 1.x names the note; older kits number their instruments from C1.
-        let note = child(node, "midi_out_note")
+        // Hydrogen writes the tag `midiOutNote`; `midi_out_note` is the older spelling.
+        let note = child(node, "midiOutNote")
+            .or_else(|| child(node, "midi_out_note"))
             .and_then(|n| text(n).parse::<i32>().ok())
             .filter(|n| (0..=127).contains(n))
             .map_or_else(
@@ -160,10 +168,10 @@ pub fn to_soundfont(kit: &Drumkit, base: &Path) -> Result<Vec<u8>, String> {
             let vel_lo = (layer.velocity.0 * 127.0).round().clamp(1.0, 127.0) as u8;
             let vel_hi = (layer.velocity.1 * 127.0).round().clamp(1.0, 127.0) as u8;
             // The sample plays at its recorded pitch on its own note; a gain below one is an
-            // attenuation (100 centibels to the decibel). A gain above one is left at 0 dB: the
+            // attenuation (a decibel is ten centibels, the SoundFont unit). A gain above one is left at 0 dB: the
             // player would clip it there anyway.
             let attenuation = if layer.gain < 1.0 {
-                (-2000.0 * layer.gain.max(0.004).log10()).round() as i16
+                (-200.0 * layer.gain.max(0.004).log10()).round() as i16
             } else {
                 0
             };
@@ -591,6 +599,46 @@ mod tests {
             0.0,
             "a note with no sample is silent"
         );
+    }
+
+    /// A kit as Hydrogen writes it: `<drumkit_info>` is the root, the notes are `midiOutNote`,
+    /// and most instruments have one layer. Such a kit played nothing: a zone's sample was not the
+    /// last generator, so a SoundFont reader took each one for a global zone.
+    #[test]
+    fn a_kit_in_hydrogens_own_layout_with_one_layer_each_plays() {
+        let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<drumkit_info>\n<name>Real Kit</name>\n\
+            <instrumentList>\n\
+            <instrument><id>0</id><name>Kick</name><midiOutChannel>-1</midiOutChannel><midiOutNote>36</midiOutNote>\
+            <layer><filename>kick.wav</filename><min>0</min><max>1</max><gain>1</gain></layer></instrument>\n\
+            <instrument><id>1</id><name>Snare</name><midiOutChannel>-1</midiOutChannel><midiOutNote>40</midiOutNote>\
+            <layer><filename>snare.wav</filename><min>0</min><max>1</max><gain>0.5</gain></layer></instrument>\n\
+            </instrumentList>\n</drumkit_info>\n";
+        let kit = parse(xml.as_bytes()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(kit.name, "Real Kit");
+        let notes: Vec<u8> = kit.instruments.iter().map(|i| i.note).collect();
+        assert_eq!(notes, [36, 40], "the notes come from midiOutNote");
+        let dir = kit_dir(
+            xml,
+            &[
+                ("kick.wav", wav(44_100, 220.0, 0.5)),
+                ("snare.wav", wav(44_100, 880.0, 0.5)),
+            ],
+        );
+        let bytes =
+            soundfont_bytes(&dir.path().join("drumkit.xml")).unwrap_or_else(|e| panic!("{e}"));
+        let bank = SoundFontBank::load(&bytes).unwrap_or_else(|e| panic!("{e}"));
+        let Some(preset) = bank.presets().iter().find(|p| p.bank == 128).cloned() else {
+            panic!("the kit is a drum preset");
+        };
+        for (note, label) in [(36, "kick"), (40, "snare")] {
+            let mut player =
+                SfPlayer::new(&bank, &preset, 48_000.0).unwrap_or_else(|e| panic!("{e}"));
+            player.note_on(note, 100);
+            assert!(energy(&mut player, 4_800) > 0.05, "the {label} sounds");
+        }
+        let mut other = SfPlayer::new(&bank, &preset, 48_000.0).unwrap_or_else(|e| panic!("{e}"));
+        other.note_on(38, 100);
+        assert_eq!(energy(&mut other, 4_800), 0.0, "note 38 has no sample");
     }
 
     #[test]

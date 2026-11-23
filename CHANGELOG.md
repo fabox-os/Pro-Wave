@@ -7,6 +7,10 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ### Fixed
 
+✅ **Hydrogen drum kits play (issue #182):** a kit loaded but made no sound. The SoundFont Pro Wave builds from a kit put each sample's reference before the zone's attenuation, and a SoundFont reader takes a zone whose last setting is not the sample for a global zone, so a kit whose instruments had one layer each (most of them) played nothing. The order is now the standard one. Also: the notes of a kit's instruments are read from Hydrogen's own `midiOutNote` tag (only the older `midi_out_note` was read, so instruments on notes other than 36, 37, 38… were on the wrong key), a kit's name is read when `<drumkit_info>` is the file's root, and a layer's gain is now applied (it was ignored, and would have been ten times too quiet).
+
+✅ **Musical Typing starts at the kit's pads on a drum track:** a drum kit has its pads from C1, and Musical Typing started at C3, so the keys played above the pads and nothing sounded. The first time a drum kit track (the Drum Machine, a Hydrogen kit or a SoundFont drum kit) is the selected track, the keyboard moves to C1; the octave keys still change it.
+
 ✅ **A take is never emptied by the input's delay, and a silent input is noticed:** a recording used to start that many frames late (the output delay plus the input's own delay, to line the take up with the song), and a delay that was wrong or longer than the take left a file with no audio and the message "no audio arrived from the input". The file now keeps everything from the moment you press record, and the region skips the delay inside it (the same alignment, but a wrong delay costs a little alignment, never the take; a take shorter than twice the delay is kept whole). An input that opens but sends no audio at all for two seconds is dropped for the system's default input, and if that is silent too the status line says so and names the input (check the system's input device and volume and, on Windows and macOS, the microphone permission). Choosing an input no longer fails when one of the audio systems on the computer (JACK, say) cannot list its inputs.
 
 ## 0.3.2
