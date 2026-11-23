@@ -130,6 +130,11 @@ pub struct Recorded {
     pub frames: u64,
     pub sample_rate: u32,
     pub channels: u16,
+    /// How many frames at the start of the file are the audio that went by before the sound the
+    /// performer heard reached the program (the output latency plus the input's own delay).
+    /// They are kept in the file, never cut: a region that skips them lines the take up with the
+    /// song, and a wrong delay then costs a little alignment, never the whole take.
+    pub latency_frames: u64,
     /// Audio was lost: the ring overflowed, the file filled up, or the disk failed. The file
     /// holds what was written before.
     pub lost: bool,
@@ -304,6 +309,7 @@ struct Rec {
     file: WavFile,
     /// The first frame of the stream that belongs to the recording.
     from_frame: u64,
+    latency_frames: u64,
     frames: u64,
     lost: bool,
     /// The file can take no more (full, or the disk failed).
@@ -336,6 +342,7 @@ impl Rec {
 
     fn finish(self) -> Result<Recorded, CaptureError> {
         let (path, frames, lost) = (self.path, self.frames, self.lost);
+        let latency_frames = self.latency_frames;
         let (channels, sample_rate) = (self.file.channels, self.file.sample_rate);
         self.file.finish()?;
         Ok(Recorded {
@@ -343,6 +350,7 @@ impl Rec {
             frames,
             sample_rate,
             channels,
+            latency_frames,
             lost,
         })
     }
@@ -354,6 +362,7 @@ enum Ctl {
         path: PathBuf,
         source: InputSource,
         from_frame: u64,
+        latency_frames: u64,
         reply: Sender<Result<(), CaptureError>>,
     },
     Stop {
@@ -429,16 +438,24 @@ fn writer_loop(
                 path,
                 source,
                 from_frame,
+                latency_frames,
                 reply,
             }) => {
-                let result =
-                    start_rec(&path, source, from_frame, channels, sample_rate).map(|mut rec| {
-                        // The part that went by before this message was handled.
-                        let have = (history.len() / channels) as u64;
-                        history.make_contiguous();
-                        rec.feed(consumed - have, history.as_slices().0, channels);
-                        recs.push((id, rec));
-                    });
+                let result = start_rec(
+                    &path,
+                    source,
+                    from_frame,
+                    latency_frames,
+                    channels,
+                    sample_rate,
+                )
+                .map(|mut rec| {
+                    // The part that went by before this message was handled.
+                    let have = (history.len() / channels) as u64;
+                    history.make_contiguous();
+                    rec.feed(consumed - have, history.as_slices().0, channels);
+                    recs.push((id, rec));
+                });
                 let _ = reply.send(result);
             }
             Some(Ctl::Stop { id, reply }) => {
@@ -468,6 +485,7 @@ fn start_rec(
     path: &Path,
     source: InputSource,
     from_frame: u64,
+    latency_frames: u64,
     channels: usize,
     sample_rate: u32,
 ) -> Result<Rec, CaptureError> {
@@ -482,6 +500,7 @@ fn start_rec(
         source,
         file: WavFile::create(path, source.file_channels(), sample_rate)?,
         from_frame,
+        latency_frames,
         frames: 0,
         lost: false,
         closed: false,
@@ -560,10 +579,12 @@ fn find_device(id: Option<&str>) -> Option<cpal::Device> {
     let hosts = hosts();
     if let Some(wanted) = id {
         for host in &hosts {
-            let found = host
-                .input_devices()
-                .ok()?
-                .find(|d| d.id().is_ok_and(|i| i.to_string() == wanted));
+            // A host that cannot list its inputs (JACK that is not running, say) is skipped, not
+            // the end of the search.
+            let Ok(mut devices) = host.input_devices() else {
+                continue;
+            };
+            let found = devices.find(|d| d.id().is_ok_and(|i| i.to_string() == wanted));
             if found.is_some() {
                 return found;
             }
@@ -708,8 +729,9 @@ impl Capture {
 
     /// Starts recording `source` into the WAV file `path`. `latency_us` is the delay of what
     /// the track is playing from the program to the ear (the output latency): a performer
-    /// plays along with what they hear, so the recording is cut that much later, plus the
-    /// input's own delay, which lines it up with the song. Returns the recording's id.
+    /// plays along with what they hear, so the take sounds that much late, plus the input's own
+    /// delay. The file keeps every frame from the moment of the call; the delay is reported in
+    /// [`Recorded::latency_frames`], for the region to skip. Returns the recording's id.
     pub fn start(
         &mut self,
         path: &Path,
@@ -718,8 +740,8 @@ impl Capture {
     ) -> Result<u32, CaptureError> {
         let total_us = plausible_latency(u64::from(latency_us))
             + plausible_latency(u64::from(self.shared.latency_us.load(Ordering::Relaxed)));
-        let skip = total_us * u64::from(self.sample_rate) / 1_000_000;
-        let from_frame = self.shared.frames_pushed.load(Ordering::Acquire) + skip;
+        let latency_frames = total_us * u64::from(self.sample_rate) / 1_000_000;
+        let from_frame = self.shared.frames_pushed.load(Ordering::Acquire);
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         let (reply, answer) = mpsc::channel();
@@ -731,6 +753,7 @@ impl Capture {
                 path: path.to_path_buf(),
                 source,
                 from_frame,
+                latency_frames,
                 reply,
             })
             .map_err(|_| CaptureError::Closed)?;
@@ -890,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn the_latency_is_cut_from_the_start() {
+    fn the_latency_is_reported_and_no_audio_is_cut() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("late.wav");
         let (mut cap, mut tx, shared) = fake(1, 48_000);
@@ -899,12 +922,12 @@ mod tests {
         push(&ramp(0, 1000, 1), 1, &mut tx, &shared);
         settle();
         let done = cap.stop(id).unwrap();
-        assert_eq!(done.frames, 520);
         assert_eq!(
-            read_back(&path)[0],
-            4800.0,
-            "frame 480 is the first one kept"
+            done.frames, 1000,
+            "the file holds everything that was played"
         );
+        assert_eq!(done.latency_frames, 480, "the region skips these");
+        assert_eq!(read_back(&path)[0], 0.0, "frame 0 is the first one kept");
     }
 
     #[test]
@@ -924,6 +947,7 @@ mod tests {
                 path: path.clone(),
                 source: InputSource::Mono(0),
                 from_frame: 150,
+                latency_frames: 0,
                 reply,
             })
             .unwrap();
@@ -1076,6 +1100,10 @@ mod tests {
         assert_eq!(cap.frames_received(), 48_000);
         let done = cap.stop(id).unwrap();
         assert_eq!(done.frames, 48_000, "every frame is kept");
+        assert_eq!(
+            done.latency_frames, 0,
+            "an absurd delay is taken as unknown"
+        );
     }
 
     #[test]
