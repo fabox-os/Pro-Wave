@@ -927,7 +927,8 @@ fn insert_slot(
         v.plugin_controls = false;
     }
     let mut act = None;
-main
+    // Clicks inside the slot's menu, such as on the picker's search field, keep it open; the
+    // items close it themselves when they are chosen.
     crate::plugin_picker::popup(&resp).show(|ui| {
         ui.set_min_width(150.0);
         if let Some(fx) = have {
