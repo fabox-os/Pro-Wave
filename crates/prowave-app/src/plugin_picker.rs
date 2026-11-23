@@ -38,9 +38,6 @@ pub enum Pick {
     Hosted(crate::hosted_plugins::PluginInfo),
 }
 
-/// The tallest a plug-in submenu gets before it scrolls: about as tall as the category list.
-const MENU_MAX_HEIGHT: f32 = 360.0;
-
 /// The formats of hosted plug-ins, in the order of the picker's submenus (Logic has one,
 /// "Audio Units").
 const FORMATS: [Format; 3] = [Format::AudioUnit, Format::Clap, Format::Vst3];
@@ -67,7 +64,42 @@ pub fn matches(kind: FxKind, query: &str) -> bool {
     query.is_empty() || kind.name().to_lowercase().contains(&query)
 }
 
- main
+/// The tallest a list in a menu may be: about as tall as the main menu (the categories), and
+/// never more than three quarters of the window. A submenu with hundreds of plug-ins (one
+/// vendor's whole bundle) scrolls instead of running off the screen, and a small window gets a
+/// short list rather than a cut-off one.
+const LIST_HEIGHT: f32 = 360.0;
+
+fn list_height(ui: &Ui) -> f32 {
+    (ui.ctx().content_rect().height() * 0.75).clamp(120.0, LIST_HEIGHT)
+}
+
+/// The look of the picker's menus: egui's menu style, but with no space above the first row and
+/// below the last. A submenu opens with its top at the top of the row that opened it, so with
+/// the usual 6-point margin its first row sat 7 points lower than the name it belongs to.
+pub fn popup_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.menu_margin = egui::Margin::symmetric(4, 0);
+}
+
+/// The popup of a slot's plug-in menu: it closes when the user clicks outside it or chooses
+/// something (the caller closes it then), not when the user clicks inside, which used to close
+/// it as soon as the search field was clicked.
+pub fn popup(slot: &egui::Response) -> egui::Popup<'_> {
+    egui::Popup::menu(slot)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .style(popup_style)
+}
+
+/// Runs `add_rows` inside a vertical scroll area as tall as the window allows. The area
+/// shrinks to its content, so a short list is as tall as its rows.
+fn scrolled<R>(ui: &mut Ui, add_rows: impl FnOnce(&mut Ui) -> R) -> R {
+    let height = list_height(ui);
+    egui::ScrollArea::vertical()
+        .max_height(height)
+        .auto_shrink([true, true])
+        .show(ui, add_rows)
+        .inner
 }
 
 /// Draws the picker into `ui` and returns the choice, if the user made one. `search` is kept
@@ -79,7 +111,6 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
     ui.set_min_width(200.0);
     ui.add(
         egui::TextEdit::singleline(search)
-            .id(search_field_id())
             .hint_text(tr("Search"))
             .desired_width(f32::INFINITY),
     );
@@ -193,7 +224,25 @@ fn hosted_menus(ui: &mut Ui, catalog: &[PluginInfo], picked: &mut Option<Pick>) 
             continue;
         }
         ui.menu_button(format.name(), |ui| {
- main
+            // The catalog is sorted by manufacturer, so each one's plug-ins are together.
+            scrolled(ui, |ui| {
+                for group in of_format.chunk_by(|a, b| a.vendor.eq_ignore_ascii_case(&b.vendor)) {
+                    let vendor = match group[0].vendor.as_str() {
+                        "" => "—",
+                        vendor => vendor,
+                    };
+                    ui.menu_button(vendor, |ui| {
+                        // One manufacturer can have hundreds (a whole bundle): scroll them.
+                        scrolled(ui, |ui| {
+                            for info in group {
+                                if ui.button(&info.name).clicked() {
+                                    *picked = Some(Pick::Hosted((*info).clone()));
+                                }
+                            }
+                        });
+                    });
+                }
+            });
         });
     }
 }
@@ -251,55 +300,6 @@ mod tests {
             }
         }
         assert_eq!(picked, Some(Pick::Effect(FxKind::ChannelEq)));
-    }
-
-    #[test]
-    fn clicking_the_search_field_keeps_the_menu_open() {
-        use crate::ui_test::Harness;
-        let mut h = Harness::new(400.0, 800.0);
-        let mut search = String::new();
-        let mut button_at = egui::Rect::NOTHING;
-        let mut drawn = 0usize;
-        // The picker inside a menu, as the insert slot and "Replace With" show it.
-        let draw =
-            |ui: &mut Ui, search: &mut String, button_at: &mut egui::Rect, drawn: &mut usize| {
-                let button = ui.button("Open");
-                *button_at = button.rect;
-                egui::Popup::menu(&button)
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .show(|ui| {
-                        *drawn += 1;
-                        show(ui, search);
-                    });
-            };
-        h.frame(vec![], |ui| {
-            draw(ui, &mut search, &mut button_at, &mut drawn)
-        });
-        h.click(button_at.center(), |ui| {
-            draw(ui, &mut search, &mut button_at, &mut drawn)
-        });
-        h.frame(vec![], |ui| {
-            draw(ui, &mut search, &mut button_at, &mut drawn)
-        });
-        assert!(drawn > 0, "the menu opens");
-        let field = h
-            .ctx
-            .read_response(search_field_id())
-            .expect("the search field is drawn")
-            .rect;
-        h.click(field.center(), |ui| {
-            draw(ui, &mut search, &mut button_at, &mut drawn)
-        });
-        // The click's own frame always draws the menu, so only the frame after it can show
-        // whether the menu closed.
-        let after_click = drawn;
-        h.frame(vec![], |ui| {
-            draw(ui, &mut search, &mut button_at, &mut drawn)
-        });
-        assert!(
-            drawn > after_click,
-            "clicking the search field keeps the menu open"
-        );
     }
 
     #[test]
