@@ -826,6 +826,118 @@ mod tests {
         p
     }
 
+    /// A Hydrogen kit as a real one is written: camel-case tags, a layer for each velocity,
+    /// samples next to the `drumkit.xml`.
+    fn write_kit(dir: &std::path::Path, note_tags: bool) {
+        // 16-bit stereo PCM, as most kits' samples are.
+        let tone = |hz: f32| -> Vec<u8> {
+            let mut data = Vec::new();
+            for i in 0..44_100 {
+                let v =
+                    ((i as f32 * hz * std::f32::consts::TAU / 44_100.0).sin() * 24_000.0) as i16;
+                data.extend_from_slice(&v.to_le_bytes());
+            }
+            let mut out = b"RIFF".to_vec();
+            out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+            out.extend_from_slice(b"WAVEfmt ");
+            out.extend_from_slice(&16u32.to_le_bytes());
+            out.extend_from_slice(&1u16.to_le_bytes());
+            out.extend_from_slice(&1u16.to_le_bytes());
+            out.extend_from_slice(&44_100u32.to_le_bytes());
+            out.extend_from_slice(&(44_100u32 * 2).to_le_bytes());
+            out.extend_from_slice(&2u16.to_le_bytes());
+            out.extend_from_slice(&16u16.to_le_bytes());
+            out.extend_from_slice(b"data");
+            out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            out.extend_from_slice(&data);
+            out
+        };
+        std::fs::write(dir.join("Kick.wav"), tone(60.0)).unwrap();
+        std::fs::write(dir.join("Snare.wav"), tone(200.0)).unwrap();
+        let note = |n: u8| {
+            if note_tags {
+                format!("<midiOutChannel>-1</midiOutChannel><midiOutNote>{n}</midiOutNote>")
+            } else {
+                String::new()
+            }
+        };
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<drumkit_info>\n<name>TestKit</name>\n\
+             <author>x</author><info>x</info><license>x</license>\n<instrumentList>\n\
+             <instrument><id>0</id><name>Kick</name><volume>1</volume><isMuted>false</isMuted>\
+             {} <exclude>-1</exclude>\
+             <layer><filename>Kick.wav</filename><min>0</min><max>1</max><gain>1</gain><pitch>0</pitch></layer>\
+             </instrument>\n\
+             <instrument><id>1</id><name>Snare</name><volume>1</volume><isMuted>false</isMuted>\
+             {} <exclude>-1</exclude>\
+             <layer><filename>Snare.wav</filename><min>0</min><max>1</max><gain>1</gain><pitch>0</pitch></layer>\
+             </instrument>\n</instrumentList>\n</drumkit_info>\n",
+            note(36),
+            note(38)
+        );
+        std::fs::write(dir.join("drumkit.xml"), xml).unwrap();
+    }
+
+    /// The project of a user who chose the kit at `xml` for the instrument track, with `pitch`
+    /// played once.
+    fn kit_project(xml: &std::path::Path, pitch: u8) -> Project {
+        let path = xml.to_string_lossy().into_owned();
+        let bank = crate::soundfonts::load(&path).unwrap();
+        let first = bank
+            .presets()
+            .first()
+            .map(|pr| (pr.bank, pr.program))
+            .unwrap();
+        let mut p = project_with(vec![region("Kit", 1.0, vec![note(pitch)])]);
+        p.tracks[0].soundfont = Some(crate::model::SoundFontUse {
+            path,
+            bank: first.0,
+            program: first.1,
+        });
+        p
+    }
+
+    fn loudest(samples: &[f32]) -> f32 {
+        samples.iter().fold(0.0, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn a_hydrogen_kit_plays_on_the_notes_of_its_instruments() {
+        for note_tags in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            write_kit(dir.path(), note_tags);
+            let xml = dir.path().join("drumkit.xml");
+            let kick = loudest(&render_of(&kit_project(&xml, 36), 2.0));
+            // A kit with no note tags numbers its instruments from C1: the snare is the next note.
+            let snare_note = if note_tags { 38 } else { 37 };
+            let snare = loudest(&render_of(&kit_project(&xml, snare_note), 2.0));
+            let off_the_kit = loudest(&render_of(&kit_project(&xml, 72), 2.0));
+            println!("note tags {note_tags}: kick {kick}, snare {snare}, note 72 {off_the_kit}");
+            assert!(kick > 0.05, "the kick is heard (note tags {note_tags})");
+            assert!(snare > 0.05, "the snare is heard (note tags {note_tags})");
+            assert!(off_the_kit < 1e-3, "a note outside the kit is silent");
+        }
+    }
+
+    #[test]
+    fn a_downloaded_h2drumkit_archive_plays_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let kit = dir.path().join("TestKit");
+        std::fs::create_dir_all(&kit).unwrap();
+        write_kit(&kit, true);
+        let archive = dir.path().join("TestKit.h2drumkit");
+        let gz = flate2::write::GzEncoder::new(
+            std::fs::File::create(&archive).unwrap(),
+            flate2::Compression::fast(),
+        );
+        let mut tar = tar::Builder::new(gz);
+        tar.append_dir_all("TestKit", &kit).unwrap();
+        tar.into_inner().unwrap().finish().unwrap();
+        let xml = crate::hydrogen_archive::unpack(&archive, &dir.path().join("kits")).unwrap();
+        let kick = loudest(&render_of(&kit_project(&xml, 36), 2.0));
+        assert!(kick > 0.05, "the unpacked kit plays ({kick})");
+    }
+
     #[test]
     fn a_bounce_runs_from_its_start_to_its_end_beat() {
         let running = bounced(4.0, 12.0);

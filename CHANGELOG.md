@@ -3,6 +3,14 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### Fixed
+
+✅ **Hydrogen drum kits play (issue #182):** a kit loaded but made no sound. The SoundFont Pro Wave builds from a kit put each sample's reference before the zone's attenuation, and a SoundFont reader takes a zone whose last setting is not the sample for a global zone, so a kit whose instruments had one layer each (most of them) played nothing. The order is now the standard one. Also: the notes of a kit's instruments are read from Hydrogen's own `midiOutNote` tag (only the older `midi_out_note` was read, so instruments on notes other than 36, 37, 38… were on the wrong key), a kit's name is read when `<drumkit_info>` is the file's root, and a layer's gain is now applied (it was ignored, and would have been ten times too quiet).
+
+✅ **Musical Typing starts at the kit's pads on a drum track:** a drum kit has its pads from C1, and Musical Typing started at C3, so the keys played above the pads and nothing sounded. The first time a drum kit track (the Drum Machine, a Hydrogen kit or a SoundFont drum kit) is the selected track, the keyboard moves to C1; the octave keys still change it.
+
 ## 0.3.2
 
 A small release: Italian, a fix for recordings that came out empty on some sound cards, and downloaded Hydrogen drum kits. Everything in 0.3.1 is unchanged.

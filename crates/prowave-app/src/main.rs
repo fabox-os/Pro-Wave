@@ -1577,6 +1577,17 @@ impl eframe::App for App {
             .tracks
             .get(self.project.selected_track)
             .map(|t| t.name.clone());
+        let drum_kit = self
+            .project
+            .tracks
+            .get(self.project.selected_track)
+            .is_some_and(|t| {
+                t.drums.is_some() || t.soundfont.as_ref().is_some_and(|sf| sf.bank == 128)
+            });
+        self.ui.typing.follow_track(
+            typed.as_ref().map(|_| self.project.selected_track),
+            drum_kit,
+        );
         musical_typing::show(&ctx, &mut self.ui.typing, typed.as_deref());
         drum_machine_ui::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);

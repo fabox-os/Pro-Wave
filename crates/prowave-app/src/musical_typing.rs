@@ -42,6 +42,9 @@ const NOTE_KEYS: [(Key, u8); 18] = [
 /// The modulation each of the keys 3 to 8 sets (the last is the maximum).
 const MODULATION: [u8; 6] = [0, 25, 51, 76, 102, 127];
 
+/// The octave of the lowest C of a drum kit's pads (C1 is note 36, the General MIDI kick).
+const DRUM_OCTAVE: i8 = 1;
+
 /// The lowest and highest octave of the lowest C (C-2 is note 0).
 pub const MIN_OCTAVE: i8 = -2;
 pub const MAX_OCTAVE: i8 = 7;
@@ -117,6 +120,9 @@ pub struct MusicalTyping {
     /// Whether the window is shown (and the keys are taken).
     pub open: bool,
     octave: i8,
+    /// The track Musical Typing last followed, so the octave is set once for a drum kit and
+    /// then left to the user.
+    followed: Option<usize>,
     velocity: u8,
     modulation: u8,
     /// Which of the pitch bend keys are held, so both held is the centre.
@@ -141,6 +147,7 @@ impl MusicalTyping {
         Self {
             open: false,
             octave: 3,
+            followed: None,
             velocity: 93,
             modulation: 0,
             bend_down: false,
@@ -154,6 +161,20 @@ impl MusicalTyping {
 
     pub fn octave(&self) -> i8 {
         self.octave
+    }
+
+    /// Tells Musical Typing which track is played. A drum kit (the Drum Machine, a Hydrogen kit
+    /// or a SoundFont drum kit) has its pads from C1, so the keyboard moves down to octave C1
+    /// the first time such a track is selected; at C3 (the first octave) the keys play above
+    /// the pads and nothing sounds. The user's own octave changes are kept afterwards.
+    pub fn follow_track(&mut self, track: Option<usize>, is_drum_kit: bool) {
+        if track == self.followed {
+            return;
+        }
+        self.followed = track;
+        if is_drum_kit && self.down.is_empty() {
+            self.octave = DRUM_OCTAVE;
+        }
     }
 
     pub fn velocity(&self) -> u8 {
@@ -1016,5 +1037,18 @@ mod tests {
         assert!(t.take().is_empty());
         t.open = false;
         h.frame(vec![], |ui| show(ui.ctx(), &mut t, Some("Inst 1")));
+    }
+
+    #[test]
+    fn a_drum_kit_moves_the_keyboard_to_its_pads_once() {
+        let mut t = MusicalTyping::new();
+        assert_eq!(t.octave(), 3);
+        t.follow_track(Some(0), false);
+        assert_eq!(t.octave(), 3, "a synth keeps C3");
+        t.follow_track(Some(1), true);
+        assert_eq!(t.octave(), 1, "a drum kit plays from C1");
+        t.press(Source::Key(Key::X), Action::OctaveUp);
+        t.follow_track(Some(1), true);
+        assert_eq!(t.octave(), 2, "the user's choice is kept on the same track");
     }
 }
