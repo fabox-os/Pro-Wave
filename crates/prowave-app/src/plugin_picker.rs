@@ -64,11 +64,31 @@ pub fn matches(kind: FxKind, query: &str) -> bool {
     query.is_empty() || kind.name().to_lowercase().contains(&query)
 }
 
-/// The tallest a list in a menu may be: three quarters of the window, so a submenu with
-/// hundreds of plug-ins (one vendor's whole bundle) scrolls instead of running off the screen,
-/// and a small window gets a short list rather than a cut-off one.
+/// The tallest a list in a menu may be: about as tall as the main menu (the categories), and
+/// never more than three quarters of the window. A submenu with hundreds of plug-ins (one
+/// vendor's whole bundle) scrolls instead of running off the screen, and a small window gets a
+/// short list rather than a cut-off one.
+const LIST_HEIGHT: f32 = 360.0;
+
 fn list_height(ui: &Ui) -> f32 {
-    (ui.ctx().content_rect().height() * 0.75).max(120.0)
+    (ui.ctx().content_rect().height() * 0.75).clamp(120.0, LIST_HEIGHT)
+}
+
+/// The look of the picker's menus: egui's menu style, but with no space above the first row and
+/// below the last. A submenu opens with its top at the top of the row that opened it, so with
+/// the usual 6-point margin its first row sat 7 points lower than the name it belongs to.
+pub fn popup_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.menu_margin = egui::Margin::symmetric(4, 0);
+}
+
+/// The popup of a slot's plug-in menu: it closes when the user clicks outside it or chooses
+/// something (the caller closes it then), not when the user clicks inside, which used to close
+/// it as soon as the search field was clicked.
+pub fn popup(slot: &egui::Response) -> egui::Popup<'_> {
+    egui::Popup::menu(slot)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .style(popup_style)
 }
 
 /// Runs `add_rows` inside a vertical scroll area as tall as the window allows. The area
@@ -331,5 +351,37 @@ mod tests {
             height = ui.cursor().top() - before;
         });
         assert!(height < 120.0, "three rows take {height} points");
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn clicking_the_search_field_keeps_the_menu_open() {
+        use crate::ui_test::Harness;
+        let mut h = Harness::new(600.0, 600.0);
+        let mut search = String::new();
+        let mut shown = 0;
+        let frame = |ui: &mut Ui, search: &mut String, shown: &mut u32| {
+            let slot = ui.interact(
+                egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(120.0, 20.0)),
+                egui::Id::new("slot"),
+                egui::Sense::click(),
+            );
+            popup(&slot).show(|ui| {
+                *shown += 1;
+                ui.add(egui::TextEdit::singleline(search).desired_width(f32::INFINITY));
+            });
+        };
+        h.click(egui::pos2(60.0, 30.0), |ui| {
+            frame(ui, &mut search, &mut shown)
+        });
+        h.settle(|ui| frame(ui, &mut search, &mut shown));
+        assert!(shown > 0, "the click on the slot opens the menu");
+        // The field is the first row of the menu, just under the slot.
+        for y in [46.0, 52.0, 58.0] {
+            h.click(egui::pos2(70.0, y), |ui| frame(ui, &mut search, &mut shown));
+        }
+        shown = 0;
+        h.settle(|ui| frame(ui, &mut search, &mut shown));
+        assert!(shown > 0, "clicking inside the menu left it open");
     }
 }

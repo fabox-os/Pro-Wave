@@ -927,7 +927,7 @@ fn insert_slot(
         v.plugin_controls = false;
     }
     let mut act = None;
-    egui::Popup::menu(&resp).show(|ui| {
+    crate::plugin_picker::popup(&resp).show(|ui| {
         ui.set_min_width(150.0);
         if let Some(fx) = have {
             if ui.button(tr("Open")).clicked() {
@@ -969,6 +969,9 @@ fn insert_slot(
         } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
             act = Some(InsertAct::Add(pick_insert(pick)));
             v.picker_search.clear();
+        }
+        // The menu stays open for clicks inside it (the search field), so a choice closes it.
+        if act.is_some() {
             ui.close();
         }
     });
