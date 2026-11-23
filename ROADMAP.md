@@ -238,7 +238,7 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
 #### Claude: everything else, in this order
 
 1. ✅ Tempo track, Marker track, Region gain / fades / reverse / normalize, compact menus,
-   17 languages (see the changelog).
+   18 languages (17 until 0.3.2 added Italian; see the changelog).
    ✅ 0.1.8: MIDI keyboard recording (with the sustain pedal), take folders from Cycle
    recording, the Event list (List Editors), updates from GitHub (check and install for each
    kind of install), Logic-accurate colours (regions, playhead, Piano Roll, sliders).
@@ -381,6 +381,16 @@ limitations at the end of the section). Still open, in the order the work would 
 - Split and Join on audio, Pattern and Drummer regions (audio needs a start offset into the file).
 - Hardware tests of MIDI output, MIDI clock and SysEx; native-speaker review of the translations.
 - Release 0.2.2 was tested on Ubuntu 26.04.1 LTS only; Windows and macOS builds are not tested for it.
+
+## Releases after 0.3.0
+
+- **0.3.1:** the Audio FX plug-in menu scrolls and keeps open on a click in its search field (issue #163),
+  VST3 bundles whose library has another name are found on Linux, the Library names only the
+  instruments a track plays (issue #167), Reverse Region works (issue #171).
+  Not done from #167: a Vintage B3 panel and Sampler content for the Library.
+- **0.3.2:** Italian (18 languages), recordings that came out empty because of an absurd reported
+  input delay, downloaded Hydrogen `.h2drumkit` kits can be chosen. Not tried on real input
+  hardware here: if a take is still empty, the message names the input and its frame count.
 
 ## Since 0.2.2 (2026-11-09; this is release 0.3.0)
 

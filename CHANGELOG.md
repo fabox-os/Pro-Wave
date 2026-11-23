@@ -3,27 +3,25 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
-## Unreleased
+## 0.3.2
+
+A small release: Italian, a fix for recordings that came out empty on some sound cards, and downloaded Hydrogen drum kits. Everything in 0.3.1 is unchanged.
+
+### New
+
+✅ **Italian:** *Help > Language* now has Italiano, with all 943 texts translated (thank you thelizardway). The longest labels in the Inspector and the Mixer were shortened so they fit. The wording has not been reviewed by a native speaker yet.
 
 ### Fixed
+
+✅ **Recording no longer ends empty on some sound cards (issue: "no audio arrived from the input"):** a take was cut that much later than the delay the audio system reported for the input, and some systems report a capture time on another clock, which came out as a delay of hours, so no sample ever belonged to the recording. A delay above half a second is now taken as unknown (nothing is cut). If a take still holds nothing, the message names the input and says how many frames it ever delivered (0 means the system never sent any audio: check the input in the system's sound settings and that the microphone is allowed and not muted).
 
 ✅ **Downloaded Hydrogen drum kits can be chosen:** **Choose Hydrogen Drum Kit…** only listed `drumkit.xml` files, so a kit as it is downloaded, a `.h2drumkit` file, never showed in the file window. The window now lists `.h2drumkit` files too; Pro Wave unpacks the one you pick into its own folder (`drumkits` next to the settings) and plays it from there. Unpacking is careful with files from the internet: names that leave the folder, links and archives of more than 4096 files or 1 GB are refused. A kit you unpacked yourself is still chosen by its `drumkit.xml`.
 
 ## 0.3.1
 
-
-### All systems (Windows, macOS, Linux)
-
-✅ **Plug-in menu fixes (issue #163):** clicking the plug-in search field no longer closes the Audio FX menu, and the format and manufacturer lists of installed CLAP, VST3 and Audio Unit plug-ins scroll instead of running off the screen.
-✅ **More VST3 plug-ins found on Linux (issue #163):** a VST3 bundle whose library has another name than the bundle (for example `DejaVu.vst3` holding `libdejavu.so`) was skipped without a message; it is now listed.
-✅ **Library names only what it plays (issue #167):** the Library's Sampler, Vintage B3, Alchemy, ES2 and E-Piano entries named an instrument that was never created; the sound is the built-in synth patch for each category. The mixer and Inspector now agree: a patch names no instrument, a new software instrument starts with none, and a Library drum kit still gets drum patterns. Not done: a Vintage B3 panel and Sampler content for the Library.
-✅ **Reverse Region works (issue #171):** Reverse Region in a region's right-click menu now changes what plays: the engine was not told to rebuild the song, so the clip kept playing forwards.
-=======
 A small release that fixes the plug-in menu and the Library's instrument names. Everything in 0.3.0 is unchanged.
 
 ### Fixed
-
-✅ **Recording no longer ends empty on some sound cards (issue: "no audio arrived from the input"):** a take was cut that much later than the delay the audio system reported for the input, and some systems report a capture time on another clock, which came out as a delay of hours, so no sample ever belonged to the recording. A delay above half a second is now taken as unknown (nothing is cut). If a take still holds nothing, the message names the input and says how many frames it ever delivered (0 means the system never sent any audio: check the input in the system's sound settings and that the microphone is allowed and not muted).
 
 ✅ **The plug-in menu scrolls and stays open (issue #163):** a submenu with hundreds of plug-ins (one manufacturer's whole VST3 bundle, for example) ran off the bottom of the screen and could not be scrolled. Every list in the Audio FX menu (the categories, the manufacturers, the formats, LADSPA and the search results) now scrolls and is about as tall as the main menu, never more than three quarters of the window, and a submenu opens level with the name that opened it (its first row sat 7 points too low). Clicking the search field no longer closes the menu: the menu closes when you choose something or click outside it. The search used to show only the first 24 plug-ins it found; it now lists all of them.
 
@@ -31,6 +29,7 @@ A small release that fixes the plug-in menu and the Library's instrument names. 
 
 ✅ **The Library names only the instruments a track plays (issue #167):** the Library's Sampler, Vintage B3, Alchemy, ES2, E-Piano and similar entries named an instrument the track did not get, so the mixer's instrument slot showed one that the Inspector could not open. A Library patch now keeps the track's own instrument label and plays the patch's sound, a new software instrument names no instrument until one is chosen, and a Library drum kit still gets a drum pattern. Saved projects that name a Library instrument load with no label. Not done: a Vintage B3 panel and Sampler content for the Library; those patches still play as synth sounds and no window opens for them. The Sampler itself opens from the Inspector (**SoundFont > Sampler**).
 
+✅ **Reverse Region works (issue #171):** Reverse Region in a region's right-click menu now changes what plays: the engine was not told to rebuild the song, so the clip kept playing forwards.
 
 ## 0.3.0
 
