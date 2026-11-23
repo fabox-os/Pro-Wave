@@ -27,6 +27,7 @@ mod groove;
 mod group_editor;
 mod groups;
 mod hosted_plugins;
+mod hydrogen_archive;
 mod i18n;
 mod import;
 mod inspector;

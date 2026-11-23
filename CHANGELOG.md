@@ -3,6 +3,12 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### Fixed
+
+✅ **Downloaded Hydrogen drum kits can be chosen:** **Choose Hydrogen Drum Kit…** only listed `drumkit.xml` files, so a kit as it is downloaded, a `.h2drumkit` file, never showed in the file window. The window now lists `.h2drumkit` files too; Pro Wave unpacks the one you pick into its own folder (`drumkits` next to the settings) and plays it from there. Unpacking is careful with files from the internet: names that leave the folder, links and archives of more than 4096 files or 1 GB are refused. A kit you unpacked yourself is still chosen by its `drumkit.xml`.
+
 ## 0.3.1
 
 
