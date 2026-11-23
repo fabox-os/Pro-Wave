@@ -1558,6 +1558,8 @@ fn apply_ctx(action: CtxAction, p: &mut Project, s: &mut UiState, lanes_w: f32) 
         CtxAction::ToggleReverse(t, r) => {
             if let Some(region) = p.tracks.get_mut(t).and_then(|t| t.regions.get_mut(r)) {
                 region.params.reverse = !region.params.reverse;
+                // The engine plays a clip's edits only after the song is rebuilt.
+                p.song_rev += 1;
             }
         }
         CtxAction::Normalize(t, r) => start_normalize(p, s, t, r),
@@ -4116,6 +4118,32 @@ mod row_tests {
         assert_eq!(TOOLS[PENCIL_TOOL], "Pencil Tool");
         assert_eq!(TOOLS[FADE_TOOL], "Fade Tool");
         assert_eq!(TOOLS[0], "Pointer Tool");
+    }
+
+    #[test]
+    fn reverse_region_tells_the_engine_to_rebuild_the_song() {
+        let (mut p, _dir) = project_with_wav(0.5);
+        let mut s = UiState::new();
+        let (ti, ri) = p
+            .tracks
+            .iter()
+            .enumerate()
+            .find_map(|(ti, t)| {
+                t.regions
+                    .iter()
+                    .position(|r| r.audio.is_some())
+                    .map(|ri| (ti, ri))
+            })
+            .expect("the imported audio region");
+        let rev = p.song_rev;
+        apply_ctx(CtxAction::ToggleReverse(ti, ri), &mut p, &mut s, 1000.0);
+        assert!(p.tracks[ti].regions[ri].params.reverse);
+        assert_ne!(p.song_rev, rev, "the engine must hear the reversed clip");
+        apply_ctx(CtxAction::ToggleReverse(ti, ri), &mut p, &mut s, 1000.0);
+        assert!(
+            !p.tracks[ti].regions[ri].params.reverse,
+            "a second pick turns it off"
+        );
     }
 
     #[test]

@@ -3,7 +3,8 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
-## Unreleased
+## 0.3.1
+
 
 ### All systems (Windows, macOS, Linux)
 
@@ -11,6 +12,17 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 ✅ **More VST3 plug-ins found on Linux (issue #163):** a VST3 bundle whose library has another name than the bundle (for example `DejaVu.vst3` holding `libdejavu.so`) was skipped without a message; it is now listed.
 ✅ **Library names only what it plays (issue #167):** the Library's Sampler, Vintage B3, Alchemy, ES2 and E-Piano entries named an instrument that was never created; the sound is the built-in synth patch for each category. The mixer and Inspector now agree: a patch names no instrument, a new software instrument starts with none, and a Library drum kit still gets drum patterns. Not done: a Vintage B3 panel and Sampler content for the Library.
 ✅ **Reverse Region works (issue #171):** Reverse Region in a region's right-click menu now changes what plays: the engine was not told to rebuild the song, so the clip kept playing forwards.
+=======
+A small release that fixes the plug-in menu and the Library's instrument names. Everything in 0.3.0 is unchanged.
+
+### Fixed
+
+✅ **The plug-in menu scrolls and stays open (issue #163):** a submenu with hundreds of plug-ins (one manufacturer's whole VST3 bundle, for example) ran off the bottom of the screen and could not be scrolled. Every list in the Audio FX menu (the categories, the manufacturers, the formats, LADSPA and the search results) now scrolls and is about as tall as the main menu, never more than three quarters of the window, and a submenu opens level with the name that opened it (its first row sat 7 points too low). Clicking the search field no longer closes the menu: the menu closes when you choose something or click outside it. The search used to show only the first 24 plug-ins it found; it now lists all of them.
+
+✅ **More VST3 plug-ins found on Linux (issue #163):** a VST3 bundle whose library has another name than the bundle (for example `DejaVu.vst3` holding `libdejavu.so`) was skipped without a message; it is now listed.
+
+✅ **The Library names only the instruments a track plays (issue #167):** the Library's Sampler, Vintage B3, Alchemy, ES2, E-Piano and similar entries named an instrument the track did not get, so the mixer's instrument slot showed one that the Inspector could not open. A Library patch now keeps the track's own instrument label and plays the patch's sound, a new software instrument names no instrument until one is chosen, and a Library drum kit still gets a drum pattern. Saved projects that name a Library instrument load with no label. Not done: a Vintage B3 panel and Sampler content for the Library; those patches still play as synth sounds and no window opens for them. The Sampler itself opens from the Inspector (**SoundFont > Sampler**).
+
 
 ## 0.3.0
 

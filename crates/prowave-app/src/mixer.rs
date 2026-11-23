@@ -927,47 +927,55 @@ fn insert_slot(
         v.plugin_controls = false;
     }
     let mut act = None;
- main
-                    ui.close();
-                }
-                if fx.hosted != 0 && ui.button(tr("Controls")).clicked() {
-                    act = Some(InsertAct::Controls);
-                    ui.close();
-                }
-                if ui.selectable_label(fx.bypass, tr("Bypass")).clicked() {
-                    act = Some(InsertAct::Bypass);
-                    ui.close();
-                }
-                ui.add_enabled_ui(k > 0, |ui| {
-                    if ui.button(tr("Move Up")).clicked() {
-                        act = Some(InsertAct::Move(-1));
-                        ui.close();
-                    }
-                });
-                ui.add_enabled_ui(k + 1 < count, |ui| {
-                    if ui.button(tr("Move Down")).clicked() {
-                        act = Some(InsertAct::Move(1));
-                        ui.close();
-                    }
-                });
-                ui.separator();
-                ui.menu_button(tr("Replace With"), |ui| {
-                    if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-                        act = Some(InsertAct::Replace(pick_insert(pick)));
-                        v.picker_search.clear();
-                        ui.close();
-                    }
-                });
-                if ui.button(tr("Remove")).clicked() {
-                    act = Some(InsertAct::Remove);
-                    ui.close();
-                }
-            } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-                act = Some(InsertAct::Add(pick_insert(pick)));
-                v.picker_search.clear();
+main
+    crate::plugin_picker::popup(&resp).show(|ui| {
+        ui.set_min_width(150.0);
+        if let Some(fx) = have {
+            if ui.button(tr("Open")).clicked() {
+                act = Some(InsertAct::Open);
                 ui.close();
             }
-main
+            if fx.hosted != 0 && ui.button(tr("Controls")).clicked() {
+                act = Some(InsertAct::Controls);
+                ui.close();
+            }
+            if ui.selectable_label(fx.bypass, tr("Bypass")).clicked() {
+                act = Some(InsertAct::Bypass);
+                ui.close();
+            }
+            ui.add_enabled_ui(k > 0, |ui| {
+                if ui.button(tr("Move Up")).clicked() {
+                    act = Some(InsertAct::Move(-1));
+                    ui.close();
+                }
+            });
+            ui.add_enabled_ui(k + 1 < count, |ui| {
+                if ui.button(tr("Move Down")).clicked() {
+                    act = Some(InsertAct::Move(1));
+                    ui.close();
+                }
+            });
+            ui.separator();
+            ui.menu_button(tr("Replace With"), |ui| {
+                if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
+                    act = Some(InsertAct::Replace(pick_insert(pick)));
+                    v.picker_search.clear();
+                    ui.close();
+                }
+            });
+            if ui.button(tr("Remove")).clicked() {
+                act = Some(InsertAct::Remove);
+                ui.close();
+            }
+        } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
+            act = Some(InsertAct::Add(pick_insert(pick)));
+            v.picker_search.clear();
+        }
+        // The menu stays open for clicks inside it (the search field), so a choice closes it.
+        if act.is_some() {
+            ui.close();
+        }
+    });
     if let Some(act) = act {
         apply_insert(p, v, i, k, act);
     }
