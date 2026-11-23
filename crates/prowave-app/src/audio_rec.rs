@@ -692,6 +692,61 @@ mod tests {
         assert_eq!(stall_action(0, late, 1), Stall::GiveUp);
     }
 
+    /// The same path as the running program, on real hardware: the output engine plays, the
+    /// transport and the engine are synchronised every frame, the armed track records. Needs an
+    /// audio input and output: `cargo test -p prowave-app records_with_the_engine_playing --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs an audio input and output device"]
+    fn records_with_the_engine_playing() {
+        let ctx = egui::Context::default();
+        let mut p = project(&[TrackKind::Audio]);
+        p.tracks[0].name = "Vox".into();
+        p.tracks[0].rec = true;
+        p.count_in = std::env::var("COUNT_IN").is_ok();
+        let engine = prowave_engine::Engine::start_on(None, None).unwrap();
+        let mut sync = crate::engine_sync::EngineSync::new(engine, &p);
+        let (mut rec, mut choice) = (AudioRecorder::default(), InputChoice::default());
+        let mut frame = |p: &mut Project, rec: &mut AudioRecorder, choice: &mut InputChoice| {
+            sync.sync(p);
+            let latency = sync.engine.state().output_latency_us;
+            let out = rec.update(choice, p, latency, &ctx);
+            if let Some(feed) = rec.take_feed() {
+                sync.engine
+                    .send(prowave_engine::Command::SetInput(Some(feed)));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            (out, latency)
+        };
+        for _ in 0..10 {
+            frame(&mut p, &mut rec, &mut choice);
+        }
+        p.recording = true;
+        p.playing = true;
+        let mut latency = 0;
+        let frames = if p.count_in { 300 } else { 80 };
+        for _ in 0..frames {
+            let (out, l) = frame(&mut p, &mut rec, &mut choice);
+            latency = l;
+            assert_eq!(out, Outcome::Nothing);
+        }
+        println!(
+            "output latency {latency} us, playing={} recording={} position={}",
+            p.playing, p.recording, p.position_beats
+        );
+        assert!(p.playing && p.recording && rec.active(), "still recording");
+        p.playing = false;
+        let (out, _) = frame(&mut p, &mut rec, &mut choice);
+        println!("outcome {out:?}");
+        assert!(matches!(out, Outcome::Finished(Some(_), _)), "{out:?}");
+        let audio = p.tracks[0].regions[0].audio.as_ref().unwrap();
+        println!(
+            "recorded {} frames, region starts {} frames in",
+            audio.file.frames, audio.start_frame
+        );
+        assert!(audio.file.duration_secs() > 0.8);
+    }
+
     #[test]
     fn a_region_that_was_deleted_is_not_written_to() {
         let p = project(&[TrackKind::Audio]);
