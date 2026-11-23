@@ -5,6 +5,14 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ## 0.3.1
 
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Plug-in menu fixes (issue #163):** clicking the plug-in search field no longer closes the Audio FX menu, and the format and manufacturer lists of installed CLAP, VST3 and Audio Unit plug-ins scroll instead of running off the screen.
+✅ **More VST3 plug-ins found on Linux (issue #163):** a VST3 bundle whose library has another name than the bundle (for example `DejaVu.vst3` holding `libdejavu.so`) was skipped without a message; it is now listed.
+✅ **Library names only what it plays (issue #167):** the Library's Sampler, Vintage B3, Alchemy, ES2 and E-Piano entries named an instrument that was never created; the sound is the built-in synth patch for each category. The mixer and Inspector now agree: a patch names no instrument, a new software instrument starts with none, and a Library drum kit still gets drum patterns. Not done: a Vintage B3 panel and Sampler content for the Library.
+✅ **Reverse Region works (issue #171):** Reverse Region in a region's right-click menu now changes what plays: the engine was not told to rebuild the song, so the clip kept playing forwards.
+=======
 A small release that fixes the plug-in menu and the Library's instrument names. Everything in 0.3.0 is unchanged.
 
 ### Fixed
@@ -14,6 +22,7 @@ A small release that fixes the plug-in menu and the Library's instrument names. 
 ✅ **More VST3 plug-ins found on Linux (issue #163):** a VST3 bundle whose library has another name than the bundle (for example `DejaVu.vst3` holding `libdejavu.so`) was skipped without a message; it is now listed.
 
 ✅ **The Library names only the instruments a track plays (issue #167):** the Library's Sampler, Vintage B3, Alchemy, ES2, E-Piano and similar entries named an instrument the track did not get, so the mixer's instrument slot showed one that the Inspector could not open. A Library patch now keeps the track's own instrument label and plays the patch's sound, a new software instrument names no instrument until one is chosen, and a Library drum kit still gets a drum pattern. Saved projects that name a Library instrument load with no label. Not done: a Vintage B3 panel and Sampler content for the Library; those patches still play as synth sounds and no window opens for them. The Sampler itself opens from the Inspector (**SoundFont > Sampler**).
+
 
 ## 0.3.0
 
