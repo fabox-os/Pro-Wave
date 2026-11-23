@@ -238,7 +238,7 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
 #### Claude: everything else, in this order
 
 1. ✅ Tempo track, Marker track, Region gain / fades / reverse / normalize, compact menus,
-   17 languages (see the changelog).
+   18 languages (17 until 0.3.2 added Italian; see the changelog).
    ✅ 0.1.8: MIDI keyboard recording (with the sustain pedal), take folders from Cycle
    recording, the Event list (List Editors), updates from GitHub (check and install for each
    kind of install), Logic-accurate colours (regions, playhead, Piano Roll, sliders).
@@ -381,6 +381,16 @@ limitations at the end of the section). Still open, in the order the work would 
 - Split and Join on audio, Pattern and Drummer regions (audio needs a start offset into the file).
 - Hardware tests of MIDI output, MIDI clock and SysEx; native-speaker review of the translations.
 - Release 0.2.2 was tested on Ubuntu 26.04.1 LTS only; Windows and macOS builds are not tested for it.
+
+## Releases after 0.3.0
+
+- **0.3.1:** the Audio FX plug-in menu scrolls and keeps open on a click in its search field (issue #163),
+  VST3 bundles whose library has another name are found on Linux, the Library names only the
+  instruments a track plays (issue #167), Reverse Region works (issue #171).
+  Not done from #167: a Vintage B3 panel and Sampler content for the Library.
+- **0.3.2:** Italian (18 languages), recordings that came out empty because of an absurd reported
+  input delay, downloaded Hydrogen `.h2drumkit` kits can be chosen. Not tried on real input
+  hardware here: if a take is still empty, the message names the input and its frame count.
 
 ## Since 0.2.2 (2026-11-09; this is release 0.3.0)
 
@@ -597,7 +607,7 @@ test of all the features above on Windows and macOS.
 
 ---
 
-## 3b. Controls that do nothing yet (checked 2026-10-30)
+## 3b. Controls that do nothing yet (checked 2026-11-23)
 
 Everything here can be seen in the app but has no effect. All of it is greyed or dimmed, so a
 click never silently does nothing. The controls that looked active and did nothing were built
@@ -607,8 +617,12 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - File: Close, Save as Template, Alternatives, Page Setup,
   Print, Movie, Export of audio (Selection as MIDI File, Score as MusicXML and Track as Audio File
   work), Share, Open in Sound Library Manager, Project Alternatives (done since 0.2.2: Import
-  Audio File, Other Projects for GarageBand audio, Bounce, Show in File Manager, Rename Project)
+  Audio File, Other Projects for GarageBand audio, Bounce, Show in File Manager, Rename Project;
+  since 0.3.0: Import of MusicXML, Guitar Pro, Hydrogen Song, REX Loop and Logic Pro `.logicx`
+  projects, File > Open of a `.logicx`, Bounce to FLAC)
 - Track: Show Chord / Arrangement Track (both need new data: chord events and sections)
+  (done since 0.3.0: Create Track Stack and Release Track Stack, which need two or more selected
+  tracks)
 - Navigate: Go to Position
 - Record: New Take, Delete Take (done since 0.2.2: Record / Record Repeat, Record Toggle,
   Record Enable, Bounce In Place, Record Project Settings)
@@ -618,11 +632,11 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - View: all automation entries, Advanced Tools, Smart Controls, Score Editor, Step Sequencer,
   Session Player, Flex Editor, Performers, Movie, Customize Toolbar, Track Header, Ruler, Global
   Tracks, Colors, Markers, Grid, Smart Tempo, Enter Full Screen
-- Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
-  Bring All to Front
+- Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Video, Bring All to Front
+  (done since 0.3.0: Plugin Manager, Show Musical Typing)
 - Help: Key Commands, About Pro Wave
 - Tracks area: Functions (Convert to New Sampler Track), View (Show Global Tracks,
-  every tool except Pointer and Fade, waveform zoom buttons
+  every tool except Pointer, Fade and Pencil (Pencil is done since 0.3.0), waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo
 - Mixer: Select Audio Channel Strips, Create New Output Channel Strip, Show Signal Flow
 - Inspector: Channel, Freeze Mode, Q-Reference, Flex Mode, MIDI In Port and Channel, and the
