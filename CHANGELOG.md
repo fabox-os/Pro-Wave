@@ -3,6 +3,13 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
+## Unreleased
+
+### All systems (Windows, macOS, Linux)
+
+✅ **Plug-in menu fixes (issue #163):** clicking the plug-in search field no longer closes the Audio FX menu, and the format and manufacturer lists of installed CLAP, VST3 and Audio Unit plug-ins scroll instead of running off the screen.
+✅ **More VST3 plug-ins found on Linux (issue #163):** a VST3 bundle whose library has another name than the bundle (for example `DejaVu.vst3` holding `libdejavu.so`) was skipped without a message; it is now listed.
+
 ## 0.3.0
 
 ### All systems (Windows, macOS, Linux)
