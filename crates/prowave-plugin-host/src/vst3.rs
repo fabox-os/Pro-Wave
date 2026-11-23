@@ -1073,12 +1073,49 @@ fn library_file(path: &Path) -> Option<PathBuf> {
     } else {
         (format!("{arch}-linux"), "so")
     };
-    let file = path
-        .join("Contents")
-        .join(folder)
-        .join(stem)
-        .with_extension(ext);
-    file.is_file().then_some(file)
+    let dir = path.join("Contents").join(folder);
+    let named = dir.join(stem).with_extension(ext);
+    if named.is_file() {
+        return Some(named);
+    }
+    // Many bundles name their library differently from the bundle (`Dragonfly.vst3` holding
+    // `libdragonfly.so`); the bundle's library is then the one file of that kind in its folder.
+    let mut libs: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|p| p.is_file() && p.extension().and_then(|e| e.to_str()) == Some(ext))
+        .collect();
+    libs.sort();
+    libs.into_iter().next()
+}
+
+#[cfg(all(test, unix, not(target_os = "macos")))]
+mod bundle_tests {
+    use super::library_file;
+
+    #[test]
+    fn a_bundle_whose_library_has_another_name_still_finds_its_library() -> std::io::Result<()> {
+        let root = std::env::temp_dir().join(format!("prowave-vst3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let arch = std::env::consts::ARCH;
+        let bundle = root.join("DejaVu.vst3");
+        let folder = bundle.join("Contents").join(format!("{arch}-linux"));
+        std::fs::create_dir_all(&folder)?;
+        std::fs::write(folder.join("libdejavu.so"), b"not really a library")?;
+        assert_eq!(library_file(&bundle), Some(folder.join("libdejavu.so")));
+
+        // The library named after the bundle is preferred when there is one.
+        std::fs::write(folder.join("DejaVu.so"), b"x")?;
+        assert_eq!(library_file(&bundle), Some(folder.join("DejaVu.so")));
+
+        // A bundle with no library at all is not a plug-in.
+        let empty = root.join("Empty.vst3");
+        std::fs::create_dir_all(empty.join("Contents"))?;
+        assert_eq!(library_file(&empty), None);
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]
