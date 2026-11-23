@@ -927,15 +927,7 @@ fn insert_slot(
         v.plugin_controls = false;
     }
     let mut act = None;
-    // Clicks inside the slot's menu, such as on the picker's search field, keep it open; the
-    // items close it themselves when they are chosen.
-    egui::Popup::menu(&resp)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| {
-            ui.set_min_width(150.0);
-            if let Some(fx) = have {
-                if ui.button(tr("Open")).clicked() {
-                    act = Some(InsertAct::Open);
+ main
                     ui.close();
                 }
                 if fx.hosted != 0 && ui.button(tr("Controls")).clicked() {
@@ -975,7 +967,7 @@ fn insert_slot(
                 v.picker_search.clear();
                 ui.close();
             }
-        });
+main
     if let Some(act) = act {
         apply_insert(p, v, i, k, act);
     }
