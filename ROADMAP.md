@@ -597,7 +597,7 @@ test of all the features above on Windows and macOS.
 
 ---
 
-## 3b. Controls that do nothing yet (checked 2026-10-30)
+## 3b. Controls that do nothing yet (checked 2026-11-23)
 
 Everything here can be seen in the app but has no effect. All of it is greyed or dimmed, so a
 click never silently does nothing. The controls that looked active and did nothing were built
@@ -607,8 +607,12 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - File: Close, Save as Template, Alternatives, Page Setup,
   Print, Movie, Export of audio (Selection as MIDI File, Score as MusicXML and Track as Audio File
   work), Share, Open in Sound Library Manager, Project Alternatives (done since 0.2.2: Import
-  Audio File, Other Projects for GarageBand audio, Bounce, Show in File Manager, Rename Project)
+  Audio File, Other Projects for GarageBand audio, Bounce, Show in File Manager, Rename Project;
+  since 0.3.0: Import of MusicXML, Guitar Pro, Hydrogen Song, REX Loop and Logic Pro `.logicx`
+  projects, File > Open of a `.logicx`, Bounce to FLAC)
 - Track: Show Chord / Arrangement Track (both need new data: chord events and sections)
+  (done since 0.3.0: Create Track Stack and Release Track Stack, which need two or more selected
+  tracks)
 - Navigate: Go to Position
 - Record: New Take, Delete Take (done since 0.2.2: Record / Record Repeat, Record Toggle,
   Record Enable, Bounce In Place, Record Project Settings)
@@ -618,11 +622,11 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - View: all automation entries, Advanced Tools, Smart Controls, Score Editor, Step Sequencer,
   Session Player, Flex Editor, Performers, Movie, Customize Toolbar, Track Header, Ruler, Global
   Tracks, Colors, Markers, Grid, Smart Tempo, Enter Full Screen
-- Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
-  Bring All to Front
+- Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Video, Bring All to Front
+  (done since 0.3.0: Plugin Manager, Show Musical Typing)
 - Help: Key Commands, About Pro Wave
 - Tracks area: Functions (Convert to New Sampler Track), View (Show Global Tracks,
-  every tool except Pointer and Fade, waveform zoom buttons
+  every tool except Pointer, Fade and Pencil (Pencil is done since 0.3.0), waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo
 - Mixer: Select Audio Channel Strips, Create New Output Channel Strip, Show Signal Flow
 - Inspector: Channel, Freeze Mode, Q-Reference, Flex Mode, MIDI In Port and Channel, and the
