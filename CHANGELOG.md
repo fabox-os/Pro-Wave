@@ -3,7 +3,9 @@
 What changed in each Pro Wave release. The release workflow copies the section of the version
 being released into the GitHub Release notes, so keep one `## <version>` heading per release.
 
-## Unreleased
+## 0.3.3
+
+A small release: Hydrogen drum kits make sound, and recording no longer ends empty because of the device delay. Everything in 0.3.2 is unchanged.
 
 ### Fixed
 

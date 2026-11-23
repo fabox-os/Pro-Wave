@@ -391,6 +391,11 @@ limitations at the end of the section). Still open, in the order the work would 
 - **0.3.2:** Italian (18 languages), recordings that came out empty because of an absurd reported
   input delay, downloaded Hydrogen `.h2drumkit` kits can be chosen. Not tried on real input
   hardware here: if a take is still empty, the message names the input and its frame count.
+- **0.3.3:** Hydrogen drum kits make sound (the SoundFont built from a kit had its sample reference
+  in the wrong place, so kits with one layer per instrument were silent), Musical Typing starts at C1
+  on a drum track, and a recorded take keeps every frame (the device delay is skipped by the
+  region, so a wrong delay cannot empty a take) and a silent input is noticed. Recording is not
+  tried on real Windows or macOS microphones here.
 
 ## Since 0.2.2 (2026-11-09; this is release 0.3.0)
 
