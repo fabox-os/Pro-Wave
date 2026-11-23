@@ -5,9 +5,6 @@ being released into the GitHub Release notes, so keep one `## <version>` heading
 
 ## Unreleased
 
-### Fixed
-
-✅ **The plug-in picker scrolls and stays open (issue #163):** a submenu with hundreds of plug-ins (one manufacturer's whole VST3 bundle, for example) ran off the bottom of the screen and could not be scrolled. Every list in the picker (the categories, the manufacturers, the formats, LADSPA and the search results) now scrolls and is about as tall as the main menu, never more than three quarters of the window, and a submenu opens level with the name that opened it (its first row sat 7 points too low). Clicking the search field no longer closes the menu: the menu closes when you choose something or click outside it. The search used to show only the first 24 plug-ins it found; it now lists all of them.
 
 ## 0.3.0
 
