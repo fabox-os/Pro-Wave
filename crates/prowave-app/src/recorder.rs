@@ -108,12 +108,8 @@ fn record_track(p: &Project) -> Option<usize> {
 
 /// Call once per frame with the notes played since the last one.
 pub fn update(rec: &mut Recorder, p: &mut Project, input: &[LiveNote]) -> Outcome {
-    // Track whether count-in has started, so we allow recording after it finishes.
-    let count_in_started = p.counting_in || rec.count_in_started;
-    rec.count_in_started = count_in_started;
-    // Don't start recording if count-in is enabled but hasn't begun yet.
-    let count_in_pending = p.count_in && !p.counting_in && !count_in_started;
-    let want = p.recording && p.playing && !p.counting_in && !count_in_pending;
+    let active = rec.active();
+    let want = crate::count_in::wants_recording(p, &mut rec.count_in_started, active);
     remember_played(rec, p, input, want);
     let pedal_before = rec.pedal;
     for ev in input {
@@ -773,6 +769,42 @@ mod tests {
         p.counting_in = true;
         assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
         assert!(!rec.active());
+        p.counting_in = false;
+        assert!(matches!(
+            update(&mut rec, &mut p, &[]),
+            Outcome::Started(..)
+        ));
+    }
+
+    #[test]
+    fn an_aborted_count_in_does_not_start_the_next_recording_early() {
+        let mut p = project();
+        p.count_in = true;
+        let mut rec = Recorder::default();
+
+        // First attempt: the count-in starts, then the user stops before a take begins.
+        p.recording = true;
+        p.playing = true;
+        p.counting_in = true;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
+        p.playing = false;
+        p.recording = false;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
+
+        // The next attempt, in the frame before sync sends CountIn, must still wait.
+        p.recording = true;
+        p.playing = true;
+        p.counting_in = false;
+        assert_eq!(
+            update(&mut rec, &mut p, &[]),
+            Outcome::Nothing,
+            "a stale count-in must not start a take"
+        );
+        assert!(!rec.active());
+
+        // It starts only when the new count-in has finished.
+        p.counting_in = true;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
         p.counting_in = false;
         assert!(matches!(
             update(&mut rec, &mut p, &[]),
