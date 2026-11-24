@@ -12,6 +12,7 @@
 //! [`channel_strip`] is also used by the Inspector's two strips.
 use crate::i18n::{tr, trf};
 use crate::model::{AutoMode, AutoTarget, Insert, Project, SendSlot, TrackKind, MAX_SENDS};
+use crate::plugin_ui_prefs::PluginUiMode;
 use crate::widgets::{
     back_chevron, menu_title, popup_button, stroke, todo_item, BLUE, TEXT, TEXT_DIM,
 };
@@ -97,9 +98,10 @@ pub struct MixerView {
     pub picker_search: String,
     /// The text in a hosted plug-in window's parameter search field (see `fx_ui`).
     pub plugin_search: String,
-    /// A hosted plug-in is shown as its Controls (the sliders) and not in its own window:
-    /// Logic's View > Controls instead of View > Editor.
-    pub plugin_controls: bool,
+    /// The saved view for hosted plug-ins: sliders (the portable default) or their own editor.
+    pub(crate) preferred_plugin_ui: PluginUiMode,
+    /// A one-off view chosen from an insert's menu, overriding the saved preference until Open.
+    pub(crate) plugin_view_override: Option<PluginUiMode>,
     /// The hosted plug-in whose own window was asked for (see `fx_ui`).
     pub plugin_editor: Option<crate::fx_ui::EditorWindow>,
 }
@@ -113,8 +115,18 @@ pub struct CopiedStrip {
     pan: f32,
 }
 
-impl Default for MixerView {
-    fn default() -> Self {
+impl MixerView {
+    /// A mixer whose hosted plug-ins open in `mode`, with no one-off view chosen yet.
+    pub(crate) fn with_plugin_ui(mode: PluginUiMode) -> Self {
+        Self {
+            preferred_plugin_ui: mode,
+            plugin_view_override: None,
+            ..Self::unconfigured()
+        }
+    }
+
+    /// The fields that do not depend on the saved plug-in view.
+    fn unconfigured() -> Self {
         Self {
             mode: MixerMode::Tracks,
             filters: [true; 8],
@@ -128,9 +140,16 @@ impl Default for MixerView {
             inputs: crate::audio_rec::InputChoice::default(),
             picker_search: String::new(),
             plugin_search: String::new(),
-            plugin_controls: false,
+            preferred_plugin_ui: PluginUiMode::default(),
+            plugin_view_override: None,
             plugin_editor: None,
         }
+    }
+}
+
+impl Default for MixerView {
+    fn default() -> Self {
+        Self::with_plugin_ui(crate::plugin_ui_prefs::load())
     }
 }
 
@@ -924,7 +943,7 @@ fn insert_slot(
     }
     if have.is_some() && resp.double_clicked() {
         v.fx_window = Some((i, k));
-        v.plugin_controls = false;
+        v.plugin_view_override = None;
     }
     let mut act = None;
     // Clicks inside the slot's menu, such as on the picker's search field, keep it open; the
@@ -1032,9 +1051,13 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
             };
         }
         InsertAct::Bypass if filled => inserts[k].bypass = !inserts[k].bypass,
-        InsertAct::Open | InsertAct::Controls if filled => {
+        InsertAct::Open if filled => {
             v.fx_window = Some((i, k));
-            v.plugin_controls = matches!(act, InsertAct::Controls);
+            v.plugin_view_override = None;
+        }
+        InsertAct::Controls if filled => {
+            v.fx_window = Some((i, k));
+            v.plugin_view_override = Some(PluginUiMode::Sliders);
         }
         InsertAct::Move(d) if filled => {
             let to = k as isize + d;
@@ -2241,8 +2264,17 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin_ui_prefs::PluginUiMode;
     use egui::PointerButton;
     use prowave_engine::FxKind;
+
+    #[test]
+    fn mixer_defaults_to_the_saved_plugin_ui_mode() {
+        assert_eq!(
+            MixerView::with_plugin_ui(PluginUiMode::Editor).preferred_plugin_ui,
+            PluginUiMode::Editor
+        );
+    }
 
     /// A project with an audio-style track and an Aux track, and its mixer drawn in a window
     /// 1400 by 700 points.

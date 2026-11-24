@@ -943,3 +943,5 @@ The audio file {} plays on no track that is imported, so it is on a track of its
 the engine did not take the project in time; no file was written = le moteur n'a pas pris le projet à temps ; aucun fichier n'a été écrit
 the bounce has not finished = le bounce n'est pas terminé
 cannot bounce: there is no audio output = impossible de faire le bounce : aucune sortie audio
+Plug-in UI: = Interface du plug-in :
+Sliders = Curseurs

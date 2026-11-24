@@ -37,8 +37,7 @@ impl PluginUiMode {
 /// The saved choice, or sliders when nothing is saved (or the file cannot be read).
 pub(crate) fn load() -> PluginUiMode {
     file().map_or_else(PluginUiMode::default, |f| {
-        f.parent()
-            .map_or_else(PluginUiMode::default, |dir| load_from(dir))
+        f.parent().map_or_else(PluginUiMode::default, load_from)
     })
 }
 

@@ -13,6 +13,7 @@ use crate::hosted_plugins::{self, Scan};
 use crate::i18n::{tr, trf};
 use crate::mixer::PLUGIN_NOT_FOUND;
 use crate::model::Project;
+use crate::plugin_ui_prefs::PluginUiMode;
 use crate::plugins;
 use crate::vamp;
 use crate::UiState;
@@ -218,6 +219,31 @@ pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
                     {
                         plugins::rescan(true);
                         vamp::rescan(true);
+                    }
+                    ui.label(tr("Plug-in UI:"));
+                    // Logic has no Linux editor setting; this is the portable sliders view by
+                    // default, with the plug-in's own window available where it can be hosted.
+                    let sliders = ui
+                        .selectable_label(
+                            s.mixer.preferred_plugin_ui == PluginUiMode::Sliders,
+                            tr("Sliders"),
+                        )
+                        .clicked();
+                    let editor = ui
+                        .selectable_label(
+                            s.mixer.preferred_plugin_ui == PluginUiMode::Editor,
+                            tr("Editor"),
+                        )
+                        .clicked();
+                    if sliders || editor {
+                        let mode = if sliders {
+                            PluginUiMode::Sliders
+                        } else {
+                            PluginUiMode::Editor
+                        };
+                        s.mixer.preferred_plugin_ui = mode;
+                        s.mixer.plugin_view_override = None;
+                        crate::plugin_ui_prefs::save(mode);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(tr("Done")).clicked() {
