@@ -54,6 +54,7 @@ mod pattern;
 mod piano_roll;
 mod plugin_manager;
 mod plugin_picker;
+mod plugin_ui_prefs;
 mod plugins;
 mod project_io;
 mod project_settings;
