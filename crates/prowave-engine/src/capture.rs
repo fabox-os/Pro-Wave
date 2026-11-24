@@ -367,6 +367,7 @@ enum Ctl {
     },
     Stop {
         id: u32,
+        up_to: u64,
         reply: Sender<Result<Recorded, CaptureError>>,
     },
 }
@@ -458,7 +459,30 @@ fn writer_loop(
                 });
                 let _ = reply.send(result);
             }
-            Some(Ctl::Stop { id, reply }) => {
+            Some(Ctl::Stop { id, up_to, reply }) => {
+                // Drain the ring up to the frames the device had delivered when Stop was
+                // requested, so a writer thread that fell behind does not lose the end of the
+                // take (or all of it). If the device stopped, the ring empties and we stop.
+                while consumed < up_to {
+                    let n = ring.slots() / channels * channels;
+                    if n == 0 {
+                        break;
+                    }
+                    scratch.clear();
+                    if let Ok(chunk) = ring.read_chunk(n) {
+                        let (a, b) = chunk.as_slices();
+                        scratch.extend_from_slice(a);
+                        scratch.extend_from_slice(b);
+                        chunk.commit_all();
+                    }
+                    for (_, rec) in &mut recs {
+                        rec.feed(consumed, &scratch, channels);
+                    }
+                    consumed += (scratch.len() / channels) as u64;
+                    history.extend(scratch.iter().copied());
+                    let extra = history.len().saturating_sub(history_samples);
+                    history.drain(..extra);
+                }
                 let result = match recs.iter().position(|(i, _)| *i == id) {
                     Some(at) => recs.remove(at).1.finish(),
                     None => Err(CaptureError::Closed),
@@ -765,12 +789,13 @@ impl Capture {
     /// written.
     pub fn stop(&mut self, id: u32) -> Result<Recorded, CaptureError> {
         // What the callback has delivered up to now reaches the file before it closes: the
-        // writer thread empties the ring before it looks at this message.
+        // writer thread empties the ring up to this frame count before it finishes the file.
+        let up_to = self.shared.frames_pushed.load(Ordering::Acquire);
         let (reply, answer) = mpsc::channel();
         self.ctl
             .as_ref()
             .ok_or(CaptureError::Closed)?
-            .send(Ctl::Stop { id, reply })
+            .send(Ctl::Stop { id, up_to, reply })
             .map_err(|_| CaptureError::Closed)?;
         answer.recv().map_err(|_| CaptureError::Closed)?
     }

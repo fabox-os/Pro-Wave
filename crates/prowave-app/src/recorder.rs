@@ -71,6 +71,8 @@ pub struct Recorder {
     played: Vec<(f64, LiveNote)>,
     /// The transport was running at the last frame.
     was_playing: bool,
+    /// Whether the count-in has started in this session (to distinguish before/after).
+    count_in_started: bool,
 }
 
 impl Recorder {
@@ -106,7 +108,12 @@ fn record_track(p: &Project) -> Option<usize> {
 
 /// Call once per frame with the notes played since the last one.
 pub fn update(rec: &mut Recorder, p: &mut Project, input: &[LiveNote]) -> Outcome {
-    let want = p.recording && p.playing && !p.counting_in;
+    // Track whether count-in has started, so we allow recording after it finishes.
+    let count_in_started = p.counting_in || rec.count_in_started;
+    rec.count_in_started = count_in_started;
+    // Don't start recording if count-in is enabled but hasn't begun yet.
+    let count_in_pending = p.count_in && !p.counting_in && !count_in_started;
+    let want = p.recording && p.playing && !p.counting_in && !count_in_pending;
     remember_played(rec, p, input, want);
     let pedal_before = rec.pedal;
     for ev in input {
@@ -385,6 +392,7 @@ fn close(note: &mut Note, now: f64) {
 }
 
 fn finish(rec: &mut Recorder, p: &mut Project) -> Outcome {
+    rec.count_in_started = false;
     let Some((t, r)) = rec.target.take() else {
         return Outcome::Nothing;
     };
@@ -459,6 +467,7 @@ mod tests {
 
     fn project() -> Project {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.truncate(1);
         p.tracks[0].regions.clear();
         p
@@ -554,6 +563,7 @@ mod tests {
     #[test]
     fn record_needs_an_instrument_track() {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.clear();
         p.recording = true;
         p.playing = true;
@@ -705,6 +715,7 @@ mod tests {
     #[test]
     fn a_region_that_moved_is_never_written_into() {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.truncate(1);
         p.tracks[0].regions.clear();
         let mut other = Track::new("Other", TrackKind::Instrument);

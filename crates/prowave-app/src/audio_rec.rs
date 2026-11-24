@@ -152,6 +152,8 @@ pub struct AudioRecorder {
     /// Level of each input channel, for the meters.
     levels: Vec<f32>,
     fresh: Vec<f32>,
+    /// Whether the count-in has started in this session (to distinguish before/after).
+    count_in_started: bool,
 }
 
 /// The audio tracks that record: the armed ones, or else the selected one.
@@ -366,7 +368,12 @@ impl AudioRecorder {
             }
         }
         self.read_levels();
-        let record = p.recording && p.playing && !p.counting_in;
+        // Track whether count-in has started, so we allow recording after it finishes.
+        let count_in_started = p.counting_in || self.count_in_started;
+        self.count_in_started = count_in_started;
+        // Don't start recording if count-in is enabled but hasn't begun yet.
+        let count_in_pending = p.count_in && !p.counting_in && !count_in_started;
+        let record = p.recording && p.playing && !p.counting_in && !count_in_pending;
         if self.takes.is_empty() {
             if self.failed && takes_over(p) {
                 p.recording = false;
@@ -457,6 +464,7 @@ impl AudioRecorder {
     }
 
     fn finish(&mut self, p: &mut Project, ctx: &egui::Context) -> Outcome {
+        self.count_in_started = false;
         p.recording = false;
         let (mut kept, mut warning) = (None, None);
         for take in std::mem::take(&mut self.takes) {
