@@ -1871,7 +1871,12 @@ impl Backend for Vst3Backend {
         cfg!(target_os = "macos") && !self.controller.is_null()
     }
 
-    fn main_editor_open(&self, parent: *mut c_void) -> Option<(u32, u32)> {
+    fn main_editor_open(&self, parent: crate::EditorParent) -> Option<(u32, u32)> {
+        // The Linux X11 view lands in Task 5; only a Cocoa view can be attached here for now.
+        let parent_view = match parent {
+            crate::EditorParent::Cocoa(view) => view,
+            crate::EditorParent::X11 { .. } => return None,
+        };
         let ctl = self.controller()?;
         if !cfg!(target_os = "macos") {
             return None;
@@ -1895,7 +1900,7 @@ impl Backend for Vst3Backend {
                     view,
                     std::ptr::from_ref::<Frame>(&self.frame).cast_mut().cast(),
                 );
-                if (t.attached)(view, parent, c"NSView".as_ptr()) != OK {
+                if (t.attached)(view, parent_view, c"NSView".as_ptr()) != OK {
                     (t.set_frame)(view, std::ptr::null_mut());
                     release(view);
                     return None;

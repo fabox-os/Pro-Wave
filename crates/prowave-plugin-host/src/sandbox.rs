@@ -830,7 +830,10 @@ impl Server {
         if open {
             if self.window.is_none() {
                 let window = crate::mac::Window::new(&self.name);
-                match local.backend().main_editor_open(window.parent()) {
+                match local
+                    .backend()
+                    .main_editor_open(crate::EditorParent::Cocoa(window.parent()))
+                {
                     Some((width, height)) => {
                         window.set_plugin_size(width, height);
                         self.window = Some(window);

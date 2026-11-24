@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 /// from being handed to a Linux plug-in, and vice versa.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum EditorParent {
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Cocoa(*mut std::ffi::c_void),
     #[allow(dead_code)]
     X11 {
@@ -140,7 +140,7 @@ impl std::error::Error for Error {}
 /// One format's side of a loaded plug-in. The `main_` methods are called on the main thread
 /// only, `process` and `reset` on the audio thread only; the two may run at the same time, as
 /// each format allows.
-// The window methods are used where plug-in windows are hosted (macOS, for now).
+// The window methods are used where plug-in windows are hosted (macOS now, Linux/X11 in Task 6).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) trait Backend {
     fn params(&self) -> Vec<ParamInfo>;
@@ -162,9 +162,9 @@ pub(crate) trait Backend {
     fn main_has_editor(&self) -> bool {
         false
     }
-    /// Puts the plug-in's own view inside `parent` (macOS: an `NSView`) and returns its size
-    /// in points, or `None` if it has no view or refused.
-    fn main_editor_open(&self, _parent: *mut std::ffi::c_void) -> Option<(u32, u32)> {
+    /// Puts the plug-in's own view inside `parent` (an `NSView` on macOS, an X11 window id on
+    /// Linux) and returns its size in the platform's units, or `None` if it refused.
+    fn main_editor_open(&self, _parent: EditorParent) -> Option<(u32, u32)> {
         None
     }
     fn main_editor_close(&self) {}

@@ -722,7 +722,10 @@ impl Backend for AuBackend {
         true
     }
 
-    fn main_editor_open(&self, parent: *mut c_void) -> Option<(u32, u32)> {
+    fn main_editor_open(&self, parent: crate::EditorParent) -> Option<(u32, u32)> {
+        let crate::EditorParent::Cocoa(parent) = parent else {
+            return None;
+        };
         use crate::mac::{class, frame, msg, Id, Rect, Size};
         // SAFETY: AppKit and AudioToolbox calls on the main thread, each with its own argument
         // types. The Cocoa UI property is a bundle URL followed by class names, all owned by
