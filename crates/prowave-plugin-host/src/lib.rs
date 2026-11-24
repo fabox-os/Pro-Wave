@@ -30,6 +30,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// The OS view handle a plug-in's own editor attaches to. The typed variants keep a Cocoa view
+/// from being handed to a Linux plug-in, and vice versa.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EditorParent {
+    #[allow(dead_code)]
+    Cocoa(*mut std::ffi::c_void),
+    #[allow(dead_code)]
+    X11 {
+        display: *mut std::ffi::c_void,
+        window: u64,
+    },
+}
+
 #[cfg(target_os = "macos")]
 mod au;
 mod clap;
@@ -38,6 +51,8 @@ mod mac;
 #[cfg(unix)]
 mod sandbox;
 mod vst3;
+#[cfg(target_os = "linux")]
+pub(crate) mod x11;
 
 /// The most parameter moves handed to a plug-in in one block; later ones wait for the next.
 const MAX_CHANGES: usize = 128;
