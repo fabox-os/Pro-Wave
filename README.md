@@ -14,6 +14,10 @@
 </p>
 
 <p align="center">
+  <a href="https://www.opensourcealternatives.to"><img src="https://www.opensourcealternatives.to/badge-osa.svg" alt="As seen on Open Source Alternatives"></a>
+</p>
+
+<p align="center">
   <a href="https://fabox-os.github.io/Pro-Wave/">Website</a> •
   <a href="#downloads">Download</a> •
   <a href="#features">Features</a> •
