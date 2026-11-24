@@ -917,7 +917,6 @@ impl Backend for ClapBackend {
             EditorParent::X11 { window, .. } => {
                 ClapX11Window(window as std::os::raw::c_ulong).handle()
             }
-            _ => return None,
         };
         let api = WINDOW_API?;
         // SAFETY: a non-null extension is static data of the plug-in.

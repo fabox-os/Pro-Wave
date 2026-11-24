@@ -2324,7 +2324,6 @@ impl Backend for Vst3Backend {
             crate::EditorParent::X11 { window, .. } => {
                 (window as usize as *mut c_void, VST3_X11_PLATFORM)
             }
-            _ => return None,
         };
         let ctl = self.controller()?;
         // SAFETY: the controller's and the view's functions on the main thread, in VST3's

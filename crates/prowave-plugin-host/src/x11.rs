@@ -1,8 +1,6 @@
 //! The plug-in's window on Linux/X11, in the plug-in's own process. Pro Wave owns the top-level
 //! window and its 28-pixel footer with a power button; the plug-in draws only inside its parented
 //! view. A missing or unusable `DISPLAY` leaves the editor unavailable so the app shows sliders.
-// Temporary: Task 6 is the first step that consumes this helper. Remove with that step.
-#![allow(dead_code)]
 
 use crate::EditorParent;
 use std::cell::Cell;
@@ -232,7 +230,7 @@ impl Window {
     /// The typed X11 handle a CLAP or VST3 editor attaches to.
     pub(crate) fn editor_parent(&self) -> EditorParent {
         EditorParent::X11 {
-            display: self.display.cast(),
+            _display: self.display.cast(),
             window: self.parent,
         }
     }
