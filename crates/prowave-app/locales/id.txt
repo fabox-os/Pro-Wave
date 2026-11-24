@@ -945,3 +945,4 @@ the bounce has not finished = bounce belum selesai
 cannot bounce: there is no audio output = tidak dapat bounce: tidak ada output audio
 Plug-in UI: = UI plug-in:
 Sliders = Slider
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = Slider adalah default portabel. Editor menggunakan jendela sendiri dari plug-in jika didukung.

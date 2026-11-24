@@ -945,3 +945,4 @@ the bounce has not finished = bounce dar nesibaigė
 cannot bounce: there is no audio output = negalima atlikti bounce: nėra garso išvesties
 Plug-in UI: = Plug-in sąsaja:
 Sliders = Slankikliai
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = Sliders yra perkeliamasis numatytasis. Editor naudoja pačio prievado langą, jei jis palaikomas.

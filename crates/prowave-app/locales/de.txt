@@ -945,3 +945,4 @@ the bounce has not finished = der Bounce ist noch nicht fertig
 cannot bounce: there is no audio output = Bounce nicht möglich: keine Audioausgabe
 Plug-in UI: = Plug-in-Oberfläche:
 Sliders = Regler
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = Regler ist die portable Standardeinstellung. Editor verwendet das eigene Fenster des Plug-ins, sofern unterstützt.

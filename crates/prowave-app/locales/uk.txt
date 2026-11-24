@@ -945,3 +945,4 @@ the bounce has not finished = Боунс ще не завершено
 cannot bounce: there is no audio output = неможливо зробити боунс: немає аудіовиходу
 Plug-in UI: = Інтерфейс плагіна:
 Sliders = Повзунки
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = Повзунки є портативним типовим налаштуванням. Редактор використовує власне вікно плагіна, де це підтримується.

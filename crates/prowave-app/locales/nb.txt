@@ -945,3 +945,4 @@ the bounce has not finished = bounce er ikke ferdig
 cannot bounce: there is no audio output = kan ikke bounce: ingen lydutgang
 Plug-in UI: = Plug-in-grensesnitt:
 Sliders = Skyvere
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = Skyvere er den portable standarden. Editor bruker plug-inens eget vindu der det støttes.

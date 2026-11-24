@@ -945,3 +945,4 @@ the bounce has not finished = le bounce n'est pas terminé
 cannot bounce: there is no audio output = impossible de faire le bounce : aucune sortie audio
 Plug-in UI: = Interface du plug-in :
 Sliders = Curseurs
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = Les curseurs sont la valeur par défaut portable. L'éditeur utilise la propre fenêtre du plug-in lorsqu'elle est prise en charge.

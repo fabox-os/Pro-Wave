@@ -944,3 +944,4 @@ the bounce has not finished = il bounce è ancora in corso
 cannot bounce: there is no audio output = impossibile eseguire il bounce: manca un’uscita audio
 Plug-in UI: = Interfaccia del plug-in:
 Sliders = Cursori
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = I cursori sono l'impostazione predefinita portabile. L'editor usa la finestra propria del plug-in quando supportata.

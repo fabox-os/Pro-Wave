@@ -2270,6 +2270,12 @@ mod tests {
 
     #[test]
     fn mixer_defaults_to_the_saved_plugin_ui_mode() {
+        // `default()` must read the persisted preference rather than hard-code sliders. The
+        // round-trip of that file is covered in `plugin_ui_prefs`; this checks the wiring.
+        assert_eq!(
+            MixerView::default().preferred_plugin_ui,
+            crate::plugin_ui_prefs::load()
+        );
         assert_eq!(
             MixerView::with_plugin_ui(PluginUiMode::Editor).preferred_plugin_ui,
             PluginUiMode::Editor

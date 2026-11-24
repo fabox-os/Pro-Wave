@@ -945,3 +945,4 @@ the bounce has not finished = バウンスはまだ終わっていません
 cannot bounce: there is no audio output = バウンスできません: オーディオ出力がありません
 Plug-in UI: = プラグイン UI：
 Sliders = スライダー
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = スライダーは移植可能な既定設定です。エディターは、対応している場合、プラグイン自身のウィンドウを使用します。

@@ -945,3 +945,4 @@ the bounce has not finished = bounce är inte klar
 cannot bounce: there is no audio output = kan inte bounca: ingen ljudutgång
 Plug-in UI: = Plug-in-gränssnitt:
 Sliders = Skjutreglage
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = Reglage är det portabla standardvalet. Editor använder pluginets eget fönster där det stöds.

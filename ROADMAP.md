@@ -374,7 +374,7 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 The items below marked done are in 0.2.2 (see CHANGELOG.md for the full list, and its known
 limitations at the end of the section). Still open, in the order the work would take them:
 
-- Plug-in hosting: CLAP, VST3 and Audio Unit effects load in the Audio FX slots (`prowave-plugin-host`, done 2026-11-14), with the Plugin Manager and a scan in a separate process. Each plug-in runs in a process of its own on macOS and Linux, shows its own window on macOS, and its parameters can be automated. Fixed 2026-11-23 (#163): clicking the plug-in search no longer closes the menu, long lists scroll, and VST3 bundles whose library has another name are found. Not done: instruments, the process of its own on Windows, the plug-ins' own windows on Windows and Linux.
+- Plug-in hosting: CLAP, VST3 and Audio Unit effects load in the Audio FX slots (`prowave-plugin-host`, done 2026-11-14), with the Plugin Manager and a scan in a separate process. Each plug-in runs in a process of its own on macOS and Linux, shows its own window on macOS and (from 0.3.4) on Linux/X11 for CLAP and VST3, and its parameters can be automated. Fixed 2026-11-23 (#163): clicking the plug-in search no longer closes the menu, long lists scroll, and VST3 bundles whose library has another name are found. Not done: instruments, the process of its own on Windows, the plug-ins' own windows on Windows.
 - Audio output device and I/O buffer size in Project Settings > Audio (needs an engine stream restart).
 - Convert to New Sampler Track (needs a sampler instrument).
 - Show Chord Track and Show Arrangement Track (new data models).
@@ -396,6 +396,9 @@ limitations at the end of the section). Still open, in the order the work would 
   on a drum track, and a recorded take keeps every frame (the device delay is skipped by the
   region, so a wrong delay cannot empty a take) and a silent input is noticed. Recording is not
   tried on real Windows or macOS microphones here.
+- **0.3.4:** Hosted CLAP and VST3 plug-ins render their own designed window on Linux/X11 when
+  Editor is chosen in Plugin Manager (issue #189); Sliders stays the portable default and is still
+  used when a plug-in has no editor. Native editors on Windows are still not hosted.
 
 ## Since 0.2.2 (2026-11-09; this is release 0.3.0)
 

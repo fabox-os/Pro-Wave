@@ -945,3 +945,4 @@ the bounce has not finished = bounce ei ole vielä valmis
 cannot bounce: there is no audio output = bounce ei onnistu: ei äänilähtöä
 Plug-in UI: = Plug-in-käyttöliittymä:
 Sliders = Liukusäätimet
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = Liukusäätimet on siirrettävä oletus. Editor käyttää laajennuksen omaa ikkunaa, jos se on tuettu.

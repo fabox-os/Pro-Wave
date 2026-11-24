@@ -945,3 +945,4 @@ the bounce has not finished = 导出尚未完成
 cannot bounce: there is no audio output = 无法导出：没有音频输出
 Plug-in UI: = 插件界面：
 Sliders = 滑块
+Sliders is the portable default. Editor uses the plug-in's own window where supported. = 推子是便携式默认设置。编辑器在受支持时使用插件自身的窗口。

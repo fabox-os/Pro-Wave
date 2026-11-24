@@ -220,7 +220,9 @@ pub fn show(ctx: &egui::Context, p: &Project, s: &mut UiState) {
                         plugins::rescan(true);
                         vamp::rescan(true);
                     }
-                    ui.label(tr("Plug-in UI:"));
+                    ui.label(tr("Plug-in UI:")).on_hover_text(tr(
+                        "Sliders is the portable default. Editor uses the plug-in's own window where supported.",
+                    ));
                     // Logic has no Linux editor setting; this is the portable sliders view by
                     // default, with the plug-in's own window available where it can be hosted.
                     let sliders = ui
