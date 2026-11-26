@@ -635,7 +635,7 @@ fn read_cache() -> Vec<Scanned> {
 /// The CLAP and VST3 files on disk now, with their stamps. Audio Units are not files.
 #[cfg(not(test))]
 fn on_disk_files() -> Vec<Found> {
-    [Format::Clap, Format::Vst3]
+    [Format::Clap, Format::Vst3, Format::Lv2]
         .into_iter()
         .flat_map(|format| {
             host::installed(format).into_iter().map(move |path| Found {
