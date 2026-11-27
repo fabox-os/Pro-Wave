@@ -1,0 +1,2 @@
+lowpass 2k 0.7q
+#EOF#

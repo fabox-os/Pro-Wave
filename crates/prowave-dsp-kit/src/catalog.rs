@@ -31,7 +31,7 @@ macro_rules! e {
 }
 
 /// Every component of the original.
-pub static ENTRIES: [Entry; 40] = [
+pub static ENTRIES: [Entry; 41] = [
     e!(
         "lowpass_1",
         "Lattice One-Pole Low-Pass",
@@ -232,6 +232,12 @@ pub static ENTRIES: [Entry; 40] = [
         "real-time level meter per channel",
         true
     ),
+    e!(
+        "watch",
+        "Hot-Reload Rack",
+        "effects from a file, reloaded with a crossfade when it changes",
+        true
+    ),
 ];
 
 /// The entry for a command or for Pro Wave's name of it (case-insensitive).
@@ -281,7 +287,8 @@ mod tests {
         }
         for e in ENTRIES.iter().filter(|e| e.ported) {
             assert!(
-                crate::effect::effects().any(|i| i.name == e.command),
+                crate::effect::effects().any(|i| i.name == e.command)
+                    || crate::chain::PARSER_EFFECTS.contains(&e.command),
                 "{} is marked ported but missing",
                 e.command
             );
