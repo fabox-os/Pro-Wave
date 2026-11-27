@@ -12,6 +12,8 @@ use std::f64::consts::{FRAC_1_SQRT_2, FRAC_2_PI, FRAC_PI_2, FRAC_PI_4, PI, SQRT_
 
 use crate::args::{get_freq, strtod};
 use crate::biquad::{Biquad, Width};
+use crate::capn::FilterType;
+use crate::delay_est::{DelayEst, DelayEstHist};
 use crate::effect::{EffectInfo, Stream};
 use crate::error::{Error, Result};
 use crate::smoothing::{rise_time, Ewma};
@@ -67,6 +69,8 @@ const FLAG_L: u32 = 1 << 0;
 const FLAG_R: u32 = 1 << 1;
 const FLAG_USE_ORD: u32 = 1 << 2;
 const FLAG_FUSE: u32 = 1 << 3;
+const FLAG_UNALIGNED: u32 = 1 << 4;
+const DELAY_EST_AVG_THRESH: f64 = -0.3;
 const OFF_FLAG_L: u32 = 1 << 0;
 const OFF_FLAG_R: u32 = 1 << 1;
 
@@ -147,6 +151,31 @@ pub(crate) struct Config {
     pub matrix_rs: f64,
     pub matrix_adj: [f64; 2],
     pub layout: Layout,
+    /// Options of the multiband version.
+    pub use_fir_p: bool,
+    pub fb_id: String,
+    pub fb_type: FilterType,
+    pub fb_stop: [f64; 2],
+    pub uev_action: UnalignedEventAction,
+    pub do_xtc: bool,
+    pub xtc_gain: f64,
+    pub xtc_itd: f64,
+    pub xtc_bp: [f64; 2],
+}
+
+const REAR_EVENT_MASK_MB_DEFAULT: f64 = 0.3;
+const XTC_GAIN_DEFAULT: f64 = 0.2;
+const XTC_ITD_DEFAULT: f64 = 250.0;
+const XTC_BP_FL_DEFAULT: f64 = 0.0;
+const XTC_BP_FH_DEFAULT: f64 = 4000.0;
+
+/// `set_fb_stop_default`
+fn fb_stop_default(t: FilterType) -> [f64; 2] {
+    match t {
+        FilterType::Butterworth => [0.0, 0.0],
+        FilterType::Chebyshev1 | FilterType::Chebyshev2 => [25.0, 0.0],
+        FilterType::Elliptic => [35.0, 50.0],
+    }
 }
 
 fn calc_lookahead_frames(x: f64, fs: f64) -> isize {
@@ -205,12 +234,14 @@ fn ranged(name: &str, v: f64, lo: f64, hi: f64, param: &str) -> Result<f64> {
     }
 }
 
-/// `matrix4_config_init` for `matrix4` (not the multiband version).
+/// `matrix4_config_init`; `is_mb` for the multiband version, which has more options (they are
+/// ignored, with no effect, by `matrix4`).
 pub(crate) fn config_init(
     info: &EffectInfo,
     istream: &Stream,
     selector: &[bool],
     argv: &[&str],
+    is_mb: bool,
 ) -> Result<Config> {
     let name = argv[0];
     let argc = argv.len();
@@ -235,7 +266,11 @@ pub(crate) fn config_init(
         do_dpwr_decouple: true,
         lookahead_frames: calc_lookahead_frames(LOOKAHEAD_DEFAULT, fs),
         surr_mult: [0.0; 2],
-        rear_ev_mask: REAR_EVENT_MASK_DEFAULT,
+        rear_ev_mask: if is_mb {
+            REAR_EVENT_MASK_MB_DEFAULT
+        } else {
+            REAR_EVENT_MASK_DEFAULT
+        },
         shelf_mult: SHELF_MULT_DEFAULT,
         shelf_f0: SHELF_F0_DEFAULT,
         lowpass_f0: LOWPASS_F0_DEFAULT,
@@ -245,6 +280,19 @@ pub(crate) fn config_init(
         matrix_rs: MATRIX_RS_DEFAULT,
         matrix_adj: [MATRIX_ADJ0_DEFAULT, MATRIX_ADJ1_DEFAULT],
         layout: Layout::L2_2,
+        use_fir_p: false,
+        fb_id: String::new(),
+        fb_type: FilterType::Elliptic,
+        fb_stop: fb_stop_default(FilterType::Elliptic),
+        uev_action: if is_mb {
+            UnalignedEventAction::Align
+        } else {
+            UnalignedEventAction::None
+        },
+        do_xtc: false,
+        xtc_gain: XTC_GAIN_DEFAULT,
+        xtc_itd: XTC_ITD_DEFAULT,
+        xtc_bp: [XTC_BP_FL_DEFAULT, XTC_BP_FH_DEFAULT],
     };
     let mut phase_flip: Option<bool> = None;
     for (i, arg) in argv.iter().enumerate().skip(1) {
@@ -403,8 +451,109 @@ pub(crate) fn config_init(
                     c.rear_ev_mask = number(name, oarg, opt)?;
                     ranged(name, c.rear_ev_mask, 0.0, 100.0, opt)?;
                 }
-                // Options of the multiband version are ignored (with a warning) here.
-                "unaligned_event_action" | "xtc" | "filter_bank" | "filter_type" | "use_fir_p" => {}
+                "use_fir_p" => c.use_fir_p = boolean_arg(opt, oarg, name)?,
+                // The other options of the multiband version are ignored here.
+                "unaligned_event_action" | "xtc" | "filter_bank" | "filter_type" if !is_mb => {}
+                "unaligned_event_action" => {
+                    if oarg.is_empty() {
+                        return Err(needs_arg());
+                    }
+                    c.uev_action = match oarg {
+                        "none" => UnalignedEventAction::None,
+                        "neutralize" => UnalignedEventAction::Neutralize,
+                        "align" => UnalignedEventAction::Align,
+                        _ => {
+                            return Err(Error::Message(format!(
+                                "{name}: error: unrecognized unaligned event action: {oarg}"
+                            )))
+                        }
+                    };
+                }
+                "xtc" => {
+                    if oarg == "none" {
+                        c.do_xtc = false;
+                    } else {
+                        c.do_xtc = true;
+                        let (ild, rest) = isolate(oarg, ':');
+                        let (itd, rest) = isolate(rest, ':');
+                        let (fl, fh) = isolate(rest, '-');
+                        if !ild.is_empty() {
+                            let v = number(name, ild, "xtc: ild")?;
+                            c.xtc_gain = 10f64.powf(v / -20.0);
+                            if !(0.01..=0.8).contains(&c.xtc_gain) {
+                                return Err(Error::Range {
+                                    effect: name.into(),
+                                    param: "xtc: ild".into(),
+                                });
+                            }
+                        }
+                        if !itd.is_empty() {
+                            c.xtc_itd = number(name, itd, "xtc: itd")?;
+                            ranged(name, c.xtc_itd, 40.0, 1000.0, "xtc: itd")?;
+                        }
+                        if !fl.is_empty() {
+                            c.xtc_bp[0] = get_freq(name, fl, "xtc: fl")?;
+                            ranged(name, c.xtc_bp[0], 0.0, 1000.0, "xtc: fl")?;
+                        }
+                        if !fh.is_empty() {
+                            c.xtc_bp[1] = get_freq(name, fh, "xtc: fh")?;
+                            ranged(name, c.xtc_bp[1], 2000.0, 10000.0, "xtc: fh")?;
+                        }
+                    }
+                }
+                "filter_bank" => {
+                    if oarg.is_empty() {
+                        return Err(needs_arg());
+                    }
+                    c.fb_id = oarg.chars().take(15).collect();
+                }
+                "filter_type" => {
+                    if oarg.is_empty() {
+                        return Err(needs_arg());
+                    }
+                    c.fb_type = if is_opt_arg(oarg, "butterworth") {
+                        FilterType::Butterworth
+                    } else if is_opt_arg(oarg, "chebyshev1:") {
+                        FilterType::Chebyshev1
+                    } else if is_opt_arg(oarg, "chebyshev2:") {
+                        FilterType::Chebyshev2
+                    } else if is_opt_arg(oarg, "elliptic:") {
+                        FilterType::Elliptic
+                    } else {
+                        return Err(Error::Message(format!(
+                            "{name}: error: unrecognized filter bank type: {oarg}"
+                        )));
+                    };
+                    c.fb_stop = fb_stop_default(c.fb_type);
+                    let (_, sub) = isolate(oarg, ':');
+                    if !sub.is_empty() {
+                        match c.fb_type {
+                            FilterType::Chebyshev1 | FilterType::Chebyshev2 => {
+                                c.fb_stop[0] = number(name, sub, "stop_dB")?;
+                                if c.fb_stop[0] < 10.0 {
+                                    return Err(Error::Message(format!(
+                                        "{name}: error: {oarg}: stopband attenuation must be at least 10dB"
+                                    )));
+                                }
+                            }
+                            FilterType::Elliptic => {
+                                let (sub0, sub1) = isolate(sub, ':');
+                                c.fb_stop[0] = number(name, sub0, "stop_dB")?;
+                                c.fb_stop[1] = if sub1.is_empty() {
+                                    c.fb_stop[0]
+                                } else {
+                                    number(name, sub1, "stop_dB")?
+                                };
+                                if c.fb_stop[0] < 20.0 || c.fb_stop[1] < 20.0 {
+                                    return Err(Error::Message(format!(
+                                        "{name}: error: {oarg}: stopband attenuation must be at least 20dB"
+                                    )));
+                                }
+                            }
+                            FilterType::Butterworth => {}
+                        }
+                    }
+                }
                 "lookahead" => {
                     if oarg.is_empty() {
                         return Err(needs_arg());
@@ -524,11 +673,28 @@ pub(crate) struct EventConfig {
     pub diff_lim: f64,
     pub rear_ev_mask: f64,
     pub offset_scale_slope: f64,
+    pub uev_action: UnalignedEventAction,
+}
+
+/// What to do about an event whose channels are out of step (`enum unaligned_event_action`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnalignedEventAction {
+    /// Decode it as if the channels were in step.
+    None,
+    /// Steer to the centre.
+    Neutralize,
+    /// Delay one channel to line the pair up and steer with the angles found.
+    Align,
 }
 
 impl EventConfig {
     /// `event_config_init_priv`
-    pub fn new(fs: f64, rear_ev_mask: f64, diff_overshoot: f64) -> Self {
+    pub fn new(
+        fs: f64,
+        rear_ev_mask: f64,
+        diff_overshoot: f64,
+        uev_action: UnalignedEventAction,
+    ) -> Self {
         Self {
             sample_frames: time_to_frames(EVENT_SAMPLE_TIME, fs),
             max_hold_frames: time_to_frames(EVENT_MAX_HOLD_TIME, fs),
@@ -537,6 +703,7 @@ impl EventConfig {
             rear_ev_mask,
             offset_scale_slope: (EVENT_MAX_HOLD_TIME / EVENT_SAMPLE_TIME - 1.0)
                 / ((EVENT_MAX_HOLD_TIME - EVENT_SAMPLE_TIME) * fs / 1000.0),
+            uev_action,
         }
     }
 }
@@ -557,13 +724,19 @@ pub(crate) struct EventState {
     pub rs_scale: Ewma,
     ord_lp: [Biquad; 2],
     ord_notch: [SvfPk; 4],
-    dir: Axes,
+    pub dir: Axes,
+    pub diff_last: Axes,
     align_max: Axes,
+    align_avg: Ewma,
+    pub align_dt: [f64; 2],
+    pub realign: bool,
+    t_delay_est: isize,
+    pub slope_last: [f64; 2],
     ord_buf: Vec<Axes>,
     ord_lp_buf: Vec<Axes>,
     diff_buf: Vec<Axes>,
     slope_buf: Vec<[f64; 2]>,
-    last: [f64; 2],
+    pub last: [f64; 2],
     clip_thresh: f64,
     pcf_sens: f64,
     max: [f64; 2],
@@ -582,13 +755,12 @@ pub(crate) struct EventState {
     t_off_ord: isize,
     buf_len: usize,
     buf_p: usize,
-    /// Always false here: set by the delay estimator of the multiband version.
     pub unaligned: bool,
     flags: [u32; 2],
     off_flags: u32,
 }
 
-fn square(x: f64) -> f64 {
+pub(crate) fn square(x: f64) -> f64 {
     x * x
 }
 fn pwr_sum(a: f64, b: f64) -> f64 {
@@ -601,7 +773,7 @@ fn safe_sqrt(x: f64) -> f64 {
         0.0
     }
 }
-fn axes_mag(ax: &Axes) -> f64 {
+pub(crate) fn axes_mag(ax: &Axes) -> f64 {
     ax.lr.abs() + ax.cs.abs()
 }
 
@@ -633,7 +805,7 @@ fn calc_angle(a: f64, b: f64) -> f64 {
     }
 }
 
-fn calc_angle_pwr(a: f64, b: f64) -> f64 {
+pub(crate) fn calc_angle_pwr(a: f64, b: f64) -> f64 {
     if a <= f64::MIN_POSITIVE && b <= f64::MIN_POSITIVE {
         return 0.0;
     }
@@ -752,7 +924,13 @@ impl EventState {
                 SvfPk::new(fs, ORD_NOTCH_FREQ_2, 0.5, ORD_NOTCH_GAIN_2),
             ],
             dir: Axes::default(),
+            diff_last: Axes::default(),
             align_max: Axes::default(),
+            align_avg: Ewma::new(1.0, 10.0),
+            align_dt: [0.0; 2],
+            realign: false,
+            t_delay_est: 0,
+            slope_last: [0.0; 2],
             ord_buf: vec![Axes::default(); buf_len],
             ord_lp_buf: vec![Axes::default(); buf_len],
             diff_buf: vec![Axes::default(); buf_len],
@@ -786,14 +964,16 @@ impl EventState {
         }
     }
 
-    /// `process_events_priv` without the delay estimator: updates the steering angles `ax`
-    /// (and `ax_ev` while an event is held, `ax_dpwr` for the power correction).
+    /// `process_events_priv`: updates the steering angles `ax` (and `ax_ev` while an event is
+    /// held, `ax_dpwr` for the power correction). `de` is the delay estimator of the band and
+    /// the history shared by all bands; without it events are never "unaligned".
     #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         evc: &EventConfig,
         env: &Envs,
         pwr_env: &Envs,
+        mut de: Option<(&mut DelayEst, &mut DelayEstHist)>,
         norm_accom_factor: f64,
         thresh_scale: f64,
         ax: &mut Axes,
@@ -831,6 +1011,7 @@ impl EventState {
             lr: calc_angle_pwr(adapt.l, adapt.r),
             cs: calc_angle_pwr(adapt.sum, adapt.diff),
         };
+        self.diff_last = diff;
         self.ord_buf[bp] = ord;
         self.ord_lp_buf[bp] = ord_lp;
         self.diff_buf[bp] = diff;
@@ -863,6 +1044,7 @@ impl EventState {
         let l_slope = l_event - self.last[0];
         let r_slope = r_event - self.last[1];
         self.last = [l_event, r_event];
+        self.slope_last = [l_slope, r_slope];
         self.slope_buf[bp] = [l_slope, r_slope];
 
         if self.t_sample == 0
@@ -900,8 +1082,21 @@ impl EventState {
                     self.avg[3].run(self.diff_buf[i].cs);
                     i = next(i, self.buf_len);
                 }
+                if de.is_some() {
+                    self.t_delay_est = self.t_sample + de.as_ref().map_or(0, |d| d.0.ev_lag);
+                }
             } else {
                 self.flags[1] |= FLAG_FUSE;
+                if self.flags[0] & FLAG_UNALIGNED != 0 {
+                    if let Some((d, _)) = de.as_ref() {
+                        self.t_delay_est = self.t_sample + d.ev_lag;
+                    }
+                }
+            }
+            if self.t_delay_est != 0 {
+                if let Some((d, _)) = de.as_mut() {
+                    d.set_norm();
+                }
             }
             self.align_max = Axes::default();
         }
@@ -925,15 +1120,73 @@ impl EventState {
                     self.max[1] = r_event;
                 }
             }
+            if self.t_delay_est != 0 && self.t >= self.t_delay_est {
+                if let Some((d, hist)) = de.as_mut() {
+                    let (dt, found) = d.estimate(self.align_dt[0]);
+                    if let Some(m) = found {
+                        self.align_max = m;
+                    }
+                    self.align_dt[1] = dt;
+                    let tol = if evc.uev_action == UnalignedEventAction::Align {
+                        d.ra_tol
+                    } else {
+                        d.tol
+                    };
+                    let avg_v = if dt.is_nan() || dt.abs() > d.tol {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    let align_wavg = (self.align_avg.run(avg_v) + hist.align_avg.run(avg_v)) * 0.5;
+                    if dt.is_nan()
+                        || (dt - self.align_dt[0]).abs() > tol
+                        || (axes_rear(&self.align_max)
+                            && (dt.abs() > d.tol || align_wavg < DELAY_EST_AVG_THRESH))
+                    {
+                        self.flags[1] |= FLAG_UNALIGNED;
+                    }
+                }
+                self.t_delay_est = 0;
+            }
             if self.t - self.t_sample >= evc.sample_frames
                 || (self.flags[1] & FLAG_FUSE != 0 && self.t_end[1] != 0)
             {
+                self.t_delay_est = 0;
                 self.t_sample = 0;
+                let align_wavg = de.as_ref().map_or(0.0, |(_, h)| {
+                    (self.align_avg.last() + h.align_avg.last()) * 0.5
+                });
+                let mut ev_dt = self.align_dt[0];
                 let mut ev_dir = Axes {
                     lr: self.avg[2].last(),
                     cs: self.avg[3].last(),
                 };
-                if self.flags[1] & FLAG_USE_ORD == 0
+                if self.flags[1] & FLAG_UNALIGNED != 0 {
+                    // the flag is only ever set when a delay estimator is present
+                    let (tol, thresh_de) =
+                        de.as_ref().map_or((0.0, 0.0), |(d, _)| (d.tol, d.thresh));
+                    let dt_valid =
+                        !self.align_dt[1].is_nan() && axes_mag(&self.align_max) >= thresh_de;
+                    if evc.uev_action == UnalignedEventAction::Align
+                        && dt_valid
+                        && !(axes_rear(&self.align_max) && self.align_dt[1].abs() > tol)
+                    {
+                        ev_dir = self.align_max;
+                        ev_dt = self.align_dt[1];
+                    } else if evc.uev_action != UnalignedEventAction::None {
+                        if dt_valid || (align_wavg >= DELAY_EST_AVG_THRESH && axes_rear(&ev_dir)) {
+                            ev_dir.cs = 0.0;
+                            ev_dir.lr = 0.0;
+                            if align_wavg >= DELAY_EST_AVG_THRESH {
+                                ev_dt = 0.0;
+                            }
+                        } else {
+                            // indeterminate/unreliable dt; use the ordinary angles
+                            ev_dir.lr = self.avg[0].last();
+                            ev_dir.cs = self.avg[1].last();
+                        }
+                    }
+                } else if self.flags[1] & FLAG_USE_ORD == 0
                     && axes_mag(&self.align_max) > axes_mag(&ev_dir)
                 {
                     ev_dir = self.align_max;
@@ -961,6 +1214,10 @@ impl EventState {
                     if self.flags[1] & FLAG_USE_ORD != 0 {
                         self.ord_factor += 1.0;
                     }
+                    if ev_dt != self.align_dt[0] {
+                        self.align_dt[0] = ev_dt;
+                        self.realign = true;
+                    }
                     self.flags[0] = self.flags[1];
                     self.max[0] = self.max[1];
                     self.t_end[0] = self.t_end[1];
@@ -968,7 +1225,9 @@ impl EventState {
                         + smoothstep((self.max[1] - thresh) / (thresh * DIFF_WEIGHT_SCALE))
                             * DIFF_SENS_WEIGHT;
                 }
-                self.unaligned = false;
+                self.unaligned = de.as_ref().is_some_and(|(d, _)| {
+                    align_wavg < DELAY_EST_AVG_THRESH || self.align_dt[0].abs() > d.tol
+                });
             }
         }
 
@@ -1118,7 +1377,7 @@ impl EventState {
     }
 }
 
-fn axes_rear(ax: &Axes) -> bool {
+pub(crate) fn axes_rear(ax: &Axes) -> bool {
     ax.cs < 0.06 * square(ax.lr) - (PI / 64.0)
 }
 

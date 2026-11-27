@@ -5,8 +5,8 @@
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ap1 {
     pub c0: f64,
-    i0: f64,
-    o0: f64,
+    pub(crate) i0: f64,
+    pub(crate) o0: f64,
 }
 
 impl Ap1 {

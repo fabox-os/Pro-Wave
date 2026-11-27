@@ -19,8 +19,9 @@ use crate::error::Result;
 use crate::matrix4_common::{
     calc_matrix_coefs, calc_norm_mult, config_init, phase_flip_ap1_c0, phase_flip_params,
     phase_flip_pos_rs, smoothstep, Axes, CmcParams, Config, CsInterp, DirectPath, DirectPathMode,
-    DynShelf, EventConfig, EventState, SmoothState, ACCOM_TIME, BASE_ORD_NOTCH_SCALE,
-    CS_INTERP_DELAY_FRAMES, DIFF_OVERSHOOT, DOWNSAMPLE_FACTOR, NORM_ACCOM_FACTOR,
+    DynShelf, EventConfig, EventState, SmoothState, UnalignedEventAction, ACCOM_TIME,
+    BASE_ORD_NOTCH_SCALE, CS_INTERP_DELAY_FRAMES, DIFF_OVERSHOOT, DOWNSAMPLE_FACTOR,
+    NORM_ACCOM_FACTOR,
 };
 use crate::smoothing::{rise_time, Smf};
 
@@ -92,6 +93,7 @@ impl Matrix4 {
             &self.evc,
             env,
             pwr_env,
+            None,
             NORM_ACCOM_FACTOR,
             1.0,
             &mut self.ax,
@@ -351,7 +353,7 @@ fn init(
     argv: &[&str],
 ) -> Result<Vec<Box<dyn Effect>>> {
     let selector = crate::effect::default_selector(selector, istream.channels);
-    let cfg = config_init(info, istream, &selector, argv)?;
+    let cfg = config_init(info, istream, &selector, argv, false)?;
     let fs = f64::from(istream.fs);
     let ds_fs = fs / DOWNSAMPLE_FACTOR as f64;
     let ns = cfg.layout.ns()
@@ -404,7 +406,12 @@ fn init(
         sr_shelf: [sh(cfg.shelf_f0); 4],
         sm: SmoothState::new(fs),
         ev,
-        evc: EventConfig::new(ds_fs, cfg.rear_ev_mask, DIFF_OVERSHOOT),
+        evc: EventConfig::new(
+            ds_fs,
+            cfg.rear_ev_mask,
+            DIFF_OVERSHOOT,
+            UnalignedEventAction::None,
+        ),
         ax,
         ax_ev: Axes::default(),
         ax_dpwr: Axes::default(),

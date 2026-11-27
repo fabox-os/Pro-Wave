@@ -149,3 +149,26 @@ long_matrix4_flat | 48000 | matrix4 shelf=none,lowpass=none
 long_matrix4_phase_flip | 48000 | matrix4 phase_flip
 long_matrix4_dpwr | 48000 | matrix4 dpwr_decouple=false,contour_pwrcmp=0.5
 long_matrix4_lookahead | 44100 | matrix4 lookahead=1.0,rear_event_mask=2
+long_matrix4_mb | 48000 | matrix4_mb
+long_matrix4_mb_13band | 48000 | matrix4_mb filter_bank=13band
+long_matrix4_mb_13band_lfx | 48000 | matrix4_mb filter_bank=13band_lfx
+long_matrix4_mb_2_4 | 48000 | matrix4_mb layout=2/4 -4/-1
+long_matrix4_mb_dp | 48000 | matrix4_mb layout=2/4,direct_path=event
+long_matrix4_mb_none | 48000 | matrix4_mb unaligned_event_action=none
+long_matrix4_mb_neutralize | 48000 | matrix4_mb unaligned_event_action=neutralize
+long_matrix4_mb_butterworth | 48000 | matrix4_mb filter_bank=13band,filter_type=butterworth
+long_matrix4_mb_cheby1 | 48000 | matrix4_mb filter_bank=13band,filter_type=chebyshev1:30
+long_matrix4_mb_cheby2 | 48000 | matrix4_mb filter_bank=13band,filter_type=chebyshev2:28
+long_matrix4_mb_elliptic | 44100 | matrix4_mb filter_type=elliptic:40:55
+long_matrix4_mb_fir_p | 48000 | matrix4_mb filter_bank=13band,use_fir_p
+long_matrix4_mb_phase_flip | 48000 | matrix4_mb phase_flip,matrix=v3
+long_matrix4_mb_shelf | 48000 | matrix4_mb shelf=-4:700,lowpass=5k:0.7,dpwr_decouple=false
+long_matrix4_mb_xtc | 48000 | matrix4_mb filter_bank=13band,xtc=14:300:100-3k
+long_matrix4_mb_32k | 32000 | matrix4_mb filter_bank=13band
+spaced_matrix4_mb | 48000 | matrix4_mb
+spaced_matrix4_mb_13band | 48000 | matrix4_mb filter_bank=13band
+spaced_matrix4_mb_neutralize | 48000 | matrix4_mb unaligned_event_action=neutralize
+spaced_matrix4_mb_none | 48000 | matrix4_mb unaligned_event_action=none
+spaced_matrix4_mb_2_4_dp | 48000 | matrix4_mb layout=2/4,direct_path
+spaced_matrix4_mb_44k | 44100 | matrix4_mb filter_bank=13band_lfx,rear_event_mask=1
+spaced_matrix4 | 48000 | matrix4
