@@ -91,7 +91,7 @@ This is exhaustive. Based on Logic Pro 10.7 / 11.
 **EQ:**
 - Channel EQ: 8-band parametric, Analyzer (FFT), Analyzer Pre/Post, Q-Couple, Gain-Q-Couple, 20Hz-20kHz, 4x oversampling
 - Linear Phase EQ (same as Channel EQ but linear phase)
-- Vintage EQs: Vintage Graphic EQ (API 560 style), Vintage Tube EQ (Pultec), Vintage Console EQ (Neve)
+- Vintage EQs: Vintage Graphic EQ (API 560 style; to do), Vintage Tube EQ (Pultec; done as **Pult EQ**), Vintage Console EQ (Neve; done as **Kestrel EQ**, issue #192)
 - Single Band EQs, Match EQ (EQ matching)
 
 **Filter:**
@@ -397,8 +397,8 @@ limitations at the end of the section). Still open, in the order the work would 
   region, so a wrong delay cannot empty a take) and a silent input is noticed. Recording is not
   tried on real Windows or macOS microphones here.
 - **Next (not released yet):** Kestrel EQ (issue #192), the console-style EQ of Logic's Vintage EQ
-  family: switched HPF, low shelf, mid bell, a 12 kHz high shelf and a transformer Drive. Vintage
-  Graphic EQ (API 560 style) is still to do.
+  family: switched HPF, low shelf, mid bell, a 12 kHz high shelf and a transformer Drive. It has
+  not been compared by ear with a hardware console. Vintage Graphic EQ (API 560 style) is still to do.
 - **0.3.4:** Hosted CLAP and VST3 plug-ins render their own designed window on Linux/X11 when
   Editor is chosen in Plugin Manager (issue #189); Sliders stays the portable default and is still
   used when a plug-in has no editor. Native editors on Windows are still not hosted.
@@ -534,7 +534,7 @@ test of all the features above on Windows and macOS.
 
 ### Phase 4: Mixer & Channel Strip (Weeks 25-30)
 - [~] Mixer UI: faders, pan, inserts (15 slots, Logic's limit, done), sends (8 slots, pre/post, done), VCA, Sends on Fader and Groups (done); stereo pan puck to do
-- [~] DSP (basic versions done: 3-band Channel EQ, 6-band Multi-Band EQ, Compressor, Noise Gate, Limiter, Overdrive): Channel EQ (8-band with FFT analyzer - use `rustfft` + `egui` plot), Compressor (6 models: Platinum, VCA, FET, Vintage VCA/FET/Opto with sidechain), Gate, Limiter, Overdrive
+- [~] DSP (basic versions done: 3-band Channel EQ, 6-band Multi-Band EQ, Pult EQ, Kestrel EQ, Compressor, Noise Gate, Limiter, Overdrive): Channel EQ (8-band with FFT analyzer - use `rustfft` + `egui` plot), Compressor (6 models: Platinum, VCA, FET, Vintage VCA/FET/Opto with sidechain), Gate, Limiter, Overdrive
 - [~] Automation (fader, pan and every effect setting with Read/Touch/Latch/Write, curved stretches: done): Track vs Region, Trim, two-handle Bezier curves, Automation Quick Access, Sample-accurate parameter automation
 - [~] Bus summing: 64-bit double (done), PDC (done for the effects' look-ahead; plug-in and instrument latency to do), Low Latency Mode
 - **DoD:** Mix 24 tracks with EQ/Comp on each, automation, PDC verified null test
