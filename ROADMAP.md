@@ -402,6 +402,13 @@ limitations at the end of the section). Still open, in the order the work would 
   Mosaic Decimator (bit and sample-rate reduction) and Dustbowl Lo-Fi (wow, flutter, drive, hiss,
   crackle, band limit) from issue #183, written as built-in effects instead of bundling LADSPA
   binaries; more names from that issue's list are to come.
+- **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** part 1 done (chain, argument
+  parsing, selectors, all biquads, gain/mult/add, mid/side, and the catalog of Pro Wave names,
+  compared with the original sample by sample). Next: crossfeed, remix, delay with drain and
+  channel alignment, noise, dither with noise shaping, decorrelate; then FIR, sinc, Hilbert,
+  resample (with `rustfft`), reverse IIR; then matrix4 and matrix4_mb, levels and stats. The
+  file and sound-card backends, zita-convolver and the LADSPA frontend are not ported: Pro Wave
+  has its own.
 - **0.3.4:** Hosted CLAP and VST3 plug-ins render their own designed window on Linux/X11 when
   Editor is chosen in Plugin Manager (issue #189); Sliders stays the portable default and is still
   used when a plug-in has no editor. Native editors on Windows are still not hosted.

@@ -1,0 +1,34 @@
+# name | command line words after the input and output options (the original dsp's syntax)
+lowpass_1 | lowpass_1 1k
+highpass_1 | highpass_1 2k
+allpass_1 | allpass_1 500
+lowshelf_1 | lowshelf_1 300 6
+highshelf_1 | highshelf_1 3k -4
+lowpass_1p | lowpass_1p 800
+lowpass | lowpass 1k 0.7q
+lowpass_bw4 | lowpass 2k bw4.0 lowpass 2k bw4.1
+highpass_oct | highpass 100 0.5o
+bandpass_skirt | bandpass_skirt 1k 1q
+bandpass_peak_hz | bandpass_peak 1k 100h
+notch | notch 5k 2q
+allpass | allpass 1k 0.5q
+eq | eq 1k 1q 6
+eq_oct | eq 4k 0.3o -9
+lowshelf_slope | lowshelf 200 0.5s 6
+lowshelf_slope_db | lowshelf 200 6d 6
+highshelf_slope_db | highshelf 4k 6d -5
+highshelf | highshelf 4k 0.7q -5
+lowpass_transform | lowpass_transform 100 0.7q 50 0.5q
+highpass_transform | highpass_transform 50 0.7q 25 0.7q
+linkwitz | linkwitz_transform 50 0.7q 25 0.7q
+deemph | deemph
+biquad | biquad 1 0.5 0.25 1.2 -0.3 0.1
+gain | gain -3
+mult | mult 0.25
+add | add 0.01
+st2ms | st2ms
+ms2st | ms2st
+st2ms_ms2st | st2ms ms2st
+selector_filter | :0 lowpass 1k 0.7q
+selector_gain | :1 gain -6 :0 gain 6
+selector_ms | st2ms :0 highpass 200 0.7q :- ms2st
