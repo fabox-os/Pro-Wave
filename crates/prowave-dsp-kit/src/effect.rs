@@ -32,6 +32,20 @@ pub trait Effect: Send {
     fn buffer_frames(&self, frames: usize) -> usize {
         frames
     }
+    /// Whether the effect leaves the signal at a precision where dither would be pointless
+    /// (`EFFECT_FLAG_NO_DITHER`: meters, statistics, pure channel routing).
+    fn no_dither(&self) -> bool {
+        false
+    }
+    /// Gives a dither effect the precision of the output (`dither_effect_set_params`); returns
+    /// whether this effect is a dither effect.
+    fn set_dither_params(&mut self, _bits: i32, _enabled: bool) -> bool {
+        false
+    }
+    /// Whether this is a dither effect.
+    fn is_dither(&self) -> bool {
+        false
+    }
 }
 
 /// The function that makes an effect from its arguments.
@@ -62,7 +76,12 @@ pub fn effects() -> impl Iterator<Item = &'static EffectInfo> {
     crate::biquad::INFO
         .iter()
         .chain(crate::gain::INFO.iter())
+        .chain(crate::crossfeed::INFO.iter())
+        .chain(crate::remix::INFO.iter())
         .chain(crate::st2ms::INFO.iter())
+        .chain(crate::decorrelate::INFO.iter())
+        .chain(crate::noise::INFO.iter())
+        .chain(crate::dither::INFO.iter())
 }
 
 /// The effect called `name`, if there is one.
