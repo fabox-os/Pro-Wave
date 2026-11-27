@@ -41,9 +41,15 @@ pub mod args;
 pub mod biquad;
 pub mod catalog;
 pub mod chain;
+pub mod crossfeed;
+pub mod decorrelate;
+pub mod dither;
 pub mod effect;
 pub mod error;
 pub mod gain;
+pub mod noise;
+pub mod remix;
+pub mod rng;
 pub mod selector;
 pub mod st2ms;
 

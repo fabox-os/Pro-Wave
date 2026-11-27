@@ -33,17 +33,18 @@ fn every_case_matches_the_original_program_sample_by_sample() {
         .lines()
         .filter(|l| !l.starts_with('#') && l.contains('|'))
     {
-        let (name, words) = line.split_once('|').unwrap_or_default();
-        let (name, words) = (name.trim(), words.trim());
+        let mut fields = line.splitn(3, '|');
+        let name = fields.next().unwrap_or_default().trim();
+        let fs: u32 = fields
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .parse()
+            .unwrap_or(48_000);
+        let words = fields.next().unwrap_or_default().trim();
         let argv: Vec<&str> = words.split_whitespace().collect();
         let want = read_f32(&dir().join(format!("{name}.f32")));
-        let mut chain = match Chain::from_args(
-            Stream {
-                fs: 48_000,
-                channels: 2,
-            },
-            &argv,
-        ) {
+        let mut chain = match Chain::from_args(Stream { fs, channels: 2 }, &argv) {
             Ok(c) => c,
             Err(e) => {
                 problems.push(format!("{name}: {e}"));
@@ -74,7 +75,7 @@ fn every_case_matches_the_original_program_sample_by_sample() {
         checked += 1;
     }
     assert!(problems.is_empty(), "{problems:#?}");
-    assert!(checked >= 30, "only {checked} cases");
+    assert!(checked >= 55, "only {checked} cases");
 }
 
 #[test]

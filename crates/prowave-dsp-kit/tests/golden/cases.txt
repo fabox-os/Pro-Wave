@@ -1,34 +1,57 @@
-# name | command line words after the input and output options (the original dsp's syntax)
-lowpass_1 | lowpass_1 1k
-highpass_1 | highpass_1 2k
-allpass_1 | allpass_1 500
-lowshelf_1 | lowshelf_1 300 6
-highshelf_1 | highshelf_1 3k -4
-lowpass_1p | lowpass_1p 800
-lowpass | lowpass 1k 0.7q
-lowpass_bw4 | lowpass 2k bw4.0 lowpass 2k bw4.1
-highpass_oct | highpass 100 0.5o
-bandpass_skirt | bandpass_skirt 1k 1q
-bandpass_peak_hz | bandpass_peak 1k 100h
-notch | notch 5k 2q
-allpass | allpass 1k 0.5q
-eq | eq 1k 1q 6
-eq_oct | eq 4k 0.3o -9
-lowshelf_slope | lowshelf 200 0.5s 6
-lowshelf_slope_db | lowshelf 200 6d 6
-highshelf_slope_db | highshelf 4k 6d -5
-highshelf | highshelf 4k 0.7q -5
-lowpass_transform | lowpass_transform 100 0.7q 50 0.5q
-highpass_transform | highpass_transform 50 0.7q 25 0.7q
-linkwitz | linkwitz_transform 50 0.7q 25 0.7q
-deemph | deemph
-biquad | biquad 1 0.5 0.25 1.2 -0.3 0.1
-gain | gain -3
-mult | mult 0.25
-add | add 0.01
-st2ms | st2ms
-ms2st | ms2st
-st2ms_ms2st | st2ms ms2st
-selector_filter | :0 lowpass 1k 0.7q
-selector_gain | :1 gain -6 :0 gain 6
-selector_ms | st2ms :0 highpass 200 0.7q :- ms2st
+# name | sample rate | command line words after the input and output options (the original dsp's syntax)
+lowpass_1 | 48000 | lowpass_1 1k
+highpass_1 | 48000 | highpass_1 2k
+allpass_1 | 48000 | allpass_1 500
+lowshelf_1 | 48000 | lowshelf_1 300 6
+highshelf_1 | 48000 | highshelf_1 3k -4
+lowpass_1p | 48000 | lowpass_1p 800
+lowpass | 48000 | lowpass 1k 0.7q
+lowpass_bw4 | 48000 | lowpass 2k bw4.0 lowpass 2k bw4.1
+highpass_oct | 48000 | highpass 100 0.5o
+bandpass_skirt | 48000 | bandpass_skirt 1k 1q
+bandpass_peak_hz | 48000 | bandpass_peak 1k 100h
+notch | 48000 | notch 5k 2q
+allpass | 48000 | allpass 1k 0.5q
+eq | 48000 | eq 1k 1q 6
+eq_oct | 48000 | eq 4k 0.3o -9
+lowshelf_slope | 48000 | lowshelf 200 0.5s 6
+lowshelf_slope_db | 48000 | lowshelf 200 6d 6
+highshelf_slope_db | 48000 | highshelf 4k 6d -5
+highshelf | 48000 | highshelf 4k 0.7q -5
+lowpass_transform | 48000 | lowpass_transform 100 0.7q 50 0.5q
+highpass_transform | 48000 | highpass_transform 50 0.7q 25 0.7q
+linkwitz | 48000 | linkwitz_transform 50 0.7q 25 0.7q
+deemph | 48000 | deemph
+biquad | 48000 | biquad 1 0.5 0.25 1.2 -0.3 0.1
+gain | 48000 | gain -3
+mult | 48000 | mult 0.25
+add | 48000 | add 0.01
+st2ms | 48000 | st2ms
+ms2st | 48000 | ms2st
+st2ms_ms2st | 48000 | st2ms ms2st
+selector_filter | 48000 | :0 lowpass 1k 0.7q
+selector_gain | 48000 | :1 gain -6 :0 gain 6
+selector_ms | 48000 | st2ms :0 highpass 200 0.7q :- ms2st
+crossfeed | 48000 | crossfeed 700 4.5
+crossfeed_sel | 48000 | :0,1 crossfeed 1k 6
+noise_db | 48000 | noise -90
+noise_bits | 48000 | noise 16b
+noise_sel | 48000 | :1 noise -60
+remix_swap | 48000 | remix 1 0
+remix_mono | 48000 | remix 0,1
+remix_both | 48000 | remix 0,1 0,1
+remix_three | 48000 | remix 0 1 0,1
+remix_silence | 48000 | remix 0 .
+dither_flat | 48000 | dither flat 12
+dither_flat_q | 48000 | dither flat 10 16
+dither_sloped | 48000 | dither sloped 12
+dither_sloped2 | 48000 | dither sloped2 14
+dither_wan3 | 48000 | dither wan3 16
+dither_wan9 | 48000 | dither wan9 16
+dither_lipshitz | 44100 | dither lipshitz 16
+dither_fallback | 48000 | dither lipshitz 16
+dither_bits | 48000 | dither 12
+dither_sel | 48000 | :1 dither 14
+decorrelate | 48000 | decorrelate -s 1
+decorrelate_mono | 48000 | decorrelate -m -s 7 3
+decorrelate_opts | 48000 | decorrelate -s 3 -f 2k -l 50m -h 4m -d 1m -D 2m 2

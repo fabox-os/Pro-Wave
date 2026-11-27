@@ -142,6 +142,30 @@ impl Chain {
         out
     }
 
+    /// Whether any effect changes the signal in a way that dither at the output would help
+    /// (`effects_chain_needs_dither`).
+    pub fn needs_dither(&self) -> bool {
+        self.effects
+            .iter()
+            .any(|e| !e.no_dither() && !e.is_dither())
+    }
+
+    /// Tells the dither effects the precision of the output and whether dithering is wanted
+    /// (`effects_chain_set_dither_params`). Returns whether the caller should add dither of its
+    /// own at the output, which is the case when there is no dither effect after the last
+    /// effect that needs it.
+    pub fn set_dither_params(&mut self, bits: i32, enabled: bool) -> bool {
+        let mut r = true;
+        for e in self.effects.iter_mut() {
+            if e.set_dither_params(bits, enabled) {
+                r = false;
+            } else if !e.no_dither() {
+                r = true;
+            }
+        }
+        r && enabled
+    }
+
     /// Forgets the signal in every effect.
     pub fn reset(&mut self) {
         for e in self.effects.iter_mut() {
