@@ -915,6 +915,8 @@ impl Backend for ClapBackend {
         not(any(target_os = "macos", target_os = "linux")),
         allow(unreachable_code)
     )]
+    // On macOS `EditorParent` has one variant, so the `match` below destructures it.
+    #[cfg_attr(target_os = "macos", allow(clippy::infallible_destructuring_match))]
     fn main_editor_open(&self, parent: EditorParent) -> Option<(u32, u32)> {
         let handle = match parent {
             #[cfg(target_os = "macos")]
