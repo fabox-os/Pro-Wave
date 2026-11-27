@@ -909,6 +909,12 @@ impl Backend for ClapBackend {
         }
     }
 
+    // On Windows `EditorParent` has no variants, so nothing can be opened and the rest is
+    // unreachable; it is still compiled there.
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "linux")),
+        allow(unreachable_code)
+    )]
     fn main_editor_open(&self, parent: EditorParent) -> Option<(u32, u32)> {
         let handle = match parent {
             #[cfg(target_os = "macos")]

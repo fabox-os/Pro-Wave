@@ -249,6 +249,9 @@ fn editor_os() -> EditorOs {
 /// A plug-in can only show its own window where the host has a window system and the plug-in
 /// actually made a view. A missing `DISPLAY` leaves Linux editors unavailable so the app shows
 /// sliders instead.
+// Only Linux looks at `display_available`; macOS and Windows always have a window system (or
+// none to ask about).
+#[cfg_attr(not(any(test, target_os = "linux")), allow(unused_variables))]
 fn editor_capable(os: EditorOs, display_available: bool, has_view: bool) -> bool {
     if !has_view {
         return false;
@@ -877,10 +880,9 @@ impl Server {
         };
         if open {
             if self.window.is_none() {
+                // The macOS window cannot fail to open; the X11 one can (no display).
                 #[cfg(target_os = "macos")]
-                let Some(window) = crate::mac::Window::new(&self.name) else {
-                    return;
-                };
+                let window = crate::mac::Window::new(&self.name);
                 #[cfg(target_os = "linux")]
                 let Some(window) = crate::x11::Window::new(&self.name) else {
                     return;

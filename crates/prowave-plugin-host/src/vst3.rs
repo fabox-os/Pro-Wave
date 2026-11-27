@@ -2414,6 +2414,12 @@ impl Backend for Vst3Backend {
         cfg!(any(target_os = "macos", target_os = "linux")) && !self.controller.is_null()
     }
 
+    // On Windows `EditorParent` has no variants, so nothing can be opened and the rest is
+    // unreachable; it is still compiled there.
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "linux")),
+        allow(unreachable_code)
+    )]
     fn main_editor_open(&self, parent: crate::EditorParent) -> Option<(u32, u32)> {
         let (parent_view, platform): (*mut c_void, &CStr) = match parent {
             #[cfg(target_os = "macos")]
