@@ -31,7 +31,7 @@ jobs:
       - name: Install audio/windowing dev packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libxkbcommon-dev libwayland-dev \
+          sudo apt-get install -y pkg-config libasound2-dev liblilv-dev libxkbcommon-dev libwayland-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -78,7 +78,7 @@ jobs:
       - name: Launch smoke test (Xvfb, software GL)
         continue-on-error: true
         run: |
-          sudo apt-get install -y xvfb libegl1 libgl1-mesa-dri libxkbcommon-x11-0 \
+          sudo apt-get install -y xvfb liblilv-0-0 libegl1 libgl1-mesa-dri libxkbcommon-x11-0 \
             libxcursor1 libxrandr2 libxi6
           work=$(mktemp -d)
           tar -C "$work" -xzf prowave-linux-x86_64.tar.gz
@@ -178,10 +178,11 @@ jobs:
           mv rpm/x86_64/prowave-studio-*.rpm .
           rpm -qpi prowave-studio-*.rpm
           rpm -qpl prowave-studio-*.rpm
-          # The ALSA dependency must have been found from the ELF.
+          # The ALSA and lilv (LV2 hosting) dependencies must have been found from the ELF.
           reqs=$(rpm -qpR prowave-studio-*.rpm)
           echo "$reqs"
           grep -qF 'libasound.so.2()(64bit)' <<<"$reqs"
+          grep -qF 'liblilv-0.so.0()(64bit)' <<<"$reqs"
       # Installs into a clean Fedora container, so dnf has to resolve every dependency itself.
       - name: Check .rpm installs and removes on Fedora
         run: |
@@ -248,7 +249,7 @@ jobs:
         continue-on-error: true
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libasound2 libegl1 libgl1-mesa-dri libxkbcommon-x11-0 \
+          sudo apt-get install -y xvfb libasound2 liblilv-0-0 libegl1 libgl1-mesa-dri libxkbcommon-x11-0 \
             libxcursor1 libxrandr2 libxi6
           status=0
           xvfb-run -a sh -c "APPIMAGE_EXTRACT_AND_RUN=1 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 \
