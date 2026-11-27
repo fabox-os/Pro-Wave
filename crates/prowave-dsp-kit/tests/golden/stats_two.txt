@@ -1,0 +1,24 @@
+
+Channel                       0            1
+DC offset            0.00000000   0.00041247
+Minimum             -0.74752539  -0.64155835
+Maximum              0.74752539   1.22808933
+Peak level (dBFS)       -2.5275       1.7846
+RMS level (dBFS)        -8.0618      -9.9545
+Crest factor (dB)        5.5343      11.7391
+Peak count                   16            1
+Peak sample                 137          100
+Samples                    4800         4800
+Length (s)                 0.10         0.10
+
+Channel                       0            1
+DC offset            0.00000000   0.00020672
+Minimum             -0.37582110  -0.32787923
+Maximum              0.37582110   0.61550306
+Peak level (dBFS)       -8.5004      -4.2154
+RMS level (dBFS)       -14.0618     -15.9545
+Crest factor (dB)        5.5614      11.7391
+Peak count                    8            1
+Peak sample                 136          100
+Samples                    4800         4800
+Length (s)                 0.10         0.10

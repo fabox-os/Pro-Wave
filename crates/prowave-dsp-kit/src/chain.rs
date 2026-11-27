@@ -1,9 +1,120 @@
 //! A chain of effects, built from a command line like `gain -6 :0 lowpass 1k 0.7q`
 //! (`effects_chain.c` of the original).
 
-use crate::effect::{get_effect_info, Buf, Effect, Stream};
+use crate::effect::{get_effect_info, Buf, Effect, Report, Stream};
 use crate::error::{Error, Result};
-use crate::selector::parse_selector;
+use crate::selector::parse_selector_masked;
+
+/// `EC_PARSE_MAX_RDEPTH`
+const MAX_PARSE_DEPTH: usize = 512;
+
+/// Effects of the original that the port does not have (they need native libraries or
+/// files); as names they still end the argument list of the effect before them.
+const UNAVAILABLE: [&str; 3] = ["zita_convolver", "ladspa_host", "watch"];
+
+/// A word of the command line (`struct ec_token`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Token<'a> {
+    Literal(&'a str),
+    /// A word that began with `\`: always an argument.
+    Escaped(&'a str),
+    ChSel(&'a str),
+    BlockStart,
+    BlockEnd,
+    Source(&'a str),
+    AllowFail,
+    NewThread,
+}
+
+/// `ec_lex_word` and `ec_get_token_id`
+fn lex(w: &str) -> Token<'_> {
+    if let Some(rest) = w.strip_prefix('\\') {
+        return Token::Escaped(rest);
+    }
+    if let Some(rest) = w.strip_prefix(':') {
+        Token::ChSel(rest)
+    } else if w == "{" {
+        Token::BlockStart
+    } else if w == "}" {
+        Token::BlockEnd
+    } else if w.len() > 1 && w.starts_with('@') {
+        Token::Source(&w[1..])
+    } else if w == "!" {
+        Token::AllowFail
+    } else if w == "new_thread" {
+        Token::NewThread
+    } else {
+        Token::Literal(w)
+    }
+}
+
+impl<'a> Token<'a> {
+    fn text(&self) -> &'a str {
+        match *self {
+            Token::Literal(s) | Token::Escaped(s) | Token::ChSel(s) | Token::Source(s) => s,
+            Token::BlockStart => "{",
+            Token::BlockEnd => "}",
+            Token::AllowFail => "!",
+            Token::NewThread => "new_thread",
+        }
+    }
+    /// `ec_token_is_keyword`: whether the word ends the argument list of an effect.
+    fn is_keyword(&self) -> bool {
+        match *self {
+            Token::Escaped(_) => false,
+            Token::Literal(s) => get_effect_info(s).is_some() || UNAVAILABLE.contains(&s),
+            _ => true,
+        }
+    }
+}
+
+/// `struct ec_parser_state`: the selector and the channel mask of a block.
+struct ParseState {
+    ch_sel: Vec<bool>,
+    ch_mask: Vec<bool>,
+    last_ch_sel: Option<String>,
+    last_stream_ch: usize,
+    allow_fail: bool,
+}
+
+impl ParseState {
+    /// `ec_parser_state_ch_sel_mask`: the mask is the given one (all channels at the top) and
+    /// the selector starts as the whole mask.
+    fn new(mask: Option<&[bool]>, n: usize) -> Self {
+        let ch_mask = mask.map_or_else(|| vec![true; n], <[bool]>::to_vec);
+        Self {
+            ch_sel: ch_mask.clone(),
+            ch_mask,
+            last_ch_sel: None,
+            last_stream_ch: n,
+            allow_fail: false,
+        }
+    }
+
+    /// The mask for a stream that now has `n` channels: added channels are appended to the
+    /// mask; with fewer channels the mask keeps its first ones.
+    fn update_mask(&mut self, n: usize) {
+        let last = self.last_stream_ch;
+        let mut tmp = vec![false; n];
+        if n > last {
+            tmp[..last].copy_from_slice(&self.ch_mask[..last]);
+            tmp[last..].fill(true);
+        } else {
+            let mut nb =
+                (self.ch_mask[..last].iter().filter(|b| **b).count() + n) as isize - last as isize;
+            for j in 0..n {
+                if nb <= 0 {
+                    break;
+                }
+                if self.ch_mask[j] {
+                    tmp[j] = true;
+                    nb -= 1;
+                }
+            }
+        }
+        self.ch_mask = tmp;
+    }
+}
 
 /// The original's default block size.
 pub const DEFAULT_BLOCK_FRAMES: usize = 2048;
@@ -84,46 +195,120 @@ impl Chain {
         Ok(())
     }
 
-    /// Builds a chain from command-line words: effect names followed by their arguments, and
-    /// `:selector` words that choose the channels of the effects after them. `{` and `}`
-    /// blocks are not supported yet.
+    /// Builds a chain from command-line words, with the original's syntax (`ec_parse`):
+    /// effect names followed by their arguments; `:selector` words that choose the channels
+    /// of the effects after them; `{ … }` blocks, inside which the selectors count only the
+    /// channels selected where the block starts; `!` before an effect that may fail to
+    /// start (it is then left out); and `\word` for an argument that would otherwise be
+    /// read as an effect name or a directive. Effects files (`@file`) and `new_thread` are
+    /// not supported.
     pub fn from_args(istream: Stream, argv: &[&str]) -> Result<Self> {
         let mut chain = Chain::new(istream);
-        let mut selector_text = String::new();
-        let mut selector = vec![true; istream.channels];
-        let mut i = 0;
-        while i < argv.len() {
-            let w = argv[i];
-            if let Some(s) = w.strip_prefix(':') {
-                selector_text = s.to_string();
-                selector = parse_selector(s, chain.ostream.channels)?;
-                i += 1;
-            } else if w == "{" || w == "}" {
-                return Err(Error::Unsupported("effect blocks ({ })".into()));
-            } else if get_effect_info(w).is_some() {
-                let mut j = i + 1;
-                while j < argv.len()
-                    && get_effect_info(argv[j]).is_none()
-                    && !argv[j].starts_with(':')
-                    && argv[j] != "{"
-                    && argv[j] != "}"
-                {
-                    j += 1;
-                }
-                let before = chain.ostream.channels;
-                chain.push(w, &argv[i + 1..j], Some(&selector))?;
-                // If the effect changed the number of channels the last selector is parsed
-                // again for the new count.
-                if chain.ostream.channels != before {
-                    selector = parse_selector(&selector_text, chain.ostream.channels)?;
-                }
-                i = j;
-            } else {
-                return Err(Error::UnknownEffect(w.into()));
-            }
-        }
+        let tokens: Vec<Token> = argv.iter().map(|w| lex(w)).collect();
+        let mut state = ParseState::new(None, istream.channels);
+        let end = chain.parse(&mut state, &tokens, 0, false, 1)?;
+        debug_assert_eq!(end, tokens.len());
         chain.build()?;
         Ok(chain)
+    }
+
+    /// `ec_parse`: parses `tokens[i..]` up to the end, or up to the `}` that closes the block
+    /// when `in_block`; returns the index where it stopped.
+    fn parse(
+        &mut self,
+        st: &mut ParseState,
+        tokens: &[Token],
+        mut i: usize,
+        in_block: bool,
+        depth: usize,
+    ) -> Result<usize> {
+        if depth > MAX_PARSE_DEPTH {
+            return Err(Error::Message("maximum recursion depth exceeded".into()));
+        }
+        while i < tokens.len() {
+            let tok = tokens[i];
+            if in_block && tok == Token::BlockEnd {
+                return Ok(i);
+            }
+            match tok {
+                Token::AllowFail => {
+                    st.allow_fail = true;
+                    i += 1;
+                    continue;
+                }
+                Token::NewThread => {
+                    return Err(Error::Unsupported("the new_thread directive".into()));
+                }
+                _ => {}
+            }
+            let n = self.ostream.channels;
+            if st.last_stream_ch != n {
+                st.update_mask(n);
+            }
+            if let Token::ChSel(text) = tok {
+                if st.last_stream_ch != n {
+                    st.last_stream_ch = n;
+                }
+                st.ch_sel = parse_selector_masked(text, &st.ch_mask)?;
+                st.last_ch_sel = Some(text.to_string());
+                i += 1;
+                continue;
+            }
+            if st.last_stream_ch != n {
+                // the number of channels changed: parse the selector again
+                st.ch_sel = match &st.last_ch_sel {
+                    None => st.ch_mask.clone(),
+                    Some(text) => parse_selector_masked(text, &st.ch_mask)?,
+                };
+                st.last_stream_ch = n;
+            }
+            match tok {
+                Token::Source(path) => {
+                    return Err(Error::Unsupported(format!("effects files (@{path})")));
+                }
+                Token::BlockStart => {
+                    let mut child = ParseState::new(Some(&st.ch_sel), n);
+                    child.last_stream_ch = st.last_stream_ch;
+                    let end = self.parse(&mut child, tokens, i + 1, true, depth + 1)?;
+                    if end >= tokens.len() {
+                        return Err(Error::Message("unterminated block".into()));
+                    }
+                    i = end + 1;
+                    continue;
+                }
+                Token::Literal(_) => {}
+                _ => return Err(Error::Message(format!("unexpected token: {}", tok.text()))),
+            }
+            let name = tok.text();
+            let mut j = i + 1;
+            while j < tokens.len() && !tokens[j].is_keyword() {
+                j += 1;
+            }
+            let args: Vec<&str> = tokens[i + 1..j].iter().map(|t| t.text()).collect();
+            let r = if get_effect_info(name).is_some() {
+                self.push(name, &args, Some(&st.ch_sel))
+            } else if UNAVAILABLE.contains(&name) {
+                Err(Error::Unsupported(format!("effect not available: {name}")))
+            } else {
+                Err(Error::UnknownEffect(name.into()))
+            };
+            // `!`: an effect that fails to start is left out
+            if let Err(e) = r {
+                if !st.allow_fail {
+                    return Err(e);
+                }
+            }
+            st.allow_fail = false;
+            i = j;
+        }
+        Ok(i)
+    }
+
+    /// What the measuring effects (`stats`, `levels`) found, in chain order. A `stats`
+    /// report covers the signal so far and ends its measurement, as the end of the signal
+    /// does in the original; call it after [`Chain::drain`] (or [`Chain::process`]).
+    pub fn reports(&mut self) -> Vec<Report> {
+        self.effects.iter_mut().filter_map(|e| e.report()).collect()
     }
 
     /// Runs the interleaved signal `input` through the chain, `block_frames` at a time, and
@@ -291,5 +476,79 @@ impl Chain {
         for e in self.effects.iter_mut() {
             e.reset();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const S: Stream = Stream {
+        fs: 48_000,
+        channels: 2,
+    };
+
+    fn ramp() -> Vec<f64> {
+        (0..200).map(|i| f64::from(i) / 400.0).collect()
+    }
+
+    #[test]
+    fn a_block_counts_its_selectors_within_its_mask() {
+        let x = ramp();
+        let mut a = Chain::from_args(S, &[":1", "{", ":0", "gain", "-6", "}"]).unwrap();
+        let mut b = Chain::from_args(S, &[":1", "gain", "-6"]).unwrap();
+        assert_eq!(a.process(&x), b.process(&x));
+        // a selector inside the block ends with it
+        let mut a = Chain::from_args(S, &["{", ":0", "gain", "-6", "}", "gain", "-6"]).unwrap();
+        let y = a.process(&x);
+        assert!((y[0] - x[0] * 0.25).abs() < 1e-3 && (y[1] - x[1] * 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn badly_formed_blocks_and_unsupported_directives_are_errors() {
+        assert!(Chain::from_args(S, &["{", "gain", "-3"]).is_err());
+        assert!(Chain::from_args(S, &["gain", "-3", "}"]).is_err());
+        assert!(matches!(
+            Chain::from_args(S, &["@effects.txt"]),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            Chain::from_args(S, &["gain", "-3", "new_thread", "gain", "-3"]),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            Chain::from_args(S, &["zita_convolver", "x"]),
+            Err(Error::Unsupported(_))
+        ));
+        // as in the original, a selector that no longer fits after the block shrank the stream
+        assert!(Chain::from_args(
+            S,
+            &[
+                "remix", "0", "1", "0", ":1,2", "{", "remix", "0,1", ":0", "gain", "2", "}",
+                "gain", "-1"
+            ]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn an_effect_marked_with_a_bang_may_fail() {
+        assert!(Chain::from_args(S, &["nonexistent", "gain", "-3"]).is_err());
+        assert!(Chain::from_args(S, &["!", "nonexistent", "1", "gain", "-3"]).is_ok());
+        assert!(Chain::from_args(S, &["!", "lowpass", "99999k", "0.7q", "gain", "-3"]).is_ok());
+        // the `!` is for the next effect only
+        assert!(Chain::from_args(S, &["!", "gain", "-3", "lowpass", "99999k", "0.7q"]).is_err());
+    }
+
+    #[test]
+    fn a_backslash_makes_an_effect_name_an_argument() {
+        // without the backslash `gain` starts a new effect and `remix` has no arguments
+        assert!(Chain::from_args(S, &["remix", "gain"]).is_err());
+        assert!(matches!(
+            Chain::from_args(S, &["remix", "\\gain"]),
+            Err(Error::Parse { .. }) | Err(Error::Message(_)) | Err(Error::Range { .. })
+        ));
+        assert_eq!(lex("\\:0"), Token::Escaped(":0"));
+        assert!(!lex("\\gain").is_keyword() && lex("gain").is_keyword());
     }
 }

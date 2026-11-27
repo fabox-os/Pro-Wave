@@ -63,17 +63,32 @@ fn every_case_matches_the_original_program_sample_by_sample() {
                 continue;
             }
         };
-        let got: Vec<f64> = chain
-            .process(if name.starts_with("long_") {
-                &long_input
-            } else if name.starts_with("spaced_") {
-                &spaced_input
-            } else {
-                &input
-            })
-            .iter()
-            .map(|v| v.clamp(-1.0, 1.0))
-            .collect();
+        let out = chain.process(if name.starts_with("long_") {
+            &long_input
+        } else if name.starts_with("spaced_") {
+            &spaced_input
+        } else {
+            &input
+        });
+        // `stats_*` cases: the tables the original printed.
+        if let Ok(text) = std::fs::read_to_string(dir().join(format!("{name}.txt"))) {
+            // git may check the tables out with CRLF line ends (Windows)
+            let text = text.replace("\r\n", "\n");
+            let got_text: String = chain
+                .reports()
+                .into_iter()
+                .filter_map(|r| match r {
+                    prowave_dsp_kit::Report::Stats(s) => Some(s.text),
+                    _ => None,
+                })
+                .collect();
+            if got_text != text {
+                problems.push(format!(
+                    "{name}: statistics differ:\n{got_text}\n--- original ---\n{text}"
+                ));
+            }
+        }
+        let got: Vec<f64> = out.iter().map(|v| v.clamp(-1.0, 1.0)).collect();
         if got.len() != want.len() {
             problems.push(format!(
                 "{name}: {} samples, original {}",

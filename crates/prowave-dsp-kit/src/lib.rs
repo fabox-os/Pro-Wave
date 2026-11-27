@@ -59,6 +59,7 @@ pub mod fir_p;
 pub mod fir_util;
 pub mod gain;
 pub mod hilbert;
+pub mod levels;
 pub mod matrix4;
 mod matrix4_common;
 pub mod matrix4_mb;
@@ -73,6 +74,7 @@ pub mod selector;
 pub mod sinc;
 pub mod smoothing;
 pub mod st2ms;
+pub mod stats;
 pub mod window;
 
 /// Starts the program-wide random sequences over (the delays of `decorrelate` and the noise of
@@ -84,5 +86,5 @@ pub fn reset_random_seeds() {
 }
 
 pub use chain::Chain;
-pub use effect::{get_effect_info, Buf, Effect, EffectInfo, Stream};
+pub use effect::{get_effect_info, Buf, Effect, EffectInfo, Report, Stream};
 pub use error::Error;
