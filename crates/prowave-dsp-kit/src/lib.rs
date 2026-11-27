@@ -29,8 +29,10 @@
 //!
 //! The effects are ported; the program around them is not. Reading and writing files and
 //! sound cards (ALSA, PulseAudio, ao, ffmpeg, libsndfile) is what Pro Wave's own engine,
-//! `cpal` and `symphonia` already do, the zita-convolver library is replaced by Pro Wave's own
-//! convolver, and the LADSPA frontend by Pro Wave's LADSPA host.
+//! `cpal` and `symphonia` already do (so a filter comes as `coefs:` or as samples in memory, see
+//! [`fir_util`]), the zita-convolver library is replaced by Pro Wave's own convolver (`-z` uses
+//! `fir_p`, as the original does without the library), and the LADSPA frontend by Pro Wave's
+//! LADSPA host.
 //!
 //! Everything here allocates when an effect is made and not while it runs, and uses no
 //! platform calls, so it builds for `wasm32-unknown-unknown` too.
@@ -49,13 +51,20 @@ pub mod delay;
 pub mod dither;
 pub mod effect;
 pub mod error;
+pub mod fir;
+pub mod fir_p;
+pub mod fir_util;
 pub mod gain;
+pub mod hilbert;
 mod mod_tables;
 pub mod noise;
 pub mod remix;
+pub mod resample;
 pub mod rng;
 pub mod selector;
+pub mod sinc;
 pub mod st2ms;
+pub mod window;
 
 /// Starts the program-wide random sequences over (the delays of `decorrelate` and the noise of
 /// the modulated `delay`), as they are at the start of a run of the original program. Effects

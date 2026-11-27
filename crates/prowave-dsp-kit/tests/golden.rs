@@ -82,7 +82,7 @@ fn every_case_matches_the_original_program_sample_by_sample() {
     }
     assert!(problems.is_empty(), "{problems:#?}");
     assert!(
-        checked >= 70 || std::env::var("GOLDEN_ONLY").is_ok(),
+        checked >= 100 || std::env::var("GOLDEN_ONLY").is_ok(),
         "only {checked} cases"
     );
 }
@@ -96,7 +96,22 @@ fn the_block_size_does_not_change_the_sound() {
         fs: 48_000,
         channels: 2,
     };
-    let words = ["lowpass", "1k", "0.7q", "eq", "300", "1q", "6", "st2ms"];
+    let words = [
+        "lowpass",
+        "1k",
+        "0.7q",
+        "eq",
+        "300",
+        "1q",
+        "6",
+        "st2ms",
+        "sinc",
+        "-c",
+        "2k",
+        "fir_p",
+        "-a",
+        "coefs:0.1,0.5,0.9,0.5,0.1",
+    ];
     let mut a = Chain::from_args(s, &words).unwrap_or_else(|e| panic!("{e}"));
     let mut b = Chain::from_args(s, &words).unwrap_or_else(|e| panic!("{e}"));
     b.set_block_frames(37);

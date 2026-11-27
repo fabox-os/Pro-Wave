@@ -145,10 +145,9 @@ impl Chain {
         out
     }
 
-    /// Runs one block through every effect and appends the result to `out`.
-    fn run_block(&mut self, block: &[f64], out: &mut Vec<f64>) {
+    /// Makes the two buffers big enough for `n` input frames.
+    fn ensure_buffers(&mut self, n: usize) {
         let ich = self.istream.channels.max(1);
-        let n = block.len() / ich;
         let max_ch = self
             .effects
             .iter()
@@ -167,10 +166,28 @@ impl Chain {
         if self.buf2.len() < len {
             self.buf2.resize(len, 0.0);
         }
+    }
+
+    /// Runs one block through every effect and appends the result to `out`.
+    fn run_block(&mut self, block: &[f64], out: &mut Vec<f64>) {
+        let ich = self.istream.channels.max(1);
+        let n = block.len() / ich;
+        self.ensure_buffers(n);
         self.buf1[..n * ich].copy_from_slice(block);
-        let mut frames = n;
-        let mut in_first = true;
-        for e in self.effects.iter_mut() {
+        let (frames, in_first) = self.run_effects(0, n, true);
+        let result = if in_first { &self.buf1 } else { &self.buf2 };
+        out.extend_from_slice(&result[..frames * self.ostream.channels]);
+    }
+
+    /// Runs the effects from `first` on over `frames` frames that lie in the first buffer
+    /// (`in_first`) or the second. Returns the number of frames and where they are.
+    fn run_effects(
+        &mut self,
+        first: usize,
+        mut frames: usize,
+        mut in_first: bool,
+    ) -> (usize, bool) {
+        for e in self.effects.iter_mut().skip(first) {
             let (a, b) = if in_first {
                 (&mut self.buf1, &mut self.buf2)
             } else {
@@ -180,12 +197,12 @@ impl Chain {
                 in_first = !in_first;
             }
         }
-        let result = if in_first { &self.buf1 } else { &self.buf2 };
-        out.extend_from_slice(&result[..frames * self.ostream.channels]);
+        (frames, in_first)
     }
 
     /// Flushes the chain after the last input (`drain_effects_chain`): feeds the silence that
-    /// the effects need to pass on what they still hold, and returns what comes out.
+    /// the effects need to pass on what they still hold, then asks the effects that hold more
+    /// (the resampler) for it, and returns what comes out.
     pub fn drain(&mut self) -> Vec<f64> {
         let mut out = Vec::new();
         if self.iframes < 1 || self.build().is_err() {
@@ -197,6 +214,42 @@ impl Chain {
             self.drain_frames -= n;
             let zeros = vec![0.0; n * ich];
             self.run_block(&zeros, &mut out);
+        }
+        // `drain_effect_list`: skip to the first effect that has something left, take what it
+        // gives, and pass that through the effects after it.
+        self.ensure_buffers(self.block_frames);
+        loop {
+            let mut frames = self.block_frames as isize;
+            let mut dframes = -1isize;
+            let mut in_first = true;
+            let mut idx = 0;
+            while idx < self.effects.len() && dframes == -1 {
+                let (a, b) = (&mut self.buf1, &mut self.buf2);
+                let (a, b) = if in_first { (a, b) } else { (b, a) };
+                dframes = frames;
+                match self.effects[idx].drain2(&mut dframes, a, b) {
+                    Some(Buf::Output) => in_first = !in_first,
+                    Some(Buf::Input) => {}
+                    None => dframes = -1,
+                }
+                let (is_, os_) = (self.effects[idx].istream(), self.effects[idx].ostream());
+                if is_.fs != os_.fs {
+                    let g = crate::effect::gcd(os_.fs, is_.fs);
+                    frames = crate::effect::ratio_mult_ceil(
+                        frames as i64,
+                        i64::from(os_.fs / g),
+                        i64::from(is_.fs / g),
+                    ) as isize;
+                }
+                idx += 1;
+            }
+            if dframes > 0 {
+                let (n, in_first) = self.run_effects(idx, dframes as usize, in_first);
+                let result = if in_first { &self.buf1 } else { &self.buf2 };
+                out.extend_from_slice(&result[..n * self.ostream.channels]);
+            } else {
+                break;
+            }
         }
         out
     }
