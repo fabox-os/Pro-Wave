@@ -119,7 +119,7 @@ const FA: f32 = 0.55;
 
 /// ln(cosh(u)), the antiderivative of tanh, without overflow.
 #[inline]
-fn ln_cosh(u: f32) -> f32 {
+pub(crate) fn ln_cosh(u: f32) -> f32 {
     let a = u.abs();
     a + (1.0 + (-2.0 * a).exp()).ln() - std::f32::consts::LN_2
 }

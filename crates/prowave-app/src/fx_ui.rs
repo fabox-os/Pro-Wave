@@ -61,7 +61,9 @@ fn family(kind: FxKind) -> (Family, &'static str, Color32) {
     match kind {
         // A plug-in has its own window (a LADSPA one `plugin_rack`, a hosted one `plugin_window`).
         FxKind::Plugin => (Family::Filter, "Plug-in", FILTER_TEAL),
-        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => (Family::Eq, "EQ", EQ_BLUE),
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq | FxKind::KestrelEq => {
+            (Family::Eq, "EQ", EQ_BLUE)
+        }
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => {
             (Family::Dynamics, "Dynamics", DYN_AMBER)
         }
@@ -74,7 +76,7 @@ fn family(kind: FxKind) -> (Family, &'static str, Color32) {
 
 fn window_width(kind: FxKind) -> f32 {
     match kind {
-        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => 632.0,
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq | FxKind::KestrelEq => 632.0,
         FxKind::Amp => AMP_W + 28.0,
         FxKind::MultiComp => 604.0,
         _ => 560.0,
@@ -620,7 +622,7 @@ fn header(
 fn visual(ui: &mut Ui, insert: &Insert, reduction: f32, beat: f64, accent: Color32) {
     let params = insert.kind.clamp_params(insert.params);
     match insert.kind {
-        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => {
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq | FxKind::KestrelEq => {
             eq_curve(ui, insert.kind, &params, accent)
         }
         FxKind::Compressor | FxKind::Gate | FxKind::Limiter => {
@@ -842,6 +844,11 @@ fn param_text(kind: FxKind, info: &ParamInfo, v: f32) -> String {
             return text;
         }
     }
+    if kind == FxKind::KestrelEq {
+        if let Some(text) = kestrel_text(info.name, v) {
+            return text;
+        }
+    }
     if matches!(info.name, "Amp" | "Cabinet") {
         return format!("{:.0}", v + 1.0);
     }
@@ -869,6 +876,25 @@ fn pult_text(name: &str, v: f32) -> Option<String> {
         "Atten Freq" => Some(hz(atten_freq_hz(v))),
         "Input" | "Output" => None,
         _ => Some(format!("{v:.1}")),
+    }
+}
+
+/// Kestrel EQ's selectors by name (the knob stops at whole positions): the mode, the switched
+/// frequencies (position 0 is Off) and the polarity switch.
+fn kestrel_text(name: &str, v: f32) -> Option<String> {
+    use prowave_engine::kestrel_eq::{hpf_hz, low_freq_hz, mid_freq_hz, mode_name};
+    let hz = |f: Option<f32>| match f {
+        None => tr("Off").to_string(),
+        Some(f) if f >= 1000.0 => format!("{} kHz", f / 1000.0),
+        Some(f) => format!("{f} Hz"),
+    };
+    match name {
+        "Mode" => Some(tr(mode_name(v)).to_string()),
+        "HPF" => Some(hz(hpf_hz(v))),
+        "Low Freq" => Some(hz(low_freq_hz(v))),
+        "Mid Freq" => Some(hz(mid_freq_hz(v))),
+        "Phase" => Some(if v >= 0.5 { "180°" } else { "0°" }.to_string()),
+        _ => None,
     }
 }
 
@@ -1982,6 +2008,39 @@ mod tests {
         // It is saved by name and opens again with the same settings.
         let (doc, _) = crate::project_io::to_doc(&p);
         assert_eq!(doc.tracks[0].fx[0].kind, "Pult EQ");
+        let (back, _) =
+            crate::project_io::from_doc(&doc, std::path::Path::new("."), &egui::Context::default());
+        assert_eq!(back.tracks[0].inserts, p.tracks[0].inserts);
+    }
+
+    #[test]
+    fn the_kestrel_eq_window_draws_names_its_selectors_and_survives_a_save() {
+        let mut p = Project::empty();
+        let mut ins = Insert::new(FxKind::KestrelEq);
+        ins.params[prowave_engine::kestrel_eq::idx::MID_GAIN] = 9.0;
+        ins.params[prowave_engine::kestrel_eq::idx::MID_FREQ] = 3.0;
+        ins.params[prowave_engine::kestrel_eq::idx::HPF] = 2.0;
+        p.tracks[0].inserts = vec![ins];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)));
+        assert_eq!(kestrel_text("Mode", 1.0).as_deref(), Some("Stereo"));
+        assert_eq!(kestrel_text("HPF", 0.0).as_deref(), Some("Off"));
+        assert_eq!(kestrel_text("HPF", 2.0).as_deref(), Some("80 Hz"));
+        assert_eq!(kestrel_text("Low Freq", 4.0).as_deref(), Some("220 Hz"));
+        assert_eq!(kestrel_text("Mid Freq", 1.0).as_deref(), Some("360 Hz"));
+        assert_eq!(kestrel_text("Mid Freq", 3.0).as_deref(), Some("1.6 kHz"));
+        assert_eq!(kestrel_text("Mid Freq", 6.0).as_deref(), Some("7.2 kHz"));
+        assert_eq!(kestrel_text("Phase", 1.0).as_deref(), Some("180°"));
+        assert_eq!(kestrel_text("Mid Gain", 9.0), None);
+        // It is saved by name and opens again with the same settings.
+        let (doc, _) = crate::project_io::to_doc(&p);
+        assert_eq!(doc.tracks[0].fx[0].kind, "Kestrel EQ");
         let (back, _) =
             crate::project_io::from_doc(&doc, std::path::Path::new("."), &egui::Context::default());
         assert_eq!(back.tracks[0].inserts, p.tracks[0].inserts);
