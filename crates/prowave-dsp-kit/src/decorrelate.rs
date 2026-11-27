@@ -106,6 +106,9 @@ struct Decorrelate {
 }
 
 impl Effect for Decorrelate {
+    fn reorderable(&self) -> bool {
+        true
+    }
     fn name(&self) -> &'static str {
         "decorrelate"
     }

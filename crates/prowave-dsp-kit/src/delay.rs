@@ -50,6 +50,9 @@ struct Delay {
 }
 
 impl Effect for Delay {
+    fn reorderable(&self) -> bool {
+        true
+    }
     fn name(&self) -> &'static str {
         "delay"
     }

@@ -402,6 +402,9 @@ struct BiquadEffect {
 }
 
 impl Effect for BiquadEffect {
+    fn reorderable(&self) -> bool {
+        true
+    }
     fn name(&self) -> &'static str {
         self.name
     }
@@ -603,8 +606,8 @@ fn make(
         Biquad::from_type(kind, f64::from(fs), arg0, arg1, arg2, arg3, width_type)
     };
     if opts.0 {
-        return Err(Error::Unsupported(
-            "-r (reverse IIR, linear-phase filtering) is not ported yet".into(),
+        return Ok(crate::reverse_iir::from_biquad(
+            info, istream, selector, &b, opts.1,
         ));
     }
     let selected = default_selector(selector, istream.channels);
@@ -745,11 +748,8 @@ mod tests {
         assert!(Chain::from_args(S1, &["lowpass_transform", "1k", "1o", "1k", "1q"]).is_err());
         // A negative gain is an argument, not an option.
         assert!(Chain::from_args(S1, &["eq", "1k", "1q", "-3"]).is_ok());
-        // The reverse option is recognised but not ported yet.
-        assert!(matches!(
-            Chain::from_args(S1, &["lowpass", "-r", "1k", "0.7q"]),
-            Err(Error::Unsupported(_))
-        ));
+        assert!(Chain::from_args(S1, &["lowpass", "-r", "1k", "0.7q"]).is_ok());
+        assert!(Chain::from_args(S1, &["lowpass", "-r5", "1k", "0.7q"]).is_err());
         assert!(Chain::from_args(S1, &["lowpass", "-z", "1k", "0.7q"]).is_err());
     }
 

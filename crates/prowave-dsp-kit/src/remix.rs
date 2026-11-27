@@ -23,6 +23,9 @@ struct Remix {
 }
 
 impl Effect for Remix {
+    fn reorderable(&self) -> bool {
+        true
+    }
     fn name(&self) -> &'static str {
         "remix"
     }

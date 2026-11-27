@@ -39,6 +39,9 @@ struct GainEffect {
 }
 
 impl Effect for GainEffect {
+    fn reorderable(&self) -> bool {
+        !self.add
+    }
     fn name(&self) -> &'static str {
         self.name
     }

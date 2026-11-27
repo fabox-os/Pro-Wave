@@ -113,3 +113,25 @@ resample_same | 48000 | resample 48000 gain -2
 resample_chain | 48000 | gain -1 resample 22050 lowpass 2k 0.7q
 resample_x4 | 24000 | resample x4
 resample_sixth | 48000 | resample 8k
+riir_lowpass_1 | 48000 | lowpass_1 -r 1k
+riir_lowpass_1p | 48000 | lowpass_1p -r 800
+riir_highpass_1 | 48000 | highpass_1 -r 2k
+riir_lowpass | 48000 | lowpass -r 2k 0.7q
+riir_highpass | 48000 | highpass -r 200 0.7q
+riir_peak | 48000 | eq -r 1k 1q 6
+riir_bandpass | 48000 | bandpass_skirt -r 1k 1q
+riir_notch | 48000 | notch -r 5k 2q
+riir_allpass | 48000 | allpass -r 1k 0.5q
+riir_lowshelf | 48000 | lowshelf -r 300 0.7q 6
+riir_highshelf | 48000 | highshelf -r 3k 0.7q -5
+riir_thresh | 48000 | lowpass -r40 3k 0.7q
+riir_biquad | 48000 | biquad -r 1 0.5 0.25 1.2 -0.3 0.1
+riir_merge | 48000 | highpass -r 100 0.7q lowpass -r 5k 0.7q
+riir_merge3 | 48000 | highpass -r 100 0.7q eq -r 1k 1q 3 lowpass -r 5k 0.7q
+riir_merge_sel | 48000 | :0 lowpass -r 1k 0.7q :1 lowpass -r 3k 0.7q
+riir_across_gain | 48000 | lowpass -r 1k 0.7q gain -3 highpass -r 100 0.7q
+riir_across_biquad | 48000 | lowpass -r 1k 0.7q eq 2k 1q 3 highpass -r 100 0.7q
+riir_same_pole | 48000 | lowpass -r 1k 0.7q lowpass -r 1k 0.7q
+riir_bw4 | 48000 | lowpass -r 2k bw4.0 lowpass -r 2k bw4.1
+riir_selector_one | 48000 | :1 lowpass -r 1k 0.7q
+riir_44k | 44100 | lowpass -r 8k 0.5q
