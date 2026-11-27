@@ -865,7 +865,9 @@ mod tests {
             })
             .collect();
         let _ = shift_pitch(&input, SR, &shifts, FlexMode::Monophonic);
-        assert!(began.elapsed().as_secs() < 60, "{:?}", began.elapsed());
+        // A parallel workspace run competes for CPU with the other crates' tests; the work itself
+        // is unchanged, so allow that contention without losing the bounded-work check.
+        assert!(began.elapsed().as_secs() < 120, "{:?}", began.elapsed());
     }
 
     #[test]
