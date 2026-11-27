@@ -142,6 +142,9 @@ pub(crate) fn direct(
 }
 
 impl Effect for Direct {
+    fn reorderable(&self) -> bool {
+        true
+    }
     fn name(&self) -> &'static str {
         self.name
     }
@@ -314,6 +317,9 @@ pub(crate) fn overlap_add(
 }
 
 impl Effect for Overlap {
+    fn reorderable(&self) -> bool {
+        true
+    }
     fn name(&self) -> &'static str {
         self.name
     }

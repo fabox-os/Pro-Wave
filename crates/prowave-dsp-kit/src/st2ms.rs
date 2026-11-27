@@ -33,6 +33,9 @@ struct St2Ms {
 }
 
 impl Effect for St2Ms {
+    fn reorderable(&self) -> bool {
+        true
+    }
     fn name(&self) -> &'static str {
         self.name
     }

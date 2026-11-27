@@ -285,6 +285,9 @@ pub fn fir_p_effect(
 }
 
 impl Effect for Partitioned {
+    fn reorderable(&self) -> bool {
+        true
+    }
     fn name(&self) -> &'static str {
         self.name
     }

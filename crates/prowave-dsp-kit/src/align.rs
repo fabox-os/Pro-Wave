@@ -136,7 +136,7 @@ fn sel_is_ident(s: &[bool], n: usize, i: usize) -> bool {
 }
 
 /// `query_channel_deps`: fills `deps` for the effect; returns whether it is a square identity.
-fn query_deps(e: &dyn Effect, is_align: bool, deps: &mut [Vec<bool>]) -> bool {
+pub(crate) fn query_deps(e: &dyn Effect, is_align: bool, deps: &mut [Vec<bool>]) -> bool {
     let (n_in, n_out) = (e.istream().channels, e.ostream().channels);
     for row in deps.iter_mut().take(n_out) {
         row[..n_in].iter_mut().for_each(|b| *b = false);

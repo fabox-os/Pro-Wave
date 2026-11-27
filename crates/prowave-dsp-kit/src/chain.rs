@@ -74,6 +74,7 @@ impl Chain {
             self.built = true;
             return Ok(());
         }
+        crate::optimize::optimize(&mut self.effects);
         for e in self.effects.iter_mut() {
             e.prepare()?;
         }

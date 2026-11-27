@@ -87,6 +87,30 @@ pub trait Effect: Send {
     fn channel_offsets(&self, _latency: &mut [isize], _req_delay: &mut [isize]) -> bool {
         false
     }
+    /// Whether the chain's optimiser may move this effect past others that work on other
+    /// channels (`EFFECT_FLAG_OPT_REORDERABLE` or `EFFECT_FLAG_OPT_REMIX`).
+    fn reorderable(&self) -> bool {
+        false
+    }
+    /// The channels the effect works on, as the optimiser sees them (`channel_selector`);
+    /// `None` means all of them.
+    fn opt_selector(&self) -> Option<&[bool]> {
+        None
+    }
+    /// Effects with the same merge id can be merged by the optimiser (`merge` of the original
+    /// is the same function); `None`: this one cannot be merged.
+    fn merge_id(&self) -> Option<&'static str> {
+        None
+    }
+    /// Gives up what a merge takes from this effect (`merge`, the source side).
+    fn merge_take(&mut self) -> Option<Box<dyn std::any::Any>> {
+        None
+    }
+    /// Takes what [`Effect::merge_take`] gave; returns whether the source effect is now
+    /// entirely part of this one (`EFFECT_MERGE_FULL`).
+    fn merge_put(&mut self, _data: Box<dyn std::any::Any>) -> bool {
+        false
+    }
     /// Adds the number of frames the effect needs to flush its memory, per channel
     /// (`drain_samples`). Returns whether the effect says anything.
     fn drain_samples(&self, _samples: &mut [isize]) -> bool {
