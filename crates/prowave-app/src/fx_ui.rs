@@ -8,6 +8,7 @@ use crate::automation;
 use crate::i18n::{tr, trf};
 use crate::mixer::Meters;
 use crate::model::{AutoTarget, Insert, Project, Track};
+use crate::plugin_ui_prefs::PluginUiMode;
 use crate::UiState;
 use egui::{
     pos2, vec2, Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, Sense,
@@ -225,6 +226,30 @@ pub struct EditorWindow {
 /// instead.
 const EDITOR_GRACE: f64 = 2.0;
 
+/// Which of Logic's two hosted plug-in views to draw: its own window or the parameter sliders.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PluginView {
+    Sliders,
+    Editor,
+}
+
+/// The view for one frame: sliders when there is no usable editor, otherwise a one-off choice
+/// from the insert's menu, otherwise the saved preference (sliders by default).
+pub(crate) fn plugin_view(
+    has_editor: bool,
+    crashed: bool,
+    preferred: PluginUiMode,
+    explicit: Option<PluginUiMode>,
+) -> PluginView {
+    if crashed || !has_editor {
+        return PluginView::Sliders;
+    }
+    match explicit.unwrap_or(preferred) {
+        PluginUiMode::Sliders => PluginView::Sliders,
+        PluginUiMode::Editor => PluginView::Editor,
+    }
+}
+
 /// Closes the plug-in window that is not the one the Mixer has open any more.
 fn forget_editor(s: &mut UiState, keep: Option<u32>) {
     if let Some(editor) = s.mixer.plugin_editor {
@@ -260,14 +285,24 @@ fn plugin_window(
     let instance = crate::hosted_plugins::instance(insert.hosted);
     let info = crate::hosted_plugins::info(insert.hosted);
     let crashed = crate::hosted_plugins::crashed(insert.hosted);
+    let has_editor = !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
+    let view = plugin_view(
+        has_editor,
+        crashed,
+        s.mixer.preferred_plugin_ui,
+        s.mixer.plugin_view_override,
+    );
+    if view == PluginView::Sliders {
+        // Controls (or a plug-in without a usable view) must not leave its window behind.
+        forget_editor(s, None);
+    }
     let mut open = true;
     let mut bypass = insert.bypass;
     let mut reload = false;
     let now = ctx.input(|i| i.time);
 
     // The Editor view: the plug-in's own window, until it is closed there.
-    let wants_editor =
-        !s.mixer.plugin_controls && !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
+    let wants_editor = view == PluginView::Editor;
     if let (true, Some(instance)) = (wants_editor, &instance) {
         if instance.take_power_click() {
             bypass = !bypass;
@@ -326,8 +361,6 @@ fn plugin_window(
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             // Logic's View menu: Controls is this window, Editor the plug-in's.
-                            let has_editor =
-                                !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
                             if has_editor {
                                 let label = RichText::new(tr("Editor")).size(10.5);
                                 if ui.add(egui::Button::new(label)).clicked() {
@@ -374,7 +407,7 @@ fn plugin_window(
                 });
         });
     if to_editor {
-        s.mixer.plugin_controls = false;
+        s.mixer.plugin_view_override = Some(PluginUiMode::Editor);
         s.mixer.plugin_editor = None;
     }
     // A slider move goes through the strip's automation, as a built-in effect's knob does: it
@@ -1704,6 +1737,53 @@ fn filter_panel(ui: &mut Ui, params: &[f32; prowave_engine::MAX_FX_PARAMS], acce
 mod tests {
     use super::*;
     use crate::model::Insert;
+    use crate::plugin_ui_prefs::PluginUiMode;
+
+    #[test]
+    fn plugin_view_defaults_to_the_preference() {
+        assert_eq!(
+            plugin_view(true, false, PluginUiMode::Sliders, None),
+            PluginView::Sliders
+        );
+        assert_eq!(
+            plugin_view(true, false, PluginUiMode::Editor, None),
+            PluginView::Editor
+        );
+    }
+
+    #[test]
+    fn plugin_view_honors_an_explicit_choice() {
+        assert_eq!(
+            plugin_view(
+                true,
+                false,
+                PluginUiMode::Sliders,
+                Some(PluginUiMode::Editor),
+            ),
+            PluginView::Editor
+        );
+        assert_eq!(
+            plugin_view(
+                true,
+                false,
+                PluginUiMode::Editor,
+                Some(PluginUiMode::Sliders),
+            ),
+            PluginView::Sliders
+        );
+    }
+
+    #[test]
+    fn plugin_view_falls_back_when_there_is_no_usable_editor() {
+        assert_eq!(
+            plugin_view(false, false, PluginUiMode::Editor, None),
+            PluginView::Sliders
+        );
+        assert_eq!(
+            plugin_view(true, true, PluginUiMode::Editor, Some(PluginUiMode::Editor),),
+            PluginView::Sliders
+        );
+    }
 
     #[test]
     fn every_effect_window_draws_without_changing_its_insert() {

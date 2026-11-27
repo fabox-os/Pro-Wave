@@ -220,6 +220,49 @@ fn field(text: &str) -> String {
     text.replace(['\t', '\n', '\r'], " ")
 }
 
+/// The platform a plug-in's own window would be drawn on.
+#[derive(Clone, Copy, Debug)]
+enum EditorOs {
+    #[cfg(any(test, target_os = "linux"))]
+    Linux,
+    #[cfg(any(test, target_os = "macos"))]
+    Macos,
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    Other,
+}
+
+fn editor_os() -> EditorOs {
+    #[cfg(target_os = "linux")]
+    {
+        EditorOs::Linux
+    }
+    #[cfg(target_os = "macos")]
+    {
+        EditorOs::Macos
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        EditorOs::Other
+    }
+}
+
+/// A plug-in can only show its own window where the host has a window system and the plug-in
+/// actually made a view. A missing `DISPLAY` leaves Linux editors unavailable so the app shows
+/// sliders instead.
+fn editor_capable(os: EditorOs, display_available: bool, has_view: bool) -> bool {
+    if !has_view {
+        return false;
+    }
+    match os {
+        #[cfg(any(test, target_os = "linux"))]
+        EditorOs::Linux => display_available,
+        #[cfg(any(test, target_os = "macos"))]
+        EditorOs::Macos => true,
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        EditorOs::Other => false,
+    }
+}
+
 // ---- Inside Pro Wave ------------------------------------------------------------------------
 
 /// What the thread that reads the process's output shares with [`Remote`].
@@ -748,20 +791,25 @@ fn serve_audio(map: &Map, wake: &Wake, mut processor: crate::LocalProcessor, blo
     }
 }
 
+#[cfg(target_os = "macos")]
+type EditorWindow = crate::mac::Window;
+#[cfg(target_os = "linux")]
+type EditorWindow = crate::x11::Window;
+
 /// The plug-in's main thread, called again and again: Pro Wave's requests, then what changed.
 struct Server {
     instance: crate::Instance,
     out: Arc<Out>,
     requests: Receiver<String>,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     name: String,
     latency: usize,
     /// Parameters Pro Wave just set: the plug-in may still report the old position for a
     /// moment, which must not travel back as a move.
     quiet: HashMap<usize, Instant>,
     last_tick: Instant,
-    #[cfg(target_os = "macos")]
-    window: Option<crate::mac::Window>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    window: Option<EditorWindow>,
 }
 
 impl Server {
@@ -822,15 +870,32 @@ impl Server {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn editor(&mut self, open: bool, power: bool, title: &str) {
         let Some(local) = self.instance.local().cloned() else {
             return;
         };
         if open {
             if self.window.is_none() {
-                let window = crate::mac::Window::new(&self.name);
-                match local.backend().main_editor_open(window.parent()) {
+                #[cfg(target_os = "macos")]
+                let Some(window) = crate::mac::Window::new(&self.name) else {
+                    return;
+                };
+                #[cfg(target_os = "linux")]
+                let Some(window) = crate::x11::Window::new(&self.name) else {
+                    return;
+                };
+                let parent = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        crate::EditorParent::Cocoa(window.parent())
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        window.editor_parent()
+                    }
+                };
+                match local.backend().main_editor_open(parent) {
                     Some((width, height)) => {
                         window.set_plugin_size(width, height);
                         self.window = Some(window);
@@ -840,17 +905,30 @@ impl Server {
             }
             if let Some(window) = &self.window {
                 window.set_title(title);
+                #[cfg(target_os = "macos")]
                 window.set_power(power);
+                #[cfg(target_os = "linux")]
+                let _ = power;
                 window.show();
                 self.out.line("e\teditor\t1");
             }
-        } else if let Some(window) = &self.window {
-            window.hide();
+        } else if self.window.is_some() {
+            // X11 owns a display connection per window: detach the view and drop the connection
+            // on close, so a later open gets a fresh one. AppKit keeps its window hidden.
+            #[cfg(target_os = "linux")]
+            local.backend().main_editor_close();
+            if let Some(window) = &self.window {
+                window.hide();
+            }
+            #[cfg(target_os = "linux")]
+            {
+                self.window = None;
+            }
             self.out.line("e\teditor\t0");
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn editor(&mut self, _open: bool, _power: bool, _title: &str) {}
 
     fn tick(&mut self) {
@@ -866,6 +944,8 @@ impl Server {
             return;
         }
         self.last_tick = Instant::now();
+        // Each backend's `main_idle` runs here: on Linux VST3 that pumps the plug-in's run loop
+        // alongside the X11 pump below.
         self.instance.idle();
         let now = Instant::now();
         self.quiet.retain(|_, until| *until > now);
@@ -879,15 +959,26 @@ impl Server {
             self.latency = latency;
             self.out.line(&format!("e\tlatency\t{latency}"));
         }
-        #[cfg(target_os = "macos")]
-        if let (Some(window), Some(local)) = (&self.window, self.instance.local()) {
-            if let Some((width, height)) = local.backend().main_editor_resized() {
-                window.set_plugin_size(width, height);
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            #[cfg(target_os = "linux")]
+            if let Some(window) = &self.window {
+                window.pump();
             }
-            if window.take_closed() {
-                self.out.line("e\teditor\t0");
+            let (mut closed, mut power_click) = (false, false);
+            if let Some(window) = &self.window {
+                if let Some(local) = self.instance.local() {
+                    if let Some((width, height)) = local.backend().main_editor_resized() {
+                        window.set_plugin_size(width, height);
+                    }
+                }
+                closed = window.take_closed();
+                power_click = window.take_power_click();
             }
-            if window.take_power_click() {
+            if closed {
+                self.editor(false, false, "");
+            }
+            if power_click {
                 self.out.line("e\tpower");
             }
         }
@@ -932,7 +1023,17 @@ pub(crate) fn serve(args: &[OsString]) -> ! {
     let Some(local) = instance.local().cloned() else {
         fail("the plug-in is not in this process")
     };
-    let has_editor = cfg!(target_os = "macos") && local.backend().main_has_editor();
+    #[cfg(target_os = "linux")]
+    let display = std::env::var_os("DISPLAY");
+    #[cfg(target_os = "linux")]
+    let display_available = crate::x11::available_from_env(display.as_deref());
+    #[cfg(not(target_os = "linux"))]
+    let display_available = true;
+    let has_editor = editor_capable(
+        editor_os(),
+        display_available,
+        local.backend().main_has_editor(),
+    );
     let latency = instance.latency_samples();
     out.line(&format!("r\tready\t{latency}\t{}", u8::from(has_editor)));
     for (i, param) in instance.params().iter().enumerate() {
@@ -967,7 +1068,7 @@ pub(crate) fn serve(args: &[OsString]) -> ! {
         latency,
         quiet: HashMap::new(),
         last_tick: Instant::now(),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         window: None,
     };
     #[cfg(target_os = "macos")]
@@ -976,5 +1077,18 @@ pub(crate) fn serve(args: &[OsString]) -> ! {
     loop {
         server.tick();
         std::thread::sleep(Duration::from_millis(4));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{editor_capable, EditorOs};
+
+    #[test]
+    fn editors_require_a_supported_os_and_a_view() {
+        assert!(editor_capable(EditorOs::Linux, true, true));
+        assert!(!editor_capable(EditorOs::Linux, false, true));
+        assert!(!editor_capable(EditorOs::Linux, true, false));
+        assert!(editor_capable(EditorOs::Macos, true, true));
     }
 }

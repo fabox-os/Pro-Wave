@@ -13,7 +13,7 @@
 //! where a crash takes that process down. [`load_sandboxed`] gives it a process of its own
 //! (`sandbox.rs`): the sound crosses in shared memory, and a plug-in that crashes or hangs
 //! while playing leaves the sound passing through its slot. That process also shows the
-//! plug-in's own window (`mac.rs`). The app scans in a child process too
+//! plug-in's own window (`mac.rs`, or `x11.rs` on Linux). The app scans in a child process too
 //! (`prowave --scan-plugin`), since a scan runs every plug-in once.
 //!
 //! Threads: an [`Instance`] belongs to the main (UI) thread, a [`Processor`] to the audio
@@ -22,13 +22,27 @@
 //!
 //! Not done: instruments (a plug-in must take and give audio), side-chain inputs (they get
 //! silence), surround; a process of its own on Windows ([`load_sandboxed`] loads in-process
-//! there); the plug-ins' own windows on Windows and Linux.
+//! there); the plug-ins' own windows on Windows.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use std::cell::UnsafeCell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// The OS view handle a plug-in's own editor attaches to. The typed variants keep a Cocoa view
+/// from being handed to a Linux plug-in, and vice versa.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EditorParent {
+    #[cfg(target_os = "macos")]
+    Cocoa(*mut std::ffi::c_void),
+    #[cfg(target_os = "linux")]
+    X11 {
+        // Kept for the typed X11 handle; neither editor format needs it in its attach call.
+        _display: *mut std::ffi::c_void,
+        window: u64,
+    },
+}
 
 #[cfg(target_os = "macos")]
 mod au;
@@ -38,6 +52,8 @@ mod mac;
 #[cfg(unix)]
 mod sandbox;
 mod vst3;
+#[cfg(target_os = "linux")]
+pub(crate) mod x11;
 
 /// The most parameter moves handed to a plug-in in one block; later ones wait for the next.
 const MAX_CHANGES: usize = 128;
@@ -125,8 +141,8 @@ impl std::error::Error for Error {}
 /// One format's side of a loaded plug-in. The `main_` methods are called on the main thread
 /// only, `process` and `reset` on the audio thread only; the two may run at the same time, as
 /// each format allows.
-// The window methods are used where plug-in windows are hosted (macOS, for now).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+// The window methods are used where plug-in windows are hosted (macOS and Linux/X11).
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 pub(crate) trait Backend {
     fn params(&self) -> Vec<ParamInfo>;
     /// The position (0..=1) of parameter `index` now.
@@ -147,9 +163,9 @@ pub(crate) trait Backend {
     fn main_has_editor(&self) -> bool {
         false
     }
-    /// Puts the plug-in's own view inside `parent` (macOS: an `NSView`) and returns its size
-    /// in points, or `None` if it has no view or refused.
-    fn main_editor_open(&self, _parent: *mut std::ffi::c_void) -> Option<(u32, u32)> {
+    /// Puts the plug-in's own view inside `parent` (an `NSView` on macOS, an X11 window id on
+    /// Linux) and returns its size in the platform's units, or `None` if it refused.
+    fn main_editor_open(&self, _parent: EditorParent) -> Option<(u32, u32)> {
         None
     }
     fn main_editor_close(&self) {}
@@ -495,7 +511,8 @@ impl Instance {
         }
     }
 
-    /// Whether the plug-in's own window can be shown (macOS, in a process of its own).
+    /// Whether the plug-in's own window can be shown (macOS or Linux/X11, in a process of its
+    /// own).
     pub fn has_editor(&self) -> bool {
         match &self.0 {
             Kind::Local(_) => false,
