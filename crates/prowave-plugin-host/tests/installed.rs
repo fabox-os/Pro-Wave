@@ -2,9 +2,7 @@
 //! `cargo test -p prowave-plugin-host --test installed -- --ignored --nocapture`.
 //! `PROWAVE_TEST_PLUGINS` narrows the files scanned to those whose path contains it.
 
-use prowave_plugin_host::{
-    installed, load, load_sandboxed, scan_audio_units, scan_file, Format, PluginInfo,
-};
+use prowave_plugin_host::{installed, load, scan_audio_units, scan_file, Format, PluginInfo};
 
 fn exercise(info: &PluginInfo) {
     let instance = match load(info, 48_000.0, 64) {
@@ -144,7 +142,7 @@ fn assert_editor_is_available(format: Format) {
             }
         };
         for info in found {
-            match load_sandboxed(&info, 48_000.0, 64, program) {
+            match prowave_plugin_host::load_sandboxed(&info, 48_000.0, 64, program) {
                 Ok(instance) => {
                     if instance.has_editor() {
                         println!("{:?} {}: editor available", info.format, info.name);
