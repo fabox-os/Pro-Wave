@@ -1,0 +1,8 @@
+[package]
+name = "prowave-dsp-kit"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave: a Rust port of the dsp audio processor's effects (filters, delays, dither, resampling, matrix upmixing…)"
+license = "GPL-3.0-or-later"
+
+[dependencies]

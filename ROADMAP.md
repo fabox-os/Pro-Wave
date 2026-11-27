@@ -399,6 +399,13 @@ limitations at the end of the section). Still open, in the order the work would 
 - **Next (not released yet):** Kestrel EQ (issue #192), the console-style EQ of Logic's Vintage EQ
   family: switched HPF, low shelf, mid bell, a 12 kHz high shelf and a transformer Drive. It has
   not been compared by ear with a hardware console. Vintage Graphic EQ (API 560 style) is still to do.
+- **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** part 1 done (chain, argument
+  parsing, selectors, all biquads, gain/mult/add, mid/side, and the catalog of Pro Wave names,
+  compared with the original sample by sample). Next: crossfeed, remix, delay with drain and
+  channel alignment, noise, dither with noise shaping, decorrelate; then FIR, sinc, Hilbert,
+  resample (with `rustfft`), reverse IIR; then matrix4 and matrix4_mb, levels and stats. The
+  file and sound-card backends, zita-convolver and the LADSPA frontend are not ported: Pro Wave
+  has its own.
 - **0.3.4:** Hosted CLAP and VST3 plug-ins render their own designed window on Linux/X11 when
   Editor is chosen in Plugin Manager (issue #189); Sliders stays the portable default and is still
   used when a plug-in has no editor. Native editors on Windows are still not hosted.
