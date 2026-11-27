@@ -16,6 +16,7 @@ libc = "0.2"
 x11-dl = "2.21"
 lilv = "0.3.1"
 lv2_raw = "0.3.2"
+lv2-sys = "2.0"
 
 # The plug-in's own process, for this crate's tests (the app is that program in a release).
 [[bin]]

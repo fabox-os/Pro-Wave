@@ -3658,6 +3658,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "lilv",
+ "lv2-sys",
  "lv2_raw",
  "rtrb",
  "x11-dl",
