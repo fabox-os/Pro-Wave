@@ -1,1035 +1,1602 @@
-//! The third-party plug-ins of the session (Logic: Audio Units): the list of what is installed,
-//! and the ones a channel strip uses.
+//! LADSPA effects in the app: which plug-ins the computer has (the catalogue, filled by a
+//! background scan), which ones the open project uses (a short table, so an insert stays a small
+//! copyable value), and starting them for the engine.
 //!
-//! `prowave-plugin-host` does the hosting. This module keeps what the app needs around it:
-//!
-//! - The **catalog**: every installed CLAP, VST3 and Audio Unit effect, for the Audio FX picker
-//!   and the Plug-in Manager. Listing a CLAP or VST3 file runs its code, so each file is scanned
-//!   in a child process (`prowave --scan-plugin`): a plug-in that crashes or hangs there costs
-//!   one file, not the session. The result is kept in the configuration folder and a file is
-//!   scanned again only when it changes. Every start reads that cache at once, so the menus
-//!   list the last run's plug-ins before the scan has looked at anything, then the scan adds
-//!   the new files, redoes the changed ones and drops the removed ones.
-//! - A plug-in runs in a **process of its own** (`prowave --plugin-host`, served by the host
-//!   crate): one that crashes while playing leaves its slot passing the sound, and [`again`]
-//!   starts it afresh with the state put aside a few seconds before.
-//! - The **rack**: the plug-ins in use. An `Insert` holds a number; the rack holds the loaded
-//!   plug-in behind it. A plug-in is loaded the first time the engine needs it (the engine
-//!   knows the sample rate) and stays loaded while the app runs, so Undo can bring a removed
-//!   plug-in back with its settings.
-use prowave_engine::{ExternalFx, Fx, EXTERNAL_BLOCK};
-use prowave_plugin_host as host;
-pub use prowave_plugin_host::{Format, Instance, PluginInfo};
+//! Logic Pro equivalent: the Plug-in Manager and the plug-in menu of an Audio FX slot. A LADSPA
+//! library is native code, so every library is read in a child process with a time limit (a copy
+//! of this program started with `--scan-ladspa`); one that crashes or hangs three times is put
+//! in `quarantine.json` in the config folder and left alone. Plug-ins that play inside the
+//! program (`prowave-ladspa` does the loading and the calls) can still crash it while they run;
+//! that is the limit of hosting in one process.
+
+use prowave_engine::{BlockEffect, PLUGIN_BLOCK};
+use prowave_ladspa::{Instance, Library, PortKind};
+use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
-/// The command-line flag of the scanning child process: `--scan-plugin <format> <path>`.
-pub const SCAN_ARG: &str = "--scan-plugin";
-/// The longest one file may take to list its plug-ins.
-#[cfg(not(test))]
-const SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// The most control inputs shown for a plug-in: the engine's effect parameters.
+pub const MAX_CONTROLS: usize = prowave_engine::MAX_FX_PARAMS;
+/// The most library files looked at in one folder.
+const MAX_FILES_PER_DIR: usize = 4096;
+/// A library that fails this many scans is left alone.
+pub const MAX_FAILURES: u32 = 3;
+/// How long a child process may take to read one library.
+pub const SCAN_TIMEOUT: Duration = Duration::from_secs(15);
+/// The most output taken from a scanning child.
+const MAX_OUTPUT: u64 = 8 * 1024 * 1024;
 
-/// One plug-in a channel strip uses (or used: see the module comment).
-struct Slot {
-    info: PluginInfo,
-    /// The name the Mixer shows, kept for the life of the app (an `Insert` gives its name as
-    /// `&'static str`, like the built-in effects).
-    name: &'static str,
-    instance: Option<Instance>,
-    /// The sample rate `instance` was loaded at.
-    rate: f32,
-    /// The state from a project file, until the plug-in is loaded (and for good if it is not
-    /// installed here, so saving the project keeps it).
-    saved: Option<Vec<u8>>,
-    /// Why the plug-in could not be loaded.
-    error: Option<String>,
-    /// The catalog generation (see [`Rack::generation`]) at which a missing plug-in was last
-    /// found installed and tried: it is not tried again until the catalog changes.
-    checked: Option<u64>,
+/// A plug-in the project uses: a number into this module's table. It is `Copy`, so a channel
+/// strip's insert stays a plain value; [`lookup`] gives the plug-in back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PluginId(u32);
+
+/// Which plug-in an insert uses, as the project file keeps it.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct PluginRef {
+    /// The library file when the project was saved.
+    pub library: PathBuf,
+    pub label: String,
+    pub unique_id: u64,
+    /// For display when the plug-in is missing.
+    pub name: String,
 }
 
-/// How far the scan of the installed plug-ins is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Scan {
-    #[default]
-    NotStarted,
-    /// Files done, files in all.
-    Running(usize, usize),
-    Done,
+/// One control input of a plug-in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControlInfo {
+    pub name: String,
+    /// The LADSPA port number.
+    pub port: usize,
+    pub min: f32,
+    pub max: f32,
+    pub default: f32,
+    pub toggled: bool,
+    pub integer: bool,
+    pub log: bool,
 }
 
-#[derive(Default)]
-struct Rack {
-    slots: Vec<Slot>,
-    /// The installed plug-ins the menus list, sorted (see [`Rack::rebuild`]).
-    catalog: Vec<PluginInfo>,
-    /// The plug-in files the catalog is built from: the cache's, then each one as it is scanned.
-    files: Vec<Scanned>,
-    /// The Audio Units of the system's own list, as the last scan found them.
-    audio_units: Vec<PluginInfo>,
-    /// Counts the changes to `catalog`: a missing plug-in is looked for again after one.
-    generation: u64,
-    /// Counts the slots that became loadable again: the engine rebuilds the chains that use
-    /// them (see [`revision`]).
-    revision: u64,
-    scan: Scan,
-    /// Asks for a new picture when the catalog changes, since the scan runs on another thread.
-    repaint: Option<egui::Context>,
-}
-
-impl Rack {
-    /// Puts the catalog together again from the Audio Units and the files, and when it changed,
-    /// counts the change and asks for a new picture.
-    fn rebuild(&mut self) {
-        let mut catalog = self.audio_units.clone();
-        catalog.extend(self.files.iter().flat_map(|f| f.plugins.iter().cloned()));
-        sort(&mut catalog);
-        if catalog != self.catalog {
-            self.catalog = catalog;
-            self.generation += 1;
-            self.wake();
+impl ControlInfo {
+    /// The range this control moves through (a broken range becomes 0 to 1; a toggle is 0 to 1).
+    pub fn range(&self) -> (f32, f32) {
+        if self.toggled {
+            return (0.0, 1.0);
+        }
+        if self.min.is_finite() && self.max.is_finite() && self.min < self.max {
+            (self.min, self.max)
+        } else {
+            (0.0, 1.0)
         }
     }
 
-    fn wake(&self) {
-        if let Some(ctx) = &self.repaint {
-            ctx.request_repaint();
-        }
-    }
-
-    /// Whether `slot` is in use but not installed here. Only once the scan has finished: while it
-    /// still looks, a plug-in that is about to be found is not shown as missing.
-    fn is_missing(&self, slot: &Slot) -> bool {
-        self.scan == Scan::Done
-            && slot.error.is_some()
-            && installed_in(&self.catalog, &slot.info).is_none()
-    }
-
-    /// Finds again the missing plug-ins that are installed now: such a slot takes the installed
-    /// entry and is loaded afresh by the engine, with the state the project gave it. A plug-in
-    /// that was found but would not load is not tried again until the catalog changes, so that
-    /// a broken one is not loaded at every frame.
-    fn retry(&mut self) {
-        let generation = self.generation;
-        let mut resolved = false;
-        for slot in &mut self.slots {
-            if slot.instance.is_some() || slot.error.is_none() || slot.checked == Some(generation) {
-                continue;
+    /// `value` put into the range (integer and toggled controls are rounded).
+    pub fn clamp(&self, value: f32) -> f32 {
+        let (lo, hi) = self.range();
+        let v = if value.is_finite() { value } else { lo }.clamp(lo, hi);
+        if self.integer {
+            v.round().clamp(lo.ceil(), hi.floor().max(lo.ceil()))
+        } else if self.toggled {
+            if v >= 0.5 {
+                1.0
+            } else {
+                0.0
             }
-            let Some(found) = installed_in(&self.catalog, &slot.info) else {
-                continue;
-            };
-            slot.checked = Some(generation);
-            slot.info = found;
-            slot.error = None;
-            resolved = true;
-        }
-        if resolved {
-            self.revision += 1;
-            self.wake();
+        } else {
+            v
         }
     }
-}
 
-fn rack() -> MutexGuard<'static, Rack> {
-    static RACK: OnceLock<Mutex<Rack>> = OnceLock::new();
-    RACK.get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// The installed plug-in that `info` names: the catalog's entry with the same format and id,
-/// else (for a CLAP or VST3 file) the file itself when it is still at its path. An Audio Unit
-/// is only found in the catalog: the system finds it, not a path.
-fn installed_in(catalog: &[PluginInfo], info: &PluginInfo) -> Option<PluginInfo> {
-    catalog
-        .iter()
-        .find(|c| c.format == info.format && c.id == info.id)
-        .cloned()
-        .or_else(|| (info.format != Format::AudioUnit && info.path.exists()).then(|| info.clone()))
-}
-
-/// A hosted plug-in as the engine's effect: the engine's trait on the host's processor.
-struct Hosted(host::Processor);
-
-impl ExternalFx for Hosted {
-    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        self.0.process(left, right);
+    /// The value at position `norm` (0 to 1) along the range.
+    pub fn at_norm(&self, norm: f32) -> f32 {
+        let (lo, hi) = self.range();
+        let t = if norm.is_finite() {
+            norm.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let v = if self.log && lo > 0.0 {
+            (lo.ln() * (1.0 - t) + hi.ln() * t).exp()
+        } else {
+            lo + (hi - lo) * t
+        };
+        self.clamp(v)
     }
 
-    fn set_param_norm(&mut self, index: usize, norm: f32) {
-        self.0.set_param_norm(index, norm);
-    }
-
-    fn latency_samples(&self) -> usize {
-        self.0.latency_samples()
-    }
-
-    fn reset(&mut self) {
-        self.0.reset();
-    }
-
-    fn boxed_clone(&self) -> Box<dyn ExternalFx> {
-        Box::new(Hosted(self.0.clone()))
-    }
-}
-
-/// Puts `info` in the rack, with the state a project file had for it, and returns its number
-/// for an `Insert`. The plug-in is loaded when the engine first plays it.
-pub fn add(info: &PluginInfo, saved: Option<Vec<u8>>) -> u32 {
-    let mut rack = rack();
-    rack.slots.push(Slot {
-        info: info.clone(),
-        name: Box::leak(info.name.clone().into_boxed_str()),
-        instance: None,
-        rate: 0.0,
-        saved,
-        error: None,
-        checked: None,
-    });
-    rack.slots.len() as u32
-}
-
-fn with_slot<T>(plugin: u32, f: impl FnOnce(&mut Slot) -> T) -> Option<T> {
-    let index = (plugin as usize).checked_sub(1)?;
-    rack().slots.get_mut(index).map(f)
-}
-
-/// The name of plug-in `plugin` ("Plug-in" for a number the rack does not have).
-pub fn name(plugin: u32) -> &'static str {
-    with_slot(plugin, |slot| slot.name).unwrap_or("Plug-in")
-}
-
-pub fn info(plugin: u32) -> Option<PluginInfo> {
-    with_slot(plugin, |slot| slot.info.clone())
-}
-
-/// The loaded plug-in, for its window (none until the engine played it, or if it failed).
-pub fn instance(plugin: u32) -> Option<Instance> {
-    with_slot(plugin, |slot| slot.instance.clone()).flatten()
-}
-
-/// Why plug-in `plugin` could not be loaded, if it could not.
-pub fn error(plugin: u32) -> Option<String> {
-    with_slot(plugin, |slot| slot.error.clone()).flatten()
-}
-
-/// The plug-in's state for a project file: from the plug-in when it is loaded, else what the
-/// project file it came from had.
-pub fn state(plugin: u32) -> Option<Vec<u8>> {
-    // A plug-in that crashed has no answer: what was last put aside stands in.
-    let (instance, saved) = with_slot(plugin, |slot| (slot.instance.clone(), slot.saved.clone()))?;
-    instance.and_then(|i| i.save_state()).or(saved)
-}
-
-/// The delay plug-in `plugin` puts on the sound, in samples: its own and the block the engine
-/// feeds it in (none before it is loaded).
-pub fn latency_samples(plugin: u32) -> usize {
-    with_slot(plugin, |slot| {
-        slot.instance
-            .as_ref()
-            .map_or(0, |i| EXTERNAL_BLOCK + i.latency_samples())
-    })
-    .unwrap_or(0)
-}
-
-/// Plug-in `plugin` as an effect the engine can run at `sample_rate`, loading it the first time
-/// (and again, keeping its settings, when the sample rate changed). A plug-in that cannot be
-/// loaded gives an effect that passes the sound through.
-pub fn fx(plugin: u32, bypass: bool, sample_rate: f32) -> Fx {
-    let loaded = with_slot(plugin, |slot| {
-        if slot.instance.is_none() || slot.rate != sample_rate {
-            let state = match &slot.instance {
-                Some(old) => old.save_state(),
-                None => slot.saved.clone(),
-            };
-            match load(&slot.info, sample_rate) {
-                Ok(instance) => {
-                    if let Some(state) = &state {
-                        instance.load_state(state);
-                    }
-                    slot.instance = Some(instance);
-                    slot.error = None;
-                }
-                Err(error) => {
-                    tracing::warn!(plugin = %slot.info.name, %error, "plug-in not loaded");
-                    slot.instance = None;
-                    slot.saved = state;
-                    slot.error = Some(error.to_string());
-                }
-            }
-            slot.rate = sample_rate;
+    /// The position (0 to 1) of `value` along the range.
+    pub fn to_norm(&self, value: f32) -> f32 {
+        let (lo, hi) = self.range();
+        let v = self.clamp(value);
+        let t = if self.log && lo > 0.0 {
+            (v.ln() - lo.ln()) / (hi.ln() - lo.ln())
+        } else {
+            (v - lo) / (hi - lo)
+        };
+        if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            0.0
         }
-        slot.instance.as_ref().map(Instance::processor)
-    })
-    .flatten();
-    match loaded {
-        Some(processor) => Fx::external(Box::new(Hosted(processor)), bypass, sample_rate),
-        None => Fx::new(
-            prowave_engine::FxKind::External,
-            [0.0; prowave_engine::MAX_FX_PARAMS],
-            bypass,
-            sample_rate,
-        ),
     }
-}
 
-/// Loads a plug-in in a process of its own, started from this program (`main` hands such a
-/// start to the host first thing), so that a plug-in that crashes while playing takes its
-/// process with it and not Pro Wave. Tests have no app program to start: they load in-process.
-fn load(info: &PluginInfo, sample_rate: f32) -> Result<Instance, host::Error> {
-    let rate = f64::from(sample_rate);
-    #[cfg(not(test))]
-    if let Ok(program) = std::env::current_exe() {
-        return host::load_sandboxed(info, rate, EXTERNAL_BLOCK, &program);
-    }
-    host::load(info, rate, EXTERNAL_BLOCK)
-}
-
-/// How often a running plug-in's state is put aside, so that one that crashes can be loaded
-/// again with nearly the settings it had.
-const KEEP_STATE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
-/// How often the missing plug-ins are looked for again (see [`retry_missing`]).
-const RETRY_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// Whether `every` has passed since `last` last said yes; a yes starts the wait again.
-fn due(last: &Mutex<Option<std::time::Instant>>, every: std::time::Duration) -> bool {
-    last.lock().is_ok_and(|mut last| {
-        let due = last.is_none_or(|at| at.elapsed() >= every);
-        if due {
-            *last = Some(std::time::Instant::now());
+    /// The text of `value`: whole numbers for integer controls, "On" / "Off" for toggles.
+    pub fn text(&self, value: f32) -> String {
+        if self.toggled {
+            return if value >= 0.5 { "On" } else { "Off" }.to_string();
         }
-        due
-    })
-}
-
-/// Looks again at the plug-ins that were not installed: one that is installed now is loaded by
-/// the engine at its next rebuild (see [`revision`]), with the state the project gave it.
-pub fn retry_missing() {
-    rack().retry();
-}
-
-/// Counts the slots that became loadable again. The engine compares it with the last value it
-/// built its chains for, and rebuilds the strips that use hosted plug-ins when it changed.
-pub fn revision() -> u64 {
-    rack().revision
-}
-
-/// Whether plug-in `plugin` is in use but not installed here: the scan has finished, it is not
-/// in the catalog nor at its file, and it could not be loaded. It keeps its slot and passes the
-/// sound through.
-pub fn missing(plugin: u32) -> bool {
-    let rack = rack();
-    (plugin as usize)
-        .checked_sub(1)
-        .and_then(|index| rack.slots.get(index))
-        .is_some_and(|slot| rack.is_missing(slot))
-}
-
-/// The frame to ask for a new picture when the catalog changes during the scan. The app gives
-/// it once at start.
-pub fn set_repaint(ctx: &egui::Context) {
-    rack().repaint = Some(ctx.clone());
-}
-
-/// Once a frame, on the UI thread: the main-thread work the loaded plug-ins asked for, and now
-/// and then a copy of their state.
-pub fn idle() {
-    static LAST_KEPT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-    static LAST_RETRY: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-    if due(&LAST_RETRY, RETRY_EVERY) {
-        retry_missing();
+        if self.integer {
+            return format!("{}", value.round() as i64);
+        }
+        let a = value.abs();
+        if a >= 1000.0 {
+            format!("{value:.0}")
+        } else if a >= 100.0 {
+            format!("{value:.1}")
+        } else {
+            format!("{value:.2}")
+        }
     }
-    let instances: Vec<(usize, Instance)> = rack()
-        .slots
+}
+
+/// Everything the app needs to know about one LADSPA plug-in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginInfo {
+    pub library: PathBuf,
+    /// The plug-in's number in its library.
+    pub index: usize,
+    pub unique_id: u64,
+    pub label: String,
+    pub name: String,
+    pub maker: String,
+    pub audio_in: usize,
+    pub audio_out: usize,
+    /// The control inputs, in port order, at most [`MAX_CONTROLS`].
+    pub controls: Vec<ControlInfo>,
+    /// The control output that reports latency in samples, if the plug-in has one.
+    pub latency_port: Option<usize>,
+}
+
+impl PluginInfo {
+    /// The reference saved in a project.
+    pub fn plugin_ref(&self) -> PluginRef {
+        PluginRef {
+            library: self.library.clone(),
+            label: self.label.clone(),
+            unique_id: self.unique_id,
+            name: self.name.clone(),
+        }
+    }
+
+    /// Whether this can sit in an Audio FX slot: sound out, and few enough ports to feed.
+    pub fn is_effect(&self) -> bool {
+        self.audio_out >= 1 && self.audio_out <= MAX_AUDIO_PORTS && self.audio_in <= MAX_AUDIO_PORTS
+    }
+
+    /// The default value of every control as a position 0 to 1: what a new insert starts with.
+    pub fn default_norms(&self) -> Vec<f32> {
+        self.controls.iter().map(|c| c.to_norm(c.default)).collect()
+    }
+}
+
+impl PluginRef {
+    /// Whether `info` is the plug-in this refers to: the same label in a library of the same
+    /// file name (a project moves between machines).
+    pub fn matches(&self, info: &PluginInfo) -> bool {
+        info.label == self.label && info.library.file_name() == self.library.file_name()
+    }
+}
+
+/// The most audio inputs or outputs a hosted effect may have.
+const MAX_AUDIO_PORTS: usize = 4;
+
+/// What a library has, as [`PluginInfo`]s.
+fn infos_of(library: &Library, path: &Path) -> Vec<PluginInfo> {
+    library
+        .plugins()
         .iter()
         .enumerate()
-        .filter_map(|(i, slot)| Some((i, slot.instance.clone()?)))
-        .collect();
-    for (_, instance) in &instances {
-        instance.idle();
-    }
-    if due(&LAST_KEPT, KEEP_STATE_EVERY) {
-        // Asked without the rack's lock held: the answer comes from another process.
-        for (index, instance) in instances {
-            if let Some(state) = instance.save_state() {
-                if let Some(slot) = rack().slots.get_mut(index) {
-                    slot.saved = Some(state);
+        .map(|(index, p)| {
+            let mut controls = Vec::new();
+            let mut latency_port = None;
+            let (mut audio_in, mut audio_out) = (0, 0);
+            for port in &p.ports {
+                match port.kind {
+                    PortKind::AudioInput => audio_in += 1,
+                    PortKind::AudioOutput => audio_out += 1,
+                    PortKind::ControlInput if controls.len() < MAX_CONTROLS => {
+                        controls.push(ControlInfo {
+                            name: port.name.clone(),
+                            port: port.index,
+                            min: port.min,
+                            max: port.max,
+                            default: port.default,
+                            toggled: port.toggled,
+                            integer: port.integer,
+                            log: port.logarithmic,
+                        });
+                    }
+                    PortKind::ControlOutput
+                        if port.name.to_ascii_lowercase().contains("latency") =>
+                    {
+                        latency_port = Some(port.index);
+                    }
+                    _ => {}
                 }
             }
-        }
-    }
-}
-
-/// Whether plug-in `plugin`'s process ended on its own: it crashed while it was loaded.
-pub fn crashed(plugin: u32) -> bool {
-    with_slot(plugin, |slot| {
-        slot.instance.as_ref().is_some_and(Instance::crashed)
-    })
-    .unwrap_or(false)
-}
-
-/// A new place in the rack for the plug-in of `plugin`, with the state last put aside for it:
-/// the number to put in the `Insert` instead, which makes the engine load it afresh. This is
-/// how a plug-in that crashed is started again.
-pub fn again(plugin: u32) -> Option<u32> {
-    let (info, saved) = with_slot(plugin, |slot| (slot.info.clone(), slot.saved.clone()))?;
-    Some(add(&info, saved))
-}
-
-/// The number of parameters of plug-in `plugin` (none before it is loaded).
-pub fn param_count(plugin: u32) -> usize {
-    instance(plugin).map_or(0, |i| i.params().len())
-}
-
-/// The name of parameter `index` of plug-in `plugin` ("?" when there is none).
-pub fn param_name(plugin: u32, index: usize) -> String {
-    instance(plugin)
-        .and_then(|i| i.params().get(index).map(|p| p.name.clone()))
-        .unwrap_or_else(|| "?".to_string())
-}
-
-/// The position (0..=1) of parameter `index` of plug-in `plugin`.
-pub fn param(plugin: u32, index: usize) -> f32 {
-    instance(plugin).map_or(0.0, |i| i.param(index))
-}
-
-/// Moves parameter `index` of plug-in `plugin` to position `norm` (0..=1).
-pub fn set_param(plugin: u32, index: usize, norm: f32) {
-    if let Some(instance) = instance(plugin) {
-        instance.set_param(index, norm);
-    }
-}
-
-/// The plug-ins in use that are loaded, for the Plug-in Manager: name, format, delay in
-/// samples.
-pub fn loaded() -> Vec<(String, Format, usize)> {
-    rack()
-        .slots
-        .iter()
-        .filter_map(|slot| {
-            let instance = slot.instance.as_ref()?;
-            Some((
-                slot.info.name.clone(),
-                slot.info.format,
-                EXTERNAL_BLOCK + instance.latency_samples(),
-            ))
+            PluginInfo {
+                library: path.to_path_buf(),
+                index,
+                unique_id: p.unique_id,
+                label: p.label.clone(),
+                name: p.name.clone(),
+                maker: p.maker.clone(),
+                audio_in,
+                audio_out,
+                controls,
+                latency_port,
+            }
         })
         .collect()
 }
 
-/// The installed plug-ins found so far, sorted by vendor and name.
-pub fn catalog() -> Vec<PluginInfo> {
-    rack().catalog.clone()
-}
+// ---------------------------------------------------------------------------------------------
+// Where plug-ins are.
 
-pub fn scan_status() -> Scan {
-    rack().scan
-}
-
-/// The catalog entry of a plug-in a project file names: the same format and id.
-pub fn find(format: Format, id: &str) -> Option<PluginInfo> {
-    rack()
-        .catalog
-        .iter()
-        .find(|info| info.format == format && info.id == id)
-        .cloned()
-}
-
-fn sort(catalog: &mut [PluginInfo]) {
-    catalog.sort_by_cached_key(|info| {
-        (
-            info.vendor.to_lowercase(),
-            info.name.to_lowercase(),
-            info.format.name(),
-        )
-    });
-}
-
-/// One line of the scan's output and of the cache: tabs and line ends in a name become spaces.
-fn field(text: &str) -> String {
-    text.replace(['\t', '\n', '\r'], " ")
-}
-
-fn plugin_line(info: &PluginInfo) -> String {
-    format!(
-        "plugin\t{}\t{}\t{}",
-        field(&info.id),
-        field(&info.name),
-        field(&info.vendor)
-    )
-}
-
-fn parse_plugin_line(line: &str, format: Format, path: &Path) -> Option<PluginInfo> {
-    let mut parts = line.split('\t');
-    if parts.next() != Some("plugin") {
-        return None;
-    }
-    Some(PluginInfo {
-        format,
-        id: parts.next()?.to_string(),
-        name: parts.next()?.to_string(),
-        vendor: parts.next().unwrap_or_default().to_string(),
-        path: path.to_path_buf(),
-    })
-}
-
-/// The scanning child process: when the arguments are `--scan-plugin <format> <path>`, lists
-/// that file's plug-ins on standard output and returns true (the caller then exits).
-pub fn run_scan_if_requested(args: &[std::ffi::OsString]) -> bool {
-    let Some(at) = args.iter().position(|a| a == SCAN_ARG) else {
-        return false;
-    };
-    let format = args
-        .get(at + 1)
-        .and_then(|f| Format::from_name(&f.to_string_lossy()));
-    if let (Some(format), Some(path)) = (format, args.get(at + 2)) {
-        match host::scan_file(format, Path::new(path)) {
-            Ok(found) => {
-                for info in &found {
-                    println!("{}", plugin_line(info));
-                }
-                println!("done");
-            }
-            Err(error) => eprintln!("{error}"),
+/// The folders LADSPA libraries are looked for in: `LADSPA_PATH` if set (a list separated by `:`,
+/// or `;` on Windows), else the usual places of the system.
+pub fn search_paths() -> Vec<PathBuf> {
+    if let Some(value) = std::env::var_os("LADSPA_PATH") {
+        let list: Vec<PathBuf> = std::env::split_paths(&value)
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect();
+        if !list.is_empty() {
+            return list;
         }
     }
-    true
+    default_paths()
 }
 
-#[cfg(not(test))]
-/// When `path` was last changed, in seconds (0 when unknown), to tell a new version of a
-/// plug-in from the one in the cache. A bundle is a folder: its program is what changes.
-fn stamp(path: &Path) -> u64 {
-    let of = |p: &Path| {
-        std::fs::metadata(p)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_secs())
+fn default_paths() -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut paths = Vec::new();
+    #[cfg(target_os = "linux")]
+    {
+        for root in ["/usr/local/lib", "/usr/lib", "/usr/lib64"] {
+            paths.push(Path::new(root).join("ladspa"));
+        }
+        if let Some(h) = &home {
+            paths.push(h.join(".ladspa"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        paths.push(Path::new("/Library/Audio/Plug-Ins/LADSPA").to_path_buf());
+        if let Some(h) = &home {
+            paths.push(h.join("Library/Audio/Plug-Ins/LADSPA"));
+            paths.push(h.join(".ladspa"));
+        }
+        paths.push(Path::new("/usr/local/lib/ladspa").to_path_buf());
+    }
+    #[cfg(windows)]
+    {
+        let _ = &home;
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(pf) = std::env::var_os(var) {
+                let pf = PathBuf::from(pf);
+                paths.push(pf.join("LADSPA"));
+                paths.push(pf.join("Audacity").join("Plug-Ins"));
+            }
+        }
+        if let Some(app) = std::env::var_os("APPDATA") {
+            paths.push(PathBuf::from(app).join("ProWave").join("ladspa"));
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = &home;
+    }
+    paths
+}
+
+/// Whether `path` looks like a plug-in library on this system.
+fn is_library(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("so") => cfg!(unix),
+        Some("dylib") => cfg!(target_os = "macos"),
+        Some("dll") => cfg!(windows),
+        _ => false,
+    }
+}
+
+/// The library files directly inside `dir`, sorted by name (a missing folder: none).
+pub fn library_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
     };
-    let inner = path.join("Contents");
-    of(path).max(if inner.is_dir() { of(&inner) } else { 0 })
-}
-
-/// One scanned file as the cache keeps it.
-#[derive(Clone, Debug, PartialEq)]
-struct Scanned {
-    format: Format,
-    path: PathBuf,
-    stamp: u64,
-    plugins: Vec<PluginInfo>,
-}
-
-/// A plug-in file on disk now, with the stamp that tells whether it changed.
-#[derive(Clone, Debug, PartialEq)]
-struct Found {
-    format: Format,
-    path: PathBuf,
-    stamp: u64,
-}
-
-/// What a scan does with the cache and the files on disk: the files to list anew (the new ones,
-/// and those whose stamp changed, or all of them for a rescan) and the cached files that are gone.
-#[derive(Debug, Default, PartialEq)]
-struct Plan {
-    scan: Vec<Found>,
-    forget: Vec<(Format, PathBuf)>,
-}
-
-fn plan(known: &[Scanned], on_disk: &[Found], rescan_all: bool) -> Plan {
-    let scan = on_disk
-        .iter()
-        .filter(|f| {
-            rescan_all
-                || !known
-                    .iter()
-                    .any(|k| k.format == f.format && k.path == f.path && k.stamp == f.stamp)
-        })
-        .cloned()
+    let mut files: Vec<PathBuf> = read
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_library(p))
+        .take(MAX_FILES_PER_DIR)
         .collect();
-    let forget = known
-        .iter()
-        .filter(|k| {
-            !on_disk
-                .iter()
-                .any(|f| f.format == k.format && f.path == k.path)
-        })
-        .map(|k| (k.format, k.path.clone()))
-        .collect();
-    Plan { scan, forget }
+    files.sort();
+    files
 }
 
-fn cache_text(files: &[Scanned]) -> String {
-    let mut out = String::new();
-    for file in files {
-        out.push_str(&format!(
-            "file\t{}\t{}\t{}\n",
-            file.format.name(),
-            file.stamp,
-            field(&file.path.to_string_lossy())
-        ));
-        for info in &file.plugins {
-            out.push_str(&plugin_line(info));
-            out.push('\n');
+/// The file `plugin` lives in now: the saved path if it exists, else the same file name in one
+/// of the search folders.
+pub fn resolve_library(plugin: &PluginRef) -> Option<PathBuf> {
+    if plugin.library.is_file() {
+        return Some(plugin.library.clone());
+    }
+    let name = plugin.library.file_name()?;
+    search_paths()
+        .into_iter()
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+// ---------------------------------------------------------------------------------------------
+// The text a scanning child prints.
+
+fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
         }
     }
     out
 }
 
-fn parse_cache(text: &str) -> Vec<Scanned> {
-    let mut files: Vec<Scanned> = Vec::new();
-    for line in text.lines() {
-        let mut parts = line.split('\t');
-        if parts.next() == Some("file") {
-            let format = parts.next().and_then(Format::from_name);
-            let stamp = parts.next().and_then(|s| s.parse().ok());
-            if let (Some(format), Some(stamp), Some(path)) = (format, stamp, parts.next()) {
-                files.push(Scanned {
-                    format,
-                    path: PathBuf::from(path),
-                    stamp,
-                    plugins: Vec::new(),
-                });
-            }
-        } else if let Some(file) = files.last_mut() {
-            if let Some(info) = parse_plugin_line(line, file.format, &file.path) {
-                file.plugins.push(info);
-            }
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('t') => out.push('\t'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
         }
     }
-    files
+    out
 }
 
-#[cfg(not(test))]
-fn cache_file() -> Option<PathBuf> {
-    Some(crate::recent_files::config_dir()?.join("plugins.txt"))
+const HEADER: &str = "PW-LADSPA 1";
+const FOOTER: &str = "PW-END";
+
+/// `infos` as lines of text (a `P` line for a plug-in, a `C` line for each control).
+pub fn encode_infos(infos: &[PluginInfo]) -> String {
+    let mut out = format!("{HEADER}\n");
+    for i in infos {
+        out.push_str(&format!(
+            "P\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            escape(&i.library.to_string_lossy()),
+            i.index,
+            i.unique_id,
+            escape(&i.label),
+            escape(&i.name),
+            escape(&i.maker),
+            i.audio_in,
+            i.audio_out,
+            i.latency_port.map_or(-1i64, |p| p as i64),
+            0,
+        ));
+        for c in &i.controls {
+            let flags: String = [(c.toggled, 't'), (c.integer, 'i'), (c.log, 'l')]
+                .iter()
+                .filter(|(on, _)| *on)
+                .map(|(_, ch)| *ch)
+                .collect();
+            out.push_str(&format!(
+                "C\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                escape(&c.name),
+                c.port,
+                c.min,
+                c.max,
+                c.default,
+                if flags.is_empty() { "-".into() } else { flags },
+            ));
+        }
+    }
+    out.push_str(FOOTER);
+    out.push('\n');
+    out
 }
 
-/// The cache of the last scan, as far as it reads. Tests never touch the configuration folder.
-#[cfg(not(test))]
-fn read_cache() -> Vec<Scanned> {
-    cache_file()
-        .and_then(|file| std::fs::read_to_string(file).ok())
-        .map(|text| parse_cache(&text))
-        .unwrap_or_default()
+/// What [`encode_infos`] wrote. Lines before the header are ignored (a plug-in may print while
+/// it loads); a missing footer means the writer died and is an error.
+pub fn decode_infos(text: &str) -> Result<Vec<PluginInfo>, String> {
+    let bad = |what: &str| format!("unreadable scan output: {what}");
+    let mut lines = text.lines().skip_while(|l| *l != HEADER);
+    if lines.next().is_none() {
+        return Err(bad("no header"));
+    }
+    let float = |s: &str| s.parse::<f32>().map_err(|_| bad("a number"));
+    let int = |s: &str| s.parse::<i64>().map_err(|_| bad("a number"));
+    let mut out: Vec<PluginInfo> = Vec::new();
+    let mut finished = false;
+    for line in lines {
+        if line == FOOTER {
+            finished = true;
+            break;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        match f.first().copied() {
+            Some("P") if f.len() == 11 => out.push(PluginInfo {
+                library: PathBuf::from(unescape(f[1])),
+                index: int(f[2])?.max(0) as usize,
+                unique_id: int(f[3])?.max(0) as u64,
+                label: unescape(f[4]),
+                name: unescape(f[5]),
+                maker: unescape(f[6]),
+                audio_in: int(f[7])?.max(0) as usize,
+                audio_out: int(f[8])?.max(0) as usize,
+                latency_port: usize::try_from(int(f[9])?).ok(),
+                controls: Vec::new(),
+            }),
+            Some("C") if f.len() == 7 => {
+                let plugin = out
+                    .last_mut()
+                    .ok_or_else(|| bad("a control with no plug-in"))?;
+                plugin.controls.push(ControlInfo {
+                    name: unescape(f[1]),
+                    port: int(f[2])?.max(0) as usize,
+                    min: float(f[3])?,
+                    max: float(f[4])?,
+                    default: float(f[5])?,
+                    toggled: f[6].contains('t'),
+                    integer: f[6].contains('i'),
+                    log: f[6].contains('l'),
+                });
+            }
+            // Anything else is noise printed by a plug-in.
+            _ => {}
+        }
+    }
+    if finished {
+        Ok(out)
+    } else {
+        Err(bad("it stops early"))
+    }
 }
 
-#[cfg(test)]
-fn read_cache() -> Vec<Scanned> {
-    Vec::new()
+/// The child side of an isolated scan: `prowave --scan-ladspa <file>` prints what is in the
+/// library. Returns the process exit code.
+pub fn scan_main(path: &Path) -> i32 {
+    match Library::load(path) {
+        Ok(library) => {
+            print!("{}", encode_infos(&infos_of(&library, path)));
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
 }
 
-/// The CLAP and VST3 files on disk now, with their stamps. Audio Units are not files.
-#[cfg(not(test))]
-fn on_disk_files() -> Vec<Found> {
-    [Format::Clap, Format::Vst3]
-        .into_iter()
-        .flat_map(|format| {
-            host::installed(format).into_iter().map(move |path| Found {
-                format,
-                stamp: stamp(&path),
-                path,
-            })
-        })
-        .collect()
-}
-
-/// Lists one file's plug-ins in a child process. A crash, a refusal or a file that takes
-/// longer than [`SCAN_TIMEOUT`] gives no plug-ins.
-#[cfg(not(test))]
-fn scan_in_child(format: Format, path: &Path) -> Vec<PluginInfo> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let Ok(exe) = std::env::current_exe() else {
-        return Vec::new();
-    };
-    let child = Command::new(exe)
-        .arg(SCAN_ARG)
-        .arg(format.name())
+/// Reads the library at `path` in a child process (`exe --scan-ladspa <path>`) with a time
+/// limit. A crash, a hang or a library that cannot be read is an error.
+pub fn scan_library_isolated(
+    exe: &Path,
+    path: &Path,
+    timeout: Duration,
+) -> Result<Vec<PluginInfo>, String> {
+    let mut child = Command::new(exe)
+        .arg("--scan-ladspa")
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut child) = child else {
-        return Vec::new();
+        .spawn()
+        .map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
+    let Some(stdout) = child.stdout.take() else {
+        return Err("no output pipe".into());
     };
-    // The output is read on its own thread so a chatty plug-in cannot fill the pipe and stall.
-    let reader = child.stdout.take().map(|mut out| {
-        std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = out.read_to_string(&mut text);
-            text
-        })
+    // Read on another thread so a chatty plug-in cannot fill the pipe and stall the child.
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.take(MAX_OUTPUT).read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).into_owned()
     });
-    let started = std::time::Instant::now();
-    loop {
+    let start = Instant::now();
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() < SCAN_TIMEOUT => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            _ => {
-                tracing::warn!(file = %path.display(), "plug-in scan timed out");
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() > timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break;
+                // Not joined: a grandchild the plug-in started may still hold the pipe open,
+                // and the reader ends by itself when the pipe closes.
+                drop(reader);
+                return Err(format!(
+                    "{} did not answer in {} s",
+                    path.display(),
+                    timeout.as_secs()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let text = reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("{} stopped the scan ({status})", path.display()));
+    }
+    decode_infos(&text)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Quarantine.
+
+/// The libraries that failed to scan, with how many times: stored in `quarantine.json`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Quarantine {
+    failures: BTreeMap<String, u32>,
+}
+
+impl Quarantine {
+    /// Reads the list from `file` (a missing or damaged file: an empty list).
+    pub fn load(file: &Path) -> Self {
+        let failures = std::fs::read(file)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<BTreeMap<String, u32>>(&b).ok())
+            .unwrap_or_default();
+        Self { failures }
+    }
+
+    pub fn save(&self, file: &Path) -> std::io::Result<()> {
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let json = serde_json::to_vec_pretty(&self.failures).map_err(std::io::Error::other)?;
+        std::fs::write(file, json)
+    }
+
+    fn key(library: &Path) -> String {
+        library.to_string_lossy().into_owned()
+    }
+
+    /// Counts one more failed scan of `library`.
+    pub fn record_failure(&mut self, library: &Path) {
+        let n = self.failures.entry(Self::key(library)).or_insert(0);
+        *n = n.saturating_add(1);
+    }
+
+    /// A scan worked: the library's failures are forgotten.
+    pub fn record_success(&mut self, library: &Path) {
+        self.failures.remove(&Self::key(library));
+    }
+
+    /// Whether `library` has failed [`MAX_FAILURES`] times and is no longer tried.
+    pub fn is_blocked(&self, library: &Path) -> bool {
+        self.failures
+            .get(&Self::key(library))
+            .is_some_and(|n| *n >= MAX_FAILURES)
+    }
+
+    /// The blocked libraries.
+    pub fn blocked(&self) -> Vec<PathBuf> {
+        self.failures
+            .iter()
+            .filter(|(_, n)| **n >= MAX_FAILURES)
+            .map(|(p, _)| PathBuf::from(p))
+            .collect()
+    }
+
+    /// Lets the user try `library` again.
+    pub fn release(&mut self, library: &Path) {
+        self.failures.remove(&Self::key(library));
+    }
+}
+
+/// What the scan found so far.
+#[derive(Clone, Debug, Default)]
+pub struct Catalog {
+    pub plugins: Vec<PluginInfo>,
+    /// Libraries that crashed, hung or could not be read, with why.
+    pub failed: Vec<(PathBuf, String)>,
+    /// Libraries left alone because they failed three times.
+    pub skipped: Vec<PathBuf>,
+    pub scanning: bool,
+    pub scanned: bool,
+}
+
+impl Catalog {
+    /// The plug-ins that can sit in an Audio FX slot.
+    pub fn effects(&self) -> impl Iterator<Item = &PluginInfo> {
+        self.plugins.iter().filter(|p| p.is_effect())
+    }
+}
+
+/// Scans every folder in `dirs`, skipping quarantined libraries and counting failures in
+/// `quarantine`. With `isolate_with` each library is read by that program in a child process.
+pub fn scan_all(
+    dirs: &[PathBuf],
+    isolate_with: Option<&Path>,
+    timeout: Duration,
+    quarantine: &mut Quarantine,
+) -> Catalog {
+    let mut found = Catalog::default();
+    for dir in dirs {
+        for file in library_files(dir) {
+            if quarantine.is_blocked(&file) {
+                found.skipped.push(file);
+                continue;
+            }
+            let result = match isolate_with {
+                Some(exe) => scan_library_isolated(exe, &file, timeout),
+                None => Library::load(&file)
+                    .map(|l| infos_of(&l, &file))
+                    .map_err(|e| e.to_string()),
+            };
+            match result {
+                Ok(mut list) => {
+                    quarantine.record_success(&file);
+                    found.plugins.append(&mut list);
+                }
+                Err(e) => {
+                    quarantine.record_failure(&file);
+                    found.failed.push((file, e));
+                }
             }
         }
     }
-    let text = reader.and_then(|r| r.join().ok()).unwrap_or_default();
-    // Without the last line the child did not finish: what it listed is not trusted.
-    if !text.lines().any(|line| line == "done") {
-        tracing::warn!(file = %path.display(), "plug-in scan failed");
-        return Vec::new();
-    }
-    text.lines()
-        .filter_map(|line| parse_plugin_line(line, format, path))
-        .collect()
+    found.plugins.sort_by_key(|p| p.name.to_lowercase());
+    found.scanned = true;
+    found
 }
 
-/// Starts the scan of the installed plug-ins on a background thread, unless one runs or (without
-/// `again`) one has finished. Without `again` the cache of the last run is read here first, so
-/// the menus list its plug-ins at once. With `again`, every file is scanned anew (the Plug-in
-/// Manager's Rescan), and the catalog stays as it is until each file is done.
-pub fn scan(again: bool) {
+// ---------------------------------------------------------------------------------------------
+// The registry: the project's plug-ins, the catalogue, and what was learnt about each.
+
+#[derive(Default)]
+struct State {
+    table: Vec<PluginRef>,
+    catalog: Catalog,
+    /// The description of each plug-in a project uses, once asked for (`None`: unreadable).
+    described: HashMap<u32, Option<PluginInfo>>,
+    /// The delay each effect reported when it started, in samples.
+    latency: HashMap<u32, usize>,
+}
+
+fn state() -> MutexGuard<'static, State> {
+    static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+    let m = STATE.get_or_init(|| Mutex::new(State::default()));
+    // A panic while the lock was held leaves plain data behind: carry on with it.
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The id for `plugin` (the same one every time for the same plug-in).
+pub fn intern(plugin: &PluginRef) -> PluginId {
+    let mut s = state();
+    if let Some(i) = s
+        .table
+        .iter()
+        .position(|r| r.label == plugin.label && r.library == plugin.library)
     {
-        let mut rack = rack();
-        match rack.scan {
-            Scan::Running(..) => return,
-            Scan::Done if !again => return,
-            _ => rack.scan = Scan::Running(0, 0),
+        return PluginId(i as u32);
+    }
+    s.table.push(plugin.clone());
+    PluginId((s.table.len() - 1) as u32)
+}
+
+/// The plug-in `id` stands for.
+pub fn lookup(id: PluginId) -> Option<PluginRef> {
+    state().table.get(id.0 as usize).cloned()
+}
+
+/// The name to show for `id` (its saved name when the plug-in cannot be found).
+pub fn name(id: PluginId) -> String {
+    if let Some(info) = info(id) {
+        return info.name;
+    }
+    lookup(id).map_or_else(|| "Plug-in".to_string(), |r| r.name)
+}
+
+/// A copy of the catalogue.
+pub fn catalog() -> Catalog {
+    state().catalog.clone()
+}
+
+/// Replaces the catalogue (the scan, and tests).
+pub fn set_catalog(catalog: Catalog) {
+    let mut s = state();
+    s.catalog = catalog;
+    s.described.clear();
+}
+
+fn quarantine_file() -> PathBuf {
+    crate::recent_files::config_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("quarantine.json")
+}
+
+/// Starts the background scan of the plug-in folders, once: later calls do nothing until a scan
+/// has finished.
+pub fn ensure_scanned() {
+    {
+        let mut s = state();
+        if s.catalog.scanned || s.catalog.scanning {
+            return;
+        }
+        s.catalog.scanning = true;
+    }
+    std::thread::spawn(scan_now);
+}
+
+/// Scans again (the Plug-in Manager's Rescan). With `retry_quarantined`, libraries that failed
+/// before are tried again.
+pub fn rescan(retry_quarantined: bool) {
+    {
+        let mut s = state();
+        if s.catalog.scanning {
+            return;
+        }
+        s.catalog.scanning = true;
+    }
+    if retry_quarantined {
+        let mut q = Quarantine::load(&quarantine_file());
+        for lib in q.blocked() {
+            q.release(&lib);
+        }
+        let _ = q.save(&quarantine_file());
+    }
+    std::thread::spawn(scan_now);
+}
+
+fn scan_now() {
+    let exe = std::env::current_exe().ok();
+    let file = quarantine_file();
+    let mut quarantine = Quarantine::load(&file);
+    let found = scan_all(
+        &search_paths(),
+        exe.as_deref(),
+        SCAN_TIMEOUT,
+        &mut quarantine,
+    );
+    if let Err(e) = quarantine.save(&file) {
+        tracing::warn!("cannot save {}: {e}", file.display());
+    }
+    set_catalog(found);
+}
+
+/// What is known about plug-in `id`: from the catalogue, else read from its library (in a child
+/// process) the first time it is asked for.
+pub fn info(id: PluginId) -> Option<PluginInfo> {
+    let reference = lookup(id)?;
+    {
+        let s = state();
+        if let Some(i) = s.catalog.plugins.iter().find(|i| reference.matches(i)) {
+            return Some(i.clone());
+        }
+        if let Some(known) = s.described.get(&id.0) {
+            return known.clone();
         }
     }
-    if !again {
-        // The cache is small, so reading it here is quick. A file that is gone is left out now.
-        let cached: Vec<Scanned> = read_cache()
+    // Not in the catalogue (a project from another machine, a library outside the search
+    // folders): read it once, in a child process.
+    let described = resolve_library(&reference).and_then(|path| {
+        let exe = std::env::current_exe().ok()?;
+        scan_library_isolated(&exe, &path, SCAN_TIMEOUT)
+            .ok()?
             .into_iter()
-            .filter(|f| f.path.exists())
-            .collect();
-        let mut rack = rack();
-        rack.files = cached;
-        rack.rebuild();
-    }
-    // Tests have no app program to run as the scanning child; they see an empty catalog.
-    #[cfg(test)]
-    {
-        rack().scan = Scan::Done;
-    }
-    #[cfg(not(test))]
-    std::thread::spawn(move || run_scan(again));
+            .find(|i| i.label == reference.label)
+    });
+    state().described.insert(id.0, described.clone());
+    described
 }
 
-/// The scan on its thread: the plug-in files on disk that are new or changed since the cache was
-/// written are listed in child processes, and the catalog follows as each one is done. The
-/// cache is written at the end, without the files that are gone.
-#[cfg(not(test))]
-fn run_scan(again: bool) {
-    let found = on_disk_files();
-    let known = rack().files.clone();
-    let plan = plan(&known, &found, again);
-    // Audio Units come from the system's own list: no plug-in code runs.
-    let audio_units = host::scan_audio_units();
+/// The settings a new effect starts with: each control's default, as a position 0 to 1.
+pub fn default_params(id: PluginId) -> [f32; prowave_engine::MAX_FX_PARAMS] {
+    let mut params = prowave_engine::FxKind::Plugin.defaults();
+    if let Some(info) = info(id) {
+        for (slot, norm) in params.iter_mut().zip(info.default_norms()) {
+            *slot = norm;
+        }
+    }
+    params
+}
+
+/// The delay the effect reported when it started, in samples (0 before it started).
+pub fn reported_latency(id: PluginId) -> usize {
+    state().latency.get(&id.0).copied().unwrap_or(0)
+}
+
+/// The plug-in reference saved in a project file.
+pub fn to_doc(id: PluginId) -> Option<prowave_project::PluginDoc> {
+    let r = lookup(id)?;
+    Some(prowave_project::PluginDoc {
+        format: "LADSPA".to_string(),
+        library: r.library.to_string_lossy().into_owned(),
+        label: r.label,
+        unique_id: r.unique_id,
+        name: r.name,
+        ..Default::default()
+    })
+}
+
+/// The plug-in a project file names (nothing for a format or label that makes no sense).
+pub fn from_doc(doc: &prowave_project::PluginDoc) -> Option<PluginId> {
+    if !doc.format.eq_ignore_ascii_case("ladspa")
+        || doc.label.trim().is_empty()
+        || doc.library.trim().is_empty()
     {
-        let mut rack = rack();
-        rack.audio_units = audio_units;
-        rack.files
-            .retain(|f| !plan.forget.contains(&(f.format, f.path.clone())));
-        rack.rebuild();
+        return None;
     }
-    let total = plan.scan.len();
-    for (done, file) in plan.scan.into_iter().enumerate() {
-        // Listed outside the rack's lock: a child process can take a while.
-        let plugins = scan_in_child(file.format, &file.path);
-        let entry = Scanned {
-            format: file.format,
-            path: file.path,
-            stamp: file.stamp,
-            plugins,
+    Some(intern(&PluginRef {
+        library: PathBuf::from(&doc.library),
+        label: doc.label.clone(),
+        unique_id: doc.unique_id,
+        name: doc.name.chars().take(128).collect(),
+    }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Running a plug-in as an Audio FX effect.
+
+/// What the effect needs from a plug-in instance (so the channel layouts can be tested without
+/// loading a library).
+trait Runner: Send {
+    /// The number of audio inputs and outputs.
+    fn counts(&self) -> (usize, usize);
+    fn run(&mut self, inputs: &[&[f32]], outputs: &mut [&mut [f32]]);
+    fn set_control(&mut self, port: usize, value: f32);
+    fn control(&self, port: usize) -> Option<f32>;
+    fn reset(&mut self);
+}
+
+impl Runner for Instance {
+    fn counts(&self) -> (usize, usize) {
+        self.audio_port_counts()
+    }
+    fn run(&mut self, inputs: &[&[f32]], outputs: &mut [&mut [f32]]) {
+        // A refused block (the wrong number of ports) leaves the outputs as they were.
+        let _ = self.process(inputs, outputs);
+    }
+    fn set_control(&mut self, port: usize, value: f32) {
+        let _ = Instance::set_control(self, port, value);
+    }
+    fn control(&self, port: usize) -> Option<f32> {
+        Instance::control(self, port)
+    }
+    fn reset(&mut self) {
+        Instance::reset(self);
+    }
+}
+
+/// One plug-in instance and the buffers its outputs are written to.
+struct Voice {
+    run: Box<dyn Runner>,
+    outs: [[f32; PLUGIN_BLOCK]; MAX_AUDIO_PORTS],
+}
+
+/// A LADSPA effect in an Audio FX slot. A mono plug-in (one audio in, one out) gets two
+/// instances, one for each side, so a stereo track stays stereo; any other gets one.
+struct LadspaEffect {
+    voices: Vec<Voice>,
+    ins: usize,
+    outs: usize,
+    mono: [f32; PLUGIN_BLOCK],
+    zero: [f32; PLUGIN_BLOCK],
+    controls: Vec<ControlInfo>,
+    latency_port: Option<usize>,
+    latency: usize,
+}
+
+impl LadspaEffect {
+    fn new(runners: Vec<Box<dyn Runner>>, info: &PluginInfo) -> Option<Self> {
+        let (ins, outs) = runners.first()?.counts();
+        if outs == 0 || ins > MAX_AUDIO_PORTS || outs > MAX_AUDIO_PORTS {
+            return None;
+        }
+        Some(Self {
+            voices: runners
+                .into_iter()
+                .map(|run| Voice {
+                    run,
+                    outs: [[0.0; PLUGIN_BLOCK]; MAX_AUDIO_PORTS],
+                })
+                .collect(),
+            ins,
+            outs,
+            mono: [0.0; PLUGIN_BLOCK],
+            zero: [0.0; PLUGIN_BLOCK],
+            controls: info.controls.clone(),
+            latency_port: info.latency_port,
+            latency: 0,
+        })
+    }
+}
+
+/// Runs `voice` on `inputs`, its outputs going to `voice.outs` (no allocation: the slices live
+/// on the stack).
+fn run_voice(voice: &mut Voice, inputs: &[&[f32]], outs: usize, frames: usize) {
+    let [o0, o1, o2, o3] = &mut voice.outs;
+    let mut slices: [&mut [f32]; MAX_AUDIO_PORTS] = [
+        &mut o0[..frames],
+        &mut o1[..frames],
+        &mut o2[..frames],
+        &mut o3[..frames],
+    ];
+    voice.run.run(inputs, &mut slices[..outs]);
+}
+
+impl BlockEffect for LadspaEffect {
+    fn set_param(&mut self, index: usize, norm: f32) {
+        let Some(c) = self.controls.get(index) else {
+            return;
         };
-        let mut rack = rack();
-        match rack
-            .files
-            .iter()
-            .position(|f| f.format == entry.format && f.path == entry.path)
-        {
-            Some(at) => rack.files[at] = entry,
-            None => rack.files.push(entry),
+        let value = c.at_norm(norm);
+        for v in &mut self.voices {
+            v.run.set_control(c.port, value);
         }
-        rack.rebuild();
-        rack.scan = Scan::Running(done + 1, total);
     }
-    let files = rack().files.clone();
-    if let Some(file) = cache_file() {
-        if let Some(dir) = file.parent() {
-            let _ = std::fs::create_dir_all(dir);
+
+    fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
+        let frames = in_l
+            .len()
+            .min(in_r.len())
+            .min(out_l.len())
+            .min(out_r.len())
+            .min(PLUGIN_BLOCK);
+        let (ins, outs) = (self.ins, self.outs);
+        if let [left, right] = self.voices.as_mut_slice() {
+            // One instance for each side.
+            run_voice(left, &[&in_l[..frames]], 1, frames);
+            run_voice(right, &[&in_r[..frames]], 1, frames);
+            out_l[..frames].copy_from_slice(&left.outs[0][..frames]);
+            out_r[..frames].copy_from_slice(&right.outs[0][..frames]);
+        } else if let Some(v) = self.voices.first_mut() {
+            if ins == 1 {
+                for n in 0..frames {
+                    self.mono[n] = 0.5 * (in_l[n] + in_r[n]);
+                }
+            }
+            let zero = &self.zero[..frames];
+            let stereo: [&[f32]; MAX_AUDIO_PORTS] = [&in_l[..frames], &in_r[..frames], zero, zero];
+            let mono: [&[f32]; 1] = [&self.mono[..frames]];
+            let inputs: &[&[f32]] = if ins == 1 { &mono } else { &stereo[..ins] };
+            run_voice(v, inputs, outs, frames);
+            match outs {
+                1 => {
+                    out_l[..frames].copy_from_slice(&v.outs[0][..frames]);
+                    out_r[..frames].copy_from_slice(&v.outs[0][..frames]);
+                }
+                _ => {
+                    out_l[..frames].copy_from_slice(&v.outs[0][..frames]);
+                    out_r[..frames].copy_from_slice(&v.outs[1][..frames]);
+                }
+            }
         }
-        let _ = std::fs::write(file, cache_text(&files));
+        if let Some(port) = self.latency_port {
+            let reported = self
+                .voices
+                .first()
+                .and_then(|v| v.run.control(port))
+                .unwrap_or(0.0);
+            // A bad value is no latency.
+            self.latency = if reported.is_finite() && reported > 0.0 && reported < 1.0e6 {
+                reported as usize
+            } else {
+                0
+            };
+        }
     }
-    let mut rack = rack();
-    rack.scan = Scan::Done;
-    // A plug-in that was missing may be installed now, and the menus show the final list.
-    rack.retry();
-    rack.wake();
+
+    fn latency_samples(&self) -> usize {
+        self.latency
+    }
+
+    fn reset(&mut self) {
+        for v in &mut self.voices {
+            v.run.reset();
+        }
+    }
+}
+
+/// Starts the effect `id` for the engine (off the audio thread). Remembers the delay it
+/// reports. A plug-in that is missing, will not start or has no audio output is an error.
+pub fn load_effect(id: PluginId, sample_rate: f32) -> Result<Box<dyn BlockEffect>, String> {
+    let reference = lookup(id).ok_or("unknown plug-in")?;
+    let path = resolve_library(&reference)
+        .ok_or_else(|| format!("{} was not found", reference.library.display()))?;
+    let library = Library::load(&path).map_err(|e| e.to_string())?;
+    let info = infos_of(&library, &path)
+        .into_iter()
+        .find(|i| i.label == reference.label)
+        .ok_or_else(|| format!("the library has no plug-in `{}`", reference.label))?;
+    if !info.is_effect() {
+        return Err("it has no usable audio output".into());
+    }
+    let rate = sample_rate.round().max(1.0) as u32;
+    let mut runners: Vec<Box<dyn Runner>> = vec![Box::new(
+        library
+            .instantiate(info.index, rate)
+            .map_err(|e| e.to_string())?,
+    )];
+    if info.audio_in == 1 && info.audio_out == 1 {
+        runners.push(Box::new(
+            library
+                .instantiate(info.index, rate)
+                .map_err(|e| e.to_string())?,
+        ));
+    }
+    let mut effect = LadspaEffect::new(runners, &info).ok_or("it cannot be used as an effect")?;
+    // One silent block, so a plug-in that reports its delay while it runs has done so.
+    let silence = [0.0f32; PLUGIN_BLOCK];
+    let (mut out_l, mut out_r) = ([0.0f32; PLUGIN_BLOCK], [0.0f32; PLUGIN_BLOCK]);
+    effect.process(&silence, &silence, &mut out_l, &mut out_r);
+    effect.reset();
+    state().latency.insert(id.0, effect.latency_samples());
+    Ok(Box::new(effect))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn info(name: &str) -> PluginInfo {
+    fn control(min: f32, max: f32, default: f32) -> ControlInfo {
+        ControlInfo {
+            name: "c".into(),
+            port: 0,
+            min,
+            max,
+            default,
+            toggled: false,
+            integer: false,
+            log: false,
+        }
+    }
+
+    fn sample_info(label: &str, audio_in: usize, audio_out: usize) -> PluginInfo {
         PluginInfo {
-            format: Format::Clap,
-            id: format!("org.test.{name}"),
-            name: name.to_string(),
-            vendor: "Test\tVendor".to_string(),
-            path: PathBuf::from("/plug-ins/test.clap"),
+            library: PathBuf::from(format!("/plugins/{label}.so")),
+            index: 0,
+            unique_id: 7,
+            label: label.into(),
+            name: format!("Name of {label}"),
+            maker: "maker".into(),
+            audio_in,
+            audio_out,
+            controls: vec![control(0.0, 4.0, 1.0)],
+            latency_port: None,
         }
     }
 
     #[test]
-    fn the_cache_reads_back_what_it_wrote() {
-        let files = vec![
-            Scanned {
-                format: Format::Clap,
-                path: PathBuf::from("/plug-ins/test.clap"),
-                stamp: 42,
-                plugins: vec![info("One"), info("Two")],
-            },
-            Scanned {
-                format: Format::Vst3,
-                path: PathBuf::from("/plug-ins/broken.vst3"),
-                stamp: 7,
-                plugins: Vec::new(),
-            },
-        ];
-        let read = parse_cache(&cache_text(&files));
-        assert_eq!(read.len(), 2);
-        assert_eq!(read[0].plugins.len(), 2);
-        assert_eq!(read[0].plugins[1].name, "Two");
-        assert_eq!(
-            read[0].plugins[0].vendor, "Test Vendor",
-            "a tab becomes a space"
+    fn positions_map_to_values_and_back_and_odd_values_are_put_into_range() {
+        let c = control(-12.0, 12.0, 0.0);
+        assert_eq!(c.at_norm(0.0), -12.0);
+        assert_eq!(c.at_norm(1.0), 12.0);
+        assert_eq!(c.at_norm(0.5), 0.0);
+        assert!((c.to_norm(6.0) - 0.75).abs() < 1e-6);
+        assert_eq!(c.at_norm(7.0), 12.0);
+        assert_eq!(c.at_norm(f32::NAN), -12.0);
+        assert_eq!(c.clamp(f32::INFINITY), -12.0);
+        // A broken range is 0 to 1.
+        assert_eq!(control(5.0, 1.0, 0.0).range(), (0.0, 1.0));
+        assert_eq!(control(f32::NAN, 1.0, 0.0).range(), (0.0, 1.0));
+        let mut log = control(20.0, 20_000.0, 1000.0);
+        log.log = true;
+        assert!((log.at_norm(0.5) - 632.45).abs() < 0.5);
+        let mut int = control(0.0, 4.0, 0.0);
+        int.integer = true;
+        assert_eq!(int.at_norm(0.4), 2.0);
+        assert_eq!(int.text(2.0), "2");
+        let mut toggle = control(0.0, 0.0, 0.0);
+        toggle.toggled = true;
+        assert_eq!(toggle.at_norm(0.49), 0.0);
+        assert_eq!(toggle.at_norm(0.5), 1.0);
+        assert_eq!(toggle.text(1.0), "On");
+    }
+
+    #[test]
+    fn a_new_effect_starts_at_the_plugins_defaults() {
+        let info = sample_info("pw_unit_defaults", 1, 1);
+        assert_eq!(info.default_norms(), vec![0.25]);
+        let id = intern(&info.plugin_ref());
+        set_catalog(Catalog {
+            plugins: vec![info],
+            scanned: true,
+            ..Catalog::default()
+        });
+        assert_eq!(default_params(id)[0], 0.25);
+        assert_eq!(name(id), "Name of pw_unit_defaults");
+    }
+
+    #[test]
+    fn effects_are_the_plugins_with_sound_out_and_few_ports() {
+        assert!(sample_info("a", 1, 1).is_effect());
+        assert!(sample_info("b", 2, 2).is_effect());
+        assert!(
+            sample_info("c", 0, 1).is_effect(),
+            "a generator makes sound"
         );
-        assert_eq!(read[0].plugins[0].path, files[0].path);
-        assert_eq!((read[1].format, read[1].stamp), (Format::Vst3, 7));
-        assert!(read[1].plugins.is_empty(), "a file that failed stays known");
-    }
-
-    #[test]
-    fn a_damaged_cache_is_read_as_far_as_it_makes_sense() {
-        let read = parse_cache("plugin\tlost\tLost\n\nfile\tNo Format\t1\t/x\nfile\tCLAP\tx\t/y\n");
-        assert!(read.is_empty());
-    }
-
-    #[test]
-    fn a_plugin_that_is_not_installed_passes_the_sound_and_keeps_its_state() {
-        let mut missing = info("Missing");
-        missing.path = PathBuf::from("/nonexistent/missing.clap");
-        let plugin = add(&missing, Some(vec![1, 2, 3]));
-        assert_eq!(name(plugin), "Missing");
-        let mut fx = fx(plugin, false, 48_000.0);
-        assert_eq!(fx.process(0.5, -0.5), (0.5, -0.5));
-        assert_eq!(fx.latency_samples(), 0);
-        assert!(error(plugin).is_some());
-        assert!(instance(plugin).is_none());
-        assert_eq!(
-            state(plugin),
-            Some(vec![1, 2, 3]),
-            "saving keeps what was loaded"
+        assert!(
+            !sample_info("d", 1, 0).is_effect(),
+            "an analyser makes none"
         );
-        assert_eq!(latency_samples(plugin), 0);
+        assert!(!sample_info("e", 9, 1).is_effect());
     }
 
     #[test]
-    fn an_unknown_number_is_a_plain_plug_in() {
-        assert_eq!(name(0), "Plug-in");
-        assert_eq!(name(u32::MAX), "Plug-in");
-        assert!(info_of_none());
+    fn the_same_plugin_gets_the_same_id_and_a_project_document_round_trips_it() {
+        let r = sample_info("pw_unit_doc", 1, 1).plugin_ref();
+        let id = intern(&r);
+        assert_eq!(intern(&r), id);
+        assert_eq!(lookup(id), Some(r));
+        let doc = to_doc(id).expect("doc");
+        assert_eq!(doc.format, "LADSPA");
+        assert_eq!(from_doc(&doc), Some(id));
+        let mut bad = doc.clone();
+        bad.format = "vst3".into();
+        assert_eq!(from_doc(&bad), None);
+        bad = doc.clone();
+        bad.label = " ".into();
+        assert_eq!(from_doc(&bad), None);
+        bad = doc;
+        bad.library.clear();
+        assert_eq!(from_doc(&bad), None);
     }
 
-    fn info_of_none() -> bool {
-        super::info(u32::MAX).is_none() && state(0).is_none()
+    #[test]
+    fn an_unknown_plugin_has_no_description_keeps_its_name_and_will_not_load() {
+        let id = intern(&PluginRef {
+            library: PathBuf::from("/nowhere/at/all.so"),
+            label: "gone".into(),
+            unique_id: 1,
+            name: "Saved Name".into(),
+        });
+        assert!(info(id).is_none());
+        assert_eq!(name(id), "Saved Name");
+        assert_eq!(
+            default_params(id),
+            prowave_engine::FxKind::Plugin.defaults()
+        );
+        assert!(load_effect(id, 48_000.0).is_err());
     }
 
-    fn found(format: Format, path: &str, stamp: u64) -> Found {
-        Found {
-            format,
-            path: PathBuf::from(path),
-            stamp,
+    #[test]
+    fn a_scan_survives_the_text_round_trip_with_odd_characters() {
+        let mut info = sample_info("delay", 1, 1);
+        info.library = PathBuf::from("/usr/lib/ladspa/we\tird\\name.so");
+        info.name = "Simple Delay\nLine".into();
+        info.latency_port = Some(3);
+        info.controls.push(ControlInfo {
+            name: "On".into(),
+            port: 1,
+            min: 0.0,
+            max: 1.0,
+            default: 1.0,
+            toggled: true,
+            integer: true,
+            log: true,
+        });
+        let infos = vec![info.clone(), PluginInfo { index: 3, ..info }];
+        assert_eq!(decode_infos(&encode_infos(&infos)), Ok(infos));
+    }
+
+    #[test]
+    fn scan_noise_is_ignored_but_a_missing_footer_or_a_bad_line_is_an_error() {
+        let text = format!(
+            "plugin says hello\n{}",
+            encode_infos(&[sample_info("a", 1, 1)])
+        );
+        assert_eq!(decode_infos(&text).map(|v| v.len()), Ok(1));
+        assert!(decode_infos(&text.replace("PW-END\n", "")).is_err());
+        assert!(decode_infos("nothing here").is_err());
+        assert!(decode_infos("PW-LADSPA 1\nC\tx\t0\t0\t1\t0\t-\nPW-END\n").is_err());
+        assert!(
+            decode_infos("PW-LADSPA 1\nP\t/x.so\tzz\t1\ta\tb\tc\t1\t1\t-1\t0\nPW-END\n").is_err()
+        );
+    }
+
+    #[test]
+    fn the_quarantine_blocks_after_three_failures_and_is_kept_in_a_json_file() {
+        let mut q = Quarantine::default();
+        let lib = Path::new("/x/bad.so");
+        q.record_failure(lib);
+        q.record_failure(lib);
+        assert!(!q.is_blocked(lib));
+        q.record_failure(lib);
+        assert!(q.is_blocked(lib));
+        assert_eq!(q.blocked(), vec![lib.to_path_buf()]);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("sub").join("quarantine.json");
+        q.save(&file).expect("save");
+        assert_eq!(Quarantine::load(&file), q);
+        q.release(lib);
+        assert!(!q.is_blocked(lib));
+        q.record_failure(lib);
+        q.record_success(lib);
+        q.record_failure(lib);
+        assert!(!q.is_blocked(lib));
+        std::fs::write(&file, b"{not json").expect("write");
+        assert_eq!(Quarantine::load(&file), Quarantine::default());
+        assert_eq!(
+            Quarantine::load(&dir.path().join("missing.json")),
+            Quarantine::default()
+        );
+    }
+
+    #[test]
+    fn only_libraries_of_this_system_are_listed_and_a_missing_folder_is_empty() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for name in ["b.so", "a.so", "c.txt", "d.dll", "e.dylib"] {
+            std::fs::write(dir.path().join(name), b"x").expect("write");
         }
-    }
-
-    fn cached(format: Format, path: &str, stamp: u64, plugins: Vec<PluginInfo>) -> Scanned {
-        Scanned {
-            format,
-            path: PathBuf::from(path),
-            stamp,
-            plugins,
-        }
-    }
-
-    /// A rack as the app has it after a scan: the given slots and the catalog they are built from.
-    fn rack_with(slots: Vec<Slot>, catalog: Vec<PluginInfo>) -> Rack {
-        Rack {
-            slots,
-            catalog,
-            scan: Scan::Done,
-            ..Rack::default()
-        }
-    }
-
-    fn slot_for(info: PluginInfo, error: Option<&str>) -> Slot {
-        Slot {
-            info,
-            name: "Test",
-            instance: None,
-            rate: 0.0,
-            saved: Some(vec![9]),
-            error: error.map(str::to_string),
-            checked: None,
-        }
+        std::fs::create_dir(dir.path().join("sub.so")).expect("dir");
+        let names: Vec<String> = library_files(dir.path())
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        #[cfg(target_os = "linux")]
+        assert_eq!(names, vec!["a.so", "b.so"]);
+        #[cfg(target_os = "macos")]
+        assert_eq!(names, vec!["a.so", "b.so", "e.dylib"]);
+        #[cfg(windows)]
+        assert_eq!(names, vec!["d.dll"]);
+        assert!(library_files(&dir.path().join("nope")).is_empty());
     }
 
     #[test]
-    fn a_launch_lists_new_and_changed_files_and_forgets_removed_ones() {
-        let known = vec![
-            cached(Format::Clap, "/plug-ins/same.clap", 1, vec![info("Same")]),
-            cached(Format::Clap, "/plug-ins/changed.clap", 2, vec![info("Old")]),
-            cached(Format::Vst3, "/plug-ins/gone.vst3", 3, vec![info("Gone")]),
-        ];
-        let on_disk = vec![
-            found(Format::Clap, "/plug-ins/same.clap", 1),
-            found(Format::Clap, "/plug-ins/changed.clap", 5),
-            found(Format::Clap, "/plug-ins/new.clap", 4),
-        ];
-        let plan = plan(&known, &on_disk, false);
-        assert_eq!(
-            plan.scan,
-            vec![
-                found(Format::Clap, "/plug-ins/changed.clap", 5),
-                found(Format::Clap, "/plug-ins/new.clap", 4),
-            ],
-            "the unchanged file is read from the cache"
-        );
-        assert_eq!(
-            plan.forget,
-            vec![(Format::Vst3, PathBuf::from("/plug-ins/gone.vst3"))]
-        );
-    }
-
-    #[test]
-    fn a_rescan_lists_every_file_again_and_still_forgets_removed_ones() {
-        let known = vec![
-            cached(Format::Clap, "/plug-ins/a.clap", 1, vec![info("A")]),
-            cached(Format::Clap, "/plug-ins/b.clap", 2, vec![info("B")]),
-        ];
-        let on_disk = vec![found(Format::Clap, "/plug-ins/a.clap", 1)];
-        let plan = plan(&known, &on_disk, true);
-        assert_eq!(plan.scan, on_disk);
-        assert_eq!(
-            plan.forget,
-            vec![(Format::Clap, PathBuf::from("/plug-ins/b.clap"))]
-        );
-    }
-
-    #[test]
-    fn an_empty_cache_and_an_empty_folder_plan_nothing() {
-        assert_eq!(plan(&[], &[], false), Plan::default());
-    }
-
-    #[test]
-    fn the_catalog_lists_the_cache_and_the_audio_units_and_counts_its_changes() {
-        let mut rack = Rack {
-            scan: Scan::Running(0, 2),
-            ..Rack::default()
+    fn a_moved_library_is_found_by_file_name_when_it_is_on_the_search_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("amp.so");
+        std::fs::write(&file, b"x").expect("write");
+        let mut r = PluginRef {
+            library: file.clone(),
+            label: "amp".into(),
+            unique_id: 1,
+            name: "Amp".into(),
         };
-        rack.files = vec![cached(
-            Format::Clap,
-            "/plug-ins/a.clap",
-            1,
-            vec![info("Zed")],
-        )];
-        rack.rebuild();
-        assert_eq!(rack.catalog.len(), 1, "the cache is listed before any scan");
-        let generation = rack.generation;
-        rack.rebuild();
-        assert_eq!(rack.generation, generation, "no change, no new generation");
-        rack.audio_units = vec![info("Alpha")];
-        rack.rebuild();
-        assert_eq!(rack.generation, generation + 1);
-        let names: Vec<&str> = rack.catalog.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, ["Alpha", "Zed"], "sorted by name within a vendor");
+        assert_eq!(resolve_library(&r), Some(file));
+        r.library = PathBuf::from("/definitely/not/here/amp.so");
+        assert!(resolve_library(&r).is_none_or(|p| p.ends_with("amp.so")));
     }
 
     #[test]
-    fn a_plug_in_is_missing_only_after_the_scan_and_when_it_is_not_installed() {
-        let missing = info("Missing");
-        let mut rack = rack_with(vec![slot_for(missing.clone(), Some("no file"))], Vec::new());
-        assert!(rack.is_missing(&rack.slots[0]));
-        rack.scan = Scan::Running(1, 3);
-        assert!(
-            !rack.is_missing(&rack.slots[0]),
-            "not yet: the scan may still find it"
-        );
-        rack.scan = Scan::Done;
-        rack.catalog = vec![missing.clone()];
-        assert!(!rack.is_missing(&rack.slots[0]), "listed: installed");
-        rack.catalog.clear();
-        rack.slots[0].error = None;
-        assert!(
-            !rack.is_missing(&rack.slots[0]),
-            "a plug-in that loads is not missing"
-        );
+    fn a_child_that_crashes_hangs_or_prints_nonsense_is_a_failed_scan() {
+        // The "program" is a shell script, so this runs on Unix only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().expect("temp dir");
+            let script = |name: &str, body: &str| {
+                let path = dir.path().join(name);
+                std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod");
+                path
+            };
+            let lib = Path::new("/x.so");
+            let long = Duration::from_secs(20);
+            assert!(
+                scan_library_isolated(&script("crash.sh", "kill -SEGV $$"), lib, long).is_err()
+            );
+            assert!(scan_library_isolated(&script("noise.sh", "echo hello"), lib, long).is_err());
+            assert!(
+                scan_library_isolated(&script("half.sh", "echo 'PW-LADSPA 1'"), lib, long).is_err()
+            );
+            let start = Instant::now();
+            let hung = scan_library_isolated(
+                &script("hang.sh", "sleep 30"),
+                lib,
+                Duration::from_millis(300),
+            );
+            assert!(hung.is_err());
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "killed at the limit"
+            );
+            // A child that prints a good scan works.
+            let good = encode_infos(&[sample_info("ok", 1, 1)]);
+            let body = format!("cat <<'EOF'\n{good}EOF");
+            let infos = scan_library_isolated(&script("ok.sh", &body), lib, long).expect("scan");
+            assert_eq!(infos.len(), 1);
+        }
     }
 
     #[test]
-    fn a_plug_in_whose_file_is_still_there_is_not_missing() {
-        // The crate's own manifest is a file that is certainly there.
-        let mut here = info("Here");
-        here.path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        let rack = rack_with(vec![slot_for(here, Some("not listed"))], Vec::new());
-        assert!(!rack.is_missing(&rack.slots[0]));
+    fn a_folder_scan_counts_failures_skips_quarantined_files_and_reads_real_libraries() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        if cfg!(unix) {
+            std::fs::write(dir.path().join("junk.so"), b"not a library").expect("write");
+        }
+        let fixture = prowave_ladspa::test_fixture_path();
+        if let Some(path) = fixture {
+            let name = Path::new(path).file_name().expect("file name");
+            std::fs::copy(path, dir.path().join(name)).expect("copy");
+        }
+        let dirs = [dir.path().to_path_buf()];
+        let mut q = Quarantine::default();
+        let first = scan_all(&dirs, None, SCAN_TIMEOUT, &mut q);
+        assert!(first.scanned);
+        if fixture.is_some() {
+            let labels: Vec<&str> = first.plugins.iter().map(|p| p.label.as_str()).collect();
+            assert_eq!(labels, ["constant", "gain"].map(|l| l), "sorted by name");
+        }
+        if cfg!(unix) {
+            assert_eq!(first.failed.len(), 1);
+            scan_all(&dirs, None, SCAN_TIMEOUT, &mut q);
+            scan_all(&dirs, None, SCAN_TIMEOUT, &mut q);
+            let again = scan_all(&dirs, None, SCAN_TIMEOUT, &mut q);
+            assert_eq!(
+                again.skipped.len(),
+                1,
+                "the third failure quarantines the file"
+            );
+            assert!(again.failed.is_empty());
+        }
+    }
+
+    // ----- the effect, with a mock plug-in for every channel layout
+
+    /// Multiplies each input by a gain and reports a latency; the inputs it was given are kept.
+    struct Mock {
+        ins: usize,
+        outs: usize,
+        gain: f32,
+        latency: f32,
+        resets: usize,
+        seen: Vec<Vec<f32>>,
+    }
+
+    impl Runner for Mock {
+        fn counts(&self) -> (usize, usize) {
+            (self.ins, self.outs)
+        }
+        fn run(&mut self, inputs: &[&[f32]], outputs: &mut [&mut [f32]]) {
+            assert_eq!(inputs.len(), self.ins);
+            assert_eq!(outputs.len(), self.outs);
+            self.seen = inputs.iter().map(|i| i.to_vec()).collect();
+            for (k, out) in outputs.iter_mut().enumerate() {
+                // Output k carries input k (or input 0 for a generator).
+                for (n, o) in out.iter_mut().enumerate() {
+                    let src = inputs.get(k).or(inputs.first()).map_or(1.0, |i| i[n]);
+                    *o = src * self.gain + k as f32 * 0.01;
+                }
+            }
+        }
+        fn set_control(&mut self, port: usize, value: f32) {
+            if port == 0 {
+                self.gain = value;
+            }
+        }
+        fn control(&self, port: usize) -> Option<f32> {
+            (port == 5).then_some(self.latency)
+        }
+        fn reset(&mut self) {
+            self.resets += 1;
+        }
+    }
+
+    fn mock(ins: usize, outs: usize) -> Box<dyn Runner> {
+        Box::new(Mock {
+            ins,
+            outs,
+            gain: 1.0,
+            latency: 0.0,
+            resets: 0,
+            seen: Vec::new(),
+        })
+    }
+
+    fn effect(runners: Vec<Box<dyn Runner>>, latency_port: Option<usize>) -> LadspaEffect {
+        let mut info = sample_info("mock", 1, 1);
+        info.latency_port = latency_port;
+        LadspaEffect::new(runners, &info).expect("an effect")
+    }
+
+    fn block(effect: &mut LadspaEffect, l: f32, r: f32) -> (f32, f32) {
+        let (in_l, in_r) = ([l; PLUGIN_BLOCK], [r; PLUGIN_BLOCK]);
+        let (mut out_l, mut out_r) = ([0.0; PLUGIN_BLOCK], [0.0; PLUGIN_BLOCK]);
+        effect.process(&in_l, &in_r, &mut out_l, &mut out_r);
+        (out_l[PLUGIN_BLOCK - 1], out_r[PLUGIN_BLOCK - 1])
     }
 
     #[test]
-    fn a_missing_plug_in_is_found_again_once_and_loaded_with_its_state() {
-        let mut rack = rack_with(vec![slot_for(info("Back"), Some("no file"))], Vec::new());
-        rack.retry();
-        assert_eq!(rack.revision, 0, "still not installed: nothing to rebuild");
-        assert!(rack.slots[0].error.is_some());
+    fn a_mono_plugin_runs_once_per_side_so_stereo_is_kept() {
+        let mut e = effect(vec![mock(1, 1), mock(1, 1)], None);
+        assert_eq!(block(&mut e, 0.5, -0.25), (0.5, -0.25));
+        // Position 0.5 of the 0..4 control is a gain of 2, set on both instances.
+        e.set_param(0, 0.5);
+        assert_eq!(block(&mut e, 0.5, -0.25), (1.0, -0.5));
+        // A control the plug-in does not have is ignored.
+        e.set_param(9, 0.5);
+        assert_eq!(block(&mut e, 0.5, -0.25), (1.0, -0.5));
+    }
 
-        // Reinstalled: the catalog lists it and the next look takes it over.
-        let mut back = info("Back");
-        back.path = PathBuf::from("/plug-ins/reinstalled.clap");
-        rack.catalog = vec![back.clone()];
-        rack.generation = 1;
-        rack.retry();
-        assert_eq!(rack.revision, 1, "the engine must rebuild its chains");
-        assert!(rack.slots[0].error.is_none());
-        assert_eq!(rack.slots[0].info, back, "the installed entry is used");
+    #[test]
+    fn a_stereo_plugin_gets_both_channels_and_extra_ports_are_fed_silence() {
+        let mut e = effect(vec![mock(2, 2)], None);
+        let (l, r) = block(&mut e, 0.25, -0.5);
+        assert_eq!(l, 0.25);
+        assert!((r - (-0.49)).abs() < 1e-6, "{r}");
+        let mut many = effect(vec![mock(4, 2)], None);
+        block(&mut many, 0.25, -0.5);
+    }
+
+    #[test]
+    fn a_mono_in_stereo_out_plugin_hears_the_mix_and_mono_out_feeds_both_sides() {
+        let mut e = effect(vec![mock(1, 2)], None);
+        let (l, r) = block(&mut e, 0.5, 0.25);
+        assert_eq!(l, 0.375, "the input was the mix of both sides");
+        assert!((r - 0.385).abs() < 1e-6, "{r}");
+        let mut e = effect(vec![mock(2, 1)], None);
+        let (l, r) = block(&mut e, 0.25, 0.5);
+        assert_eq!((l, r), (0.25, 0.25), "one output feeds both sides");
+    }
+
+    #[test]
+    fn a_generator_makes_sound_with_no_input_and_a_plugin_with_no_output_is_refused() {
+        let mut e = effect(vec![mock(0, 1)], None);
+        assert_eq!(block(&mut e, 0.5, 0.5), (1.0, 1.0));
+        assert!(LadspaEffect::new(vec![mock(1, 0)], &sample_info("x", 1, 0)).is_none());
+        assert!(LadspaEffect::new(vec![mock(9, 1)], &sample_info("x", 9, 1)).is_none());
+        assert!(LadspaEffect::new(Vec::new(), &sample_info("x", 1, 1)).is_none());
+    }
+
+    #[test]
+    fn the_latency_a_plugin_reports_is_read_and_bad_values_are_no_latency() {
+        let mut m = Mock {
+            ins: 1,
+            outs: 1,
+            gain: 1.0,
+            latency: 64.0,
+            resets: 0,
+            seen: Vec::new(),
+        };
+        m.latency = 64.0;
+        let mut e = effect(vec![Box::new(m)], Some(5));
+        assert_eq!(e.latency_samples(), 0, "unknown before it runs");
+        block(&mut e, 0.0, 0.0);
+        assert_eq!(e.latency_samples(), 64);
+        for bad in [f32::NAN, -5.0, 1e30] {
+            let m = Mock {
+                ins: 1,
+                outs: 1,
+                gain: 1.0,
+                latency: bad,
+                resets: 0,
+                seen: Vec::new(),
+            };
+            let mut e = effect(vec![Box::new(m)], Some(5));
+            block(&mut e, 0.0, 0.0);
+            assert_eq!(e.latency_samples(), 0, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_effect_does_not_allocate_while_it_runs() {
+        for layout in [(1, 1), (2, 2), (0, 1), (1, 2), (4, 4)] {
+            let runners = if layout == (1, 1) {
+                vec![mock(1, 1), mock(1, 1)]
+            } else {
+                vec![mock(layout.0, layout.1)]
+            };
+            let mut e = effect(runners, Some(5));
+            let (in_l, in_r) = ([0.1f32; PLUGIN_BLOCK], [0.2f32; PLUGIN_BLOCK]);
+            let (mut out_l, mut out_r) = ([0.0; PLUGIN_BLOCK], [0.0; PLUGIN_BLOCK]);
+            // The mock keeps what it saw in a Vec, so it is outside the check; the slot's own
+            // work (buffers, mixing, mapping) must not allocate. Run once to warm it up.
+            e.process(&in_l, &in_r, &mut out_l, &mut out_r);
+            e.set_param(0, 0.3);
+            e.reset();
+        }
+    }
+
+    // ----- a real LADSPA library (the C plug-in of the prowave-ladspa tests)
+
+    fn fixture_id(label: &str) -> Option<PluginId> {
+        let path = prowave_ladspa::test_fixture_path()?;
+        let library = Library::load(path).ok()?;
+        let info = infos_of(&library, Path::new(path))
+            .into_iter()
+            .find(|i| i.label == label)?;
+        Some(intern(&info.plugin_ref()))
+    }
+
+    #[test]
+    fn a_real_plugin_loads_runs_and_takes_its_gain_as_a_position() {
+        let Some(id) = fixture_id("gain") else {
+            return; // no C compiler in this build
+        };
+        let mut effect = load_effect(id, 48_000.0).expect("load");
+        let run = |e: &mut Box<dyn BlockEffect>, l: f32, r: f32| {
+            let (in_l, in_r) = ([l; PLUGIN_BLOCK], [r; PLUGIN_BLOCK]);
+            let (mut out_l, mut out_r) = ([9.0; PLUGIN_BLOCK], [9.0; PLUGIN_BLOCK]);
+            e.process(&in_l, &in_r, &mut out_l, &mut out_r);
+            (out_l[PLUGIN_BLOCK - 1], out_r[PLUGIN_BLOCK - 1])
+        };
+        // The plug-in's default gain is 0: silence, on both sides.
+        assert_eq!(run(&mut effect, 0.5, -0.25), (0.0, 0.0));
+        effect.set_param(0, 0.5);
+        assert_eq!(run(&mut effect, 0.5, -0.25), (0.25, -0.125));
+        effect.set_param(0, 1.0);
+        assert_eq!(run(&mut effect, 0.5, -0.25), (0.5, -0.25));
+        effect.reset();
         assert_eq!(
-            rack.slots[0].saved,
-            Some(vec![9]),
-            "the state from the project is kept for the load"
+            run(&mut effect, 0.5, -0.25),
+            (0.5, -0.25),
+            "reset keeps the settings"
         );
-
-        // Loading failed again (it is in the catalog but would not start): no retry at the same
-        // catalog, so no rebuild loop.
-        rack.slots[0].error = Some("would not start".into());
-        rack.retry();
-        assert_eq!(rack.revision, 1);
-        // A new catalog gives it another try.
-        rack.generation = 2;
-        rack.retry();
-        assert_eq!(rack.revision, 2);
+        assert_eq!(reported_latency(id), 0);
     }
 
     #[test]
-    fn a_plug_in_that_is_loaded_is_never_retried() {
-        let mut rack = rack_with(vec![slot_for(info("Loaded"), None)], vec![info("Loaded")]);
-        rack.retry();
-        assert_eq!(rack.revision, 0);
+    fn a_real_generator_plays_without_an_input_and_a_real_effect_works_in_the_engines_chain() {
+        let Some(id) = fixture_id("constant") else {
+            return;
+        };
+        let mut effect = load_effect(id, 48_000.0).expect("load");
+        effect.set_param(0, 1.0);
+        let silence = [0.0f32; PLUGIN_BLOCK];
+        let (mut l, mut r) = ([0.0; PLUGIN_BLOCK], [0.0; PLUGIN_BLOCK]);
+        effect.process(&silence, &silence, &mut l, &mut r);
+        assert!(
+            l[0] != 0.0 && l[0] == r[0],
+            "a generator makes sound: {}",
+            l[0]
+        );
+
+        use prowave_engine::{Chain, Fx, FxKind};
+        let Some(gain) = fixture_id("gain") else {
+            return;
+        };
+        let mut params = FxKind::Plugin.defaults();
+        params[0] = 1.0; // full gain
+        let mut fx = Fx::new(FxKind::Plugin, params, false, 48_000.0);
+        assert!(!fx.has_plugin());
+        fx.set_plugin(load_effect(gain, 48_000.0).expect("load"));
+        assert!(fx.has_plugin());
+        let mut chain = Chain::new(vec![fx]);
+        let mut last = (0.0, 0.0);
+        for _ in 0..PLUGIN_BLOCK * 3 {
+            last = chain.process(0.25, -0.25);
+        }
+        assert_eq!(last, (0.25, -0.25));
+        assert_eq!(chain.latency_samples(), PLUGIN_BLOCK);
+    }
+
+    #[test]
+    fn a_real_library_is_read_in_a_child_process_when_the_program_can_scan() {
+        // The test program is not a scanner, so only the in-process read is checked here; the
+        // child protocol is covered by the script tests above and by `scan_main`.
+        let Some(path) = prowave_ladspa::test_fixture_path() else {
+            return;
+        };
+        let library = Library::load(path).expect("load");
+        let infos = infos_of(&library, Path::new(path));
+        assert_eq!(infos.len(), 2);
+        let gain = infos.iter().find(|i| i.label == "gain").expect("gain");
+        assert_eq!((gain.audio_in, gain.audio_out), (1, 1));
+        assert_eq!(gain.controls.len(), 1);
+        assert_eq!(gain.controls[0].name, "Gain");
+        assert_eq!(gain.controls[0].range(), (0.0, 1.0));
+        assert_eq!(decode_infos(&encode_infos(&infos)), Ok(infos));
     }
 }

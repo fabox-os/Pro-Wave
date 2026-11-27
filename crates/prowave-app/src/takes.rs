@@ -46,6 +46,110 @@ impl TakeFolder {
         (*notes, *controls) = self.flatten();
     }
 
+    /// Split at Playhead on a take folder, `at` beats from its start: each take is cut as a MIDI
+    /// region is (see `region_edit::cut_notes`) and the comp is cut too, so the two folders play
+    /// the same passage on either side of the cut.
+    pub fn split(&self, at: f32) -> (TakeFolder, TakeFolder) {
+        let at = at.clamp(0.0, self.len);
+        let (mut left, mut right) = (Vec::new(), Vec::new());
+        for take in &self.takes {
+            let (ln, lc, rn, rc) = crate::region_edit::cut_notes(&take.notes, &take.controls, at);
+            left.push(Take {
+                notes: ln,
+                controls: lc,
+            });
+            right.push(Take {
+                notes: rn,
+                controls: rc,
+            });
+        }
+        let (mut left_comp, mut right_comp) = (Vec::new(), Vec::new());
+        for seg in &self.comp {
+            if seg.start < at - EPS {
+                left_comp.push(CompSegment {
+                    end: seg.end.min(at),
+                    ..*seg
+                });
+            }
+            if seg.end > at + EPS {
+                right_comp.push(CompSegment {
+                    start: seg.start.max(at) - at,
+                    end: seg.end - at,
+                    take: seg.take,
+                });
+            }
+        }
+        (
+            TakeFolder {
+                takes: left,
+                comp: left_comp,
+                len: at,
+                open: self.open,
+            },
+            TakeFolder {
+                takes: right,
+                comp: right_comp,
+                len: self.len - at,
+                open: self.open,
+            },
+        )
+    }
+
+    /// Joins `right` after `left`, where the two are next to each other: take N of `right`
+    /// follows take N of `left`, and the comp follows too (neighbours of one take join up). Only
+    /// folders with the same number of takes join; `None` for any other.
+    pub fn joined(left: &TakeFolder, right: &TakeFolder) -> Option<TakeFolder> {
+        if left.takes.len() != right.takes.len() {
+            return None;
+        }
+        let off = left.len;
+        let takes = left
+            .takes
+            .iter()
+            .zip(&right.takes)
+            .map(|(a, b)| Take {
+                notes: a
+                    .notes
+                    .iter()
+                    .copied()
+                    .chain(b.notes.iter().map(|n| Note {
+                        start: n.start + off,
+                        ..*n
+                    }))
+                    .collect(),
+                controls: a
+                    .controls
+                    .iter()
+                    .copied()
+                    .chain(b.controls.iter().map(|c| Control {
+                        start: c.start + off,
+                        ..*c
+                    }))
+                    .collect(),
+            })
+            .collect();
+        let mut comp = left.comp.clone();
+        for seg in &right.comp {
+            let seg = CompSegment {
+                start: seg.start + off,
+                end: seg.end + off,
+                take: seg.take,
+            };
+            match comp.last_mut() {
+                Some(prev) if prev.take == seg.take && (seg.start - prev.end).abs() < EPS => {
+                    prev.end = seg.end;
+                }
+                _ => comp.push(seg),
+            }
+        }
+        Some(TakeFolder {
+            takes,
+            comp,
+            len: left.len + right.len,
+            open: left.open,
+        })
+    }
+
     /// Logic's swipe on a take: the stretch `a..b` (beats) now plays `take`. The rest of the
     /// comp keeps what it had, and neighbouring stretches of the same take join up.
     pub fn swipe(&mut self, take: usize, a: f32, b: f32) {
@@ -184,5 +288,36 @@ mod tests {
         assert_eq!(f.flatten().1[0].val, 0);
         f.swipe(0, 0.0, 4.0);
         assert_eq!(f.flatten().1[0].val, 127);
+    }
+
+    #[test]
+    fn a_split_folder_plays_each_side_of_the_cut_and_joins_back_to_the_same_folder() {
+        let mut f = folder();
+        f.swipe(0, 1.5, 5.5);
+        let (left, right) = f.split(4.0);
+        assert_eq!((left.len, right.len), (4.0, 4.0));
+        // The comp is cut: take 1 then take 0 on the left, take 0 then take 1 on the right.
+        assert_eq!(
+            right
+                .comp
+                .iter()
+                .map(|s| (s.start, s.end, s.take))
+                .collect::<Vec<_>>(),
+            vec![(0.0, 1.5, 0), (1.5, 4.0, 1)]
+        );
+        assert_eq!(starts(&left), vec![1.0, 2.0]);
+        assert_eq!(starts(&right), vec![1.0, 2.0]);
+        let joined = TakeFolder::joined(&left, &right).unwrap();
+        assert_eq!(joined, f, "the two pieces make the folder again");
+    }
+
+    #[test]
+    fn folders_join_only_with_the_same_number_of_takes() {
+        let f = folder();
+        let (left, _) = f.split(4.0);
+        let mut other = f.clone();
+        other.takes.pop();
+        assert!(TakeFolder::joined(&left, &other).is_none());
+        assert!(TakeFolder::joined(&other, &left).is_none());
     }
 }

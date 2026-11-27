@@ -14,6 +14,10 @@
 </p>
 
 <p align="center">
+  <a href="https://www.opensourcealternatives.to"><img src="https://www.opensourcealternatives.to/badge-osa.svg" alt="As seen on Open Source Alternatives"></a>
+</p>
+
+<p align="center">
   <a href="https://fabox-os.github.io/Pro-Wave/">Website</a> •
   <a href="#downloads">Download</a> •
   <a href="#features">Features</a> •
@@ -51,7 +55,7 @@ to update this section.
 
 | | Done | Started | Total | Done % |
 | --- | ---: | ---: | ---: | ---: |
-| Menu entries | 103 | 0 | 180 | 57.22% |
+| Menu entries | 110 | 0 | 189 | 58.20% |
 | Roadmap items | 25 | 15 | 77 | 32.47% |
 <!-- status:end -->
 
@@ -67,8 +71,8 @@ Pro Wave does a lot, and aims to do it the way Logic Pro does. It is a full DAW:
 - **Piano Roll, Score and more editors.** Draw, select, move and resize notes; time and scale quantize with strength and swing; velocity lane, Event List, Step Sequencer and MIDI Transform. A Score view with clefs, key and time signatures, rests and ties, and **MusicXML export**.
 - **Mixer and automation.** Channel strips with sends, buses, groups, VCA, pan, faders and meters. Automation for faders, pan, send levels and every effect parameter, with Read, Touch, Latch and Write modes.
 - **Real effects.** Channel EQ, Multi-Band EQ, **Pult EQ** (Pultec-style tube EQ), Compressor, **Multi-Band Compressor**, Noise Gate, Limiter, **Space Designer** convolution reverb (Volume and Filter envelopes, X-Over, Output EQ, mastering presets), Tape Delay, Chorus, Phaser, Overdrive, Filter and the **Amp Designer** for guitar and bass. They work on any strip, **including the Stereo Out**.
-- **Plug-ins.** CLAP, VST3 and (on macOS) Audio Unit effects in any Audio FX slot, with their own windows (macOS), automation, state and delay compensation, and a Plugin Manager. Each plug-in runs in a process of its own (macOS, Linux): one that crashes while playing does not take Pro Wave down.
-- **Instruments and sounds.** A built-in subtractive synthesizer with drum-kit modes (48 voices), **SoundFont (.sf2)** instruments, **Hydrogen drum kits**, and Library patches that set a track's instrument and effects.
+- **Plug-ins.** LADSPA, CLAP, VST3 and (on macOS) Audio Unit effects in any Audio FX slot, with their own windows (macOS, and CLAP/VST3 on Linux/X11), automation, state and delay compensation, and a Plugin Manager. Sliders are the portable default; Editor is opt-in. Each plug-in runs in a process of its own (macOS, Linux): one that crashes while playing does not take Pro Wave down.
+- **Instruments and sounds.** A built-in subtractive synthesizer with drum-kit modes (48 voices), **SoundFont (.sf2)** instruments, a physically modelled **Electric Piano**, **Hydrogen drum kits**, and Library patches that set a track's instrument and effects.
 - **Flex Time, Flex Pitch and Smart Tempo.** Warp and re-pitch audio, detect tempo, and make a project follow a recording.
 - **Audio regions.** WAV, AIFF, FLAC, MP3, CAF, OGG and M4A streamed from disk; region gain, fades, crossfades, reverse and normalize, never destructive.
 - **Bounce and export.** Bounce the project or a cycle section to a 32-bit WAV, export one track, and write the selection as a MIDI file.

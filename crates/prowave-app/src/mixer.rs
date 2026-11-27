@@ -12,6 +12,7 @@
 //! [`channel_strip`] is also used by the Inspector's two strips.
 use crate::i18n::{tr, trf};
 use crate::model::{AutoMode, AutoTarget, Insert, Project, SendSlot, TrackKind, MAX_SENDS};
+use crate::plugin_ui_prefs::PluginUiMode;
 use crate::widgets::{
     back_chevron, menu_title, popup_button, stroke, todo_item, BLUE, TEXT, TEXT_DIM,
 };
@@ -22,6 +23,8 @@ use egui::{
 use std::collections::HashMap;
 
 const TOOLBAR_H: f32 = 30.0;
+/// The buses the Output menu lists (Logic's 256 are in the project; the menu shows the first).
+const MENU_BUSES: u16 = 32;
 const LABEL_W: f32 = 88.0;
 const GAP: f32 = 2.0;
 /// The strip's bottom block: the 2-point inset, the M/S buttons (26 points above the bottom)
@@ -86,7 +89,7 @@ pub struct MixerView {
     /// The Automation editor window.
     pub auto_editor: crate::automation::AutoEditor,
     /// Sends on Faders: the bus whose send levels the faders set.
-    pub sends_on_faders: Option<u8>,
+    pub sends_on_faders: Option<u16>,
     /// Edit > Copy Channel Strip.
     pub copied: Option<CopiedStrip>,
     /// The audio input device that the Input slots choose from.
@@ -95,9 +98,10 @@ pub struct MixerView {
     pub picker_search: String,
     /// The text in a hosted plug-in window's parameter search field (see `fx_ui`).
     pub plugin_search: String,
-    /// A hosted plug-in is shown as its Controls (the sliders) and not in its own window:
-    /// Logic's View > Controls instead of View > Editor.
-    pub plugin_controls: bool,
+    /// The saved view for hosted plug-ins: sliders (the portable default) or their own editor.
+    pub(crate) preferred_plugin_ui: PluginUiMode,
+    /// A one-off view chosen from an insert's menu, overriding the saved preference until Open.
+    pub(crate) plugin_view_override: Option<PluginUiMode>,
     /// The hosted plug-in whose own window was asked for (see `fx_ui`).
     pub plugin_editor: Option<crate::fx_ui::EditorWindow>,
 }
@@ -111,8 +115,18 @@ pub struct CopiedStrip {
     pan: f32,
 }
 
-impl Default for MixerView {
-    fn default() -> Self {
+impl MixerView {
+    /// A mixer whose hosted plug-ins open in `mode`, with no one-off view chosen yet.
+    pub(crate) fn with_plugin_ui(mode: PluginUiMode) -> Self {
+        Self {
+            preferred_plugin_ui: mode,
+            plugin_view_override: None,
+            ..Self::unconfigured()
+        }
+    }
+
+    /// The fields that do not depend on the saved plug-in view.
+    fn unconfigured() -> Self {
         Self {
             mode: MixerMode::Tracks,
             filters: [true; 8],
@@ -126,9 +140,16 @@ impl Default for MixerView {
             inputs: crate::audio_rec::InputChoice::default(),
             picker_search: String::new(),
             plugin_search: String::new(),
-            plugin_controls: false,
+            preferred_plugin_ui: PluginUiMode::default(),
+            plugin_view_override: None,
             plugin_editor: None,
         }
+    }
+}
+
+impl Default for MixerView {
+    fn default() -> Self {
+        Self::with_plugin_ui(crate::plugin_ui_prefs::load())
     }
 }
 
@@ -373,12 +394,14 @@ fn fader_and_meter(
     let y_of = |f: f32| bottom - f * h;
     let w = area.width();
     let scale_col = Color32::from_gray(0x8e);
-    let tiny = FontId::proportional(6.5);
+    // Scale numbers were too small to read at 6.5 pt; 8 pt keeps them legible on every strip.
+    let tiny = FontId::proportional(8.0);
 
     // Columns, proportional to the strip width (Logic: fader left of centre, meter right).
     let fader_x = area.left() + (w * 0.30).max(22.0);
     let num_x = area.left() + w * 0.56;
-    let bar_w = 5.0;
+    // Wide strips get wider bars; narrow strips keep 5 px so both still fit.
+    let bar_w = if w >= 80.0 { 6.0 } else { 5.0 };
     let meter_left = (area.left() + w * 0.66).min(area.right() - 2.0 * bar_w - 6.0);
 
     // Fader scale: tick marks with small numbers, left of the slot.
@@ -738,7 +761,7 @@ fn send_slots(
             let mut picked = None;
             egui::Popup::menu(&resp).show(|ui| {
                 ui.set_min_width(110.0);
-                for b in 1..=8u8 {
+                for b in 1..=8u16 {
                     if ui.button(trf("Bus {}", &[&b])).clicked() {
                         picked = Some(b);
                         ui.close();
@@ -793,7 +816,7 @@ fn send_slot(
     }
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(130.0);
-        for b in 1..=8u8 {
+        for b in 1..=8u16 {
             if ui
                 .selectable_label(send.bus == Some(b), trf("Bus {}", &[&b]))
                 .clicked()
@@ -878,7 +901,7 @@ fn insert_fill(off: bool, missing: bool) -> Color32 {
 /// project knows of the plug-in (its manufacturer and format).
 fn missing_note(plugin: u32) -> String {
     let mut note = tr("Plug-in not found").to_string();
-    if let Some(info) = crate::plugins::info(plugin) {
+    if let Some(info) = crate::hosted_plugins::info(plugin) {
         let known: Vec<&str> = [info.vendor.as_str(), info.format.name()]
             .into_iter()
             .filter(|text| !text.is_empty())
@@ -906,7 +929,8 @@ fn insert_slot(
     let have = strip_inserts(p, i).get(k).copied();
     let count = strip_inserts(p, i).len();
     let off = have.is_some_and(|fx| inactive || fx.bypass);
-    let missing = have.is_some_and(|fx| fx.plugin != 0 && crate::plugins::missing(fx.plugin));
+    let missing =
+        have.is_some_and(|fx| fx.hosted != 0 && crate::hosted_plugins::missing(fx.hosted));
     let ink = if off { TEXT_DIM } else { Color32::WHITE };
     match have {
         Some(fx) => slot(g, r, fx.name(), insert_fill(off, missing), ink),
@@ -917,21 +941,23 @@ fn insert_slot(
     }
     let resp = ui.interact(r, uid, Sense::click());
     if let (true, Some(fx)) = (missing, have) {
-        resp.clone().on_hover_text(missing_note(fx.plugin));
+        resp.clone().on_hover_text(missing_note(fx.hosted));
     }
     if have.is_some() && resp.double_clicked() {
         v.fx_window = Some((i, k));
-        v.plugin_controls = false;
+        v.plugin_view_override = None;
     }
     let mut act = None;
-    egui::Popup::menu(&resp).show(|ui| {
+    // Clicks inside the slot's menu, such as on the picker's search field, keep it open; the
+    // items close it themselves when they are chosen.
+    crate::plugin_picker::popup(&resp).show(|ui| {
         ui.set_min_width(150.0);
         if let Some(fx) = have {
             if ui.button(tr("Open")).clicked() {
                 act = Some(InsertAct::Open);
                 ui.close();
             }
-            if fx.plugin != 0 && ui.button(tr("Controls")).clicked() {
+            if fx.hosted != 0 && ui.button(tr("Controls")).clicked() {
                 act = Some(InsertAct::Controls);
                 ui.close();
             }
@@ -966,6 +992,9 @@ fn insert_slot(
         } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
             act = Some(InsertAct::Add(pick_insert(pick)));
             v.picker_search.clear();
+        }
+        // The menu stays open for clicks inside it (the search field), so a choice closes it.
+        if act.is_some() {
             ui.close();
         }
     });
@@ -975,12 +1004,13 @@ fn insert_slot(
 }
 
 /// A new effect for a picker choice: one of Pro Wave's own, or a hosted plug-in, which joins
-/// the session's rack (`crate::plugins`).
+/// the session's rack (`crate::hosted_plugins`).
 fn pick_insert(pick: crate::plugin_picker::Pick) -> Insert {
     match pick {
         crate::plugin_picker::Pick::Effect(kind) => Insert::new(kind),
-        crate::plugin_picker::Pick::Plugin(info) => {
-            Insert::hosted(crate::plugins::add(&info, None))
+        crate::plugin_picker::Pick::Plugin(id) => Insert::new_plugin(id),
+        crate::plugin_picker::Pick::Hosted(info) => {
+            Insert::new_hosted(crate::hosted_plugins::add(&info, None))
         }
     }
 }
@@ -1023,9 +1053,13 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
             };
         }
         InsertAct::Bypass if filled => inserts[k].bypass = !inserts[k].bypass,
-        InsertAct::Open | InsertAct::Controls if filled => {
+        InsertAct::Open if filled => {
             v.fx_window = Some((i, k));
-            v.plugin_controls = matches!(act, InsertAct::Controls);
+            v.plugin_view_override = None;
+        }
+        InsertAct::Controls if filled => {
+            v.fx_window = Some((i, k));
+            v.plugin_view_override = Some(PluginUiMode::Sliders);
         }
         InsertAct::Move(d) if filled => {
             let to = k as isize + d;
@@ -1427,7 +1461,7 @@ pub fn channel_strip(
         }
         _ => None,
     };
-    let send_db = |sends: &[SendSlot], bus: u8| {
+    let send_db = |sends: &[SendSlot], bus: u16| {
         let level = sends
             .iter()
             .find(|s| s.bus == Some(bus))
@@ -1586,7 +1620,7 @@ pub fn channel_strip(
 
 /// Sets the send to `bus` from a fader position in dB (a new send is made when needed, and
 /// one turned right down is taken away).
-fn set_send_level(sends: &mut Vec<SendSlot>, bus: u8, db: f32) {
+fn set_send_level(sends: &mut Vec<SendSlot>, bus: u16, db: f32) {
     let level = if db <= -59.5 {
         0.0
     } else {
@@ -1673,7 +1707,8 @@ fn output_slot(
             p.tracks[i].output = 0;
             ui.close();
         }
-        for bus in 1..=prowave_engine::MAX_BUSES as u8 {
+        // The first buses (a bus past them is set from the project or the send menus).
+        for bus in 1..=MENU_BUSES {
             if ui
                 .selectable_label(current == bus, trf("Bus {}", &[&bus]))
                 .clicked()
@@ -2090,7 +2125,7 @@ fn fit_toolbar(menus_end: f32, center: f32, right_end: f32, filters_w: f32) -> T
     }
 }
 
-fn draw_sends_on_faders(ui: &Ui, g: &egui::Painter, x: f32, cy: f32, bus: &mut Option<u8>) {
+fn draw_sends_on_faders(ui: &Ui, g: &egui::Painter, x: f32, cy: f32, bus: &mut Option<u16>) {
     const NS: &str = "mixer_toolbar";
     // Sends on Faders: the faders set the sends to a bus.
     g.text(
@@ -2121,7 +2156,7 @@ fn draw_sends_on_faders(ui: &Ui, g: &egui::Painter, x: f32, cy: f32, bus: &mut O
             *bus = None;
             ui.close();
         }
-        for b in 1..=8u8 {
+        for b in 1..=8u16 {
             if ui
                 .selectable_label(*bus == Some(b), trf("Bus {}", &[&b]))
                 .clicked()
@@ -2231,8 +2266,23 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin_ui_prefs::PluginUiMode;
     use egui::PointerButton;
     use prowave_engine::FxKind;
+
+    #[test]
+    fn mixer_defaults_to_the_saved_plugin_ui_mode() {
+        // `default()` must read the persisted preference rather than hard-code sliders. The
+        // round-trip of that file is covered in `plugin_ui_prefs`; this checks the wiring.
+        assert_eq!(
+            MixerView::default().preferred_plugin_ui,
+            crate::plugin_ui_prefs::load()
+        );
+        assert_eq!(
+            MixerView::with_plugin_ui(PluginUiMode::Editor).preferred_plugin_ui,
+            PluginUiMode::Editor
+        );
+    }
 
     /// A project with an audio-style track and an Aux track, and its mixer drawn in a window
     /// 1400 by 700 points.

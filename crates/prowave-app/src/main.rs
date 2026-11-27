@@ -6,12 +6,16 @@
 static ALLOC_GUARD: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
 
 mod apple_loops;
+mod audio_prefs;
 mod audio_rec;
 mod automation;
 mod bench;
 mod bounce;
 mod clock_follow;
 mod clock_in;
+mod count_in;
+mod drum_kit;
+mod drum_machine_ui;
 mod engine_sync;
 mod event_list;
 mod file_browser;
@@ -23,11 +27,15 @@ mod graphics;
 mod groove;
 mod group_editor;
 mod groups;
+mod hosted_plugins;
+mod hydrogen_archive;
 mod i18n;
 mod import;
 mod inspector;
+mod ir_files;
 mod library;
 mod logicx;
+mod logicx_import;
 mod marker_track;
 mod menus;
 mod midi_file;
@@ -38,6 +46,7 @@ mod midi_out;
 mod mixer;
 mod model;
 mod mtc_in;
+mod musical_typing;
 mod native_menu;
 mod new_track_dialog;
 mod note_edit;
@@ -46,20 +55,25 @@ mod pattern;
 mod piano_roll;
 mod plugin_manager;
 mod plugin_picker;
+mod plugin_ui_prefs;
 mod plugins;
 mod project_io;
 mod project_settings;
 mod recent_files;
 mod recorder;
 mod region_edit;
+mod rex_import;
+mod sampler_load;
 mod score;
 mod score_export;
+mod score_import;
 mod scripter;
 mod side_panes;
 mod signature_track;
 mod smart_tempo;
 mod soundfonts;
 mod space_designer_ui;
+mod stack_dialog;
 mod start_screen;
 mod step_editor;
 mod sync_menu;
@@ -80,6 +94,7 @@ mod ui_test;
 mod undo;
 mod undo_history;
 mod updater;
+mod vamp;
 mod widgets;
 mod window_chrome;
 
@@ -136,8 +151,20 @@ pub struct UiState {
     pub track_dialog: Option<track_dialogs::TrackDialog>,
     /// Logic's Create New Track dialog (the + above the track headers).
     pub new_track: new_track_dialog::NewTrackDialog,
-    /// The audio output the engine plays on (name, sample rate), for Project Settings > Audio.
-    pub audio_info: Option<(String, u32)>,
+    /// Track > Create Track Stack…: the dialog choosing the kind of stack.
+    pub stack_dialog: stack_dialog::StackDialog,
+    /// The audio output the engine plays on, for Project Settings > Audio.
+    pub audio_info: Option<engine_sync::AudioInfo>,
+    /// The output device and buffer size the user chose (remembered in `audio.txt`).
+    pub audio_prefs: audio_prefs::AudioPrefs,
+    /// A new output choice from Project Settings > Audio, carried out by `App` after the window.
+    pub audio_request: Option<audio_prefs::AudioPrefs>,
+    /// The output devices and the buffer sizes the chosen device takes, read when the Audio
+    /// tab is opened.
+    pub audio_devices: Vec<prowave_engine::OutputDevice>,
+    pub audio_buffer_range: Option<(u32, u32)>,
+    /// The Audio tab was shown last frame, so its lists are read once per opening.
+    pub audio_tab_open: bool,
     /// Project Settings > MIDI: send MIDI panic on the next frame.
     pub midi_panic: bool,
     /// Event list > SysEx…: the message being typed, while its window is open.
@@ -157,6 +184,8 @@ pub struct UiState {
     pub midi_cmd: Option<midi_file::MidiCmd>,
     /// File > Export > Score as MusicXML… picked this frame.
     pub export_xml_cmd: bool,
+    /// File > Import > MusicXML / Guitar Pro / Hydrogen Song picked this frame.
+    pub import_cmd: Option<score_import::ImportCmd>,
     /// Edit > Undo History… picked this frame: the history window is showing.
     pub show_undo_history: bool,
     /// File > Import > Audio File… picked this frame.
@@ -212,10 +241,19 @@ pub struct UiState {
     pub can_redo: bool,
     /// Mix > Edit Groups… window is open.
     pub show_groups: bool,
-    /// Window > Plugin Manager is open, and the text in its search field.
+    /// Musical Typing: the computer keyboard as a MIDI keyboard (Window > Show Musical Typing).
+    pub typing: musical_typing::MusicalTyping,
+    /// Window > Plugin Manager is open.
     pub show_plugin_manager: bool,
+    /// The track whose Drum Machine window is open, the selected pad, the pad being held by the
+    /// mouse, and why the last sample could not be used.
+    pub show_drum_machine: Option<usize>,
+    pub drum_pad: usize,
+    pub drum_held: Option<usize>,
+    pub drum_error: Option<String>,
+    /// The text in the Plugin Manager's search field, and the manufacturer chosen in its list
+    /// (`None`: Show All).
     pub plugin_manager_search: String,
-    /// The manufacturer chosen in the Plugin Manager's list (`None`: Show All).
     pub plugin_manager_vendor: Option<String>,
 }
 
@@ -254,7 +292,13 @@ impl UiState {
             settings_tab: None,
             track_dialog: None,
             new_track: Default::default(),
+            stack_dialog: Default::default(),
             audio_info: None,
+            audio_prefs: audio_prefs::AudioPrefs::default(),
+            audio_request: None,
+            audio_devices: Vec::new(),
+            audio_buffer_range: None,
+            audio_tab_open: false,
             midi_panic: false,
             sysex_entry: None,
             transform: transform_ui::TransformView::default(),
@@ -265,6 +309,7 @@ impl UiState {
             groove: groove::GrooveState::default(),
             midi_cmd: None,
             export_xml_cmd: false,
+            import_cmd: None,
             show_undo_history: false,
             import_audio_cmd: false,
             export_track_cmd: false,
@@ -292,10 +337,21 @@ impl UiState {
             can_undo: false,
             can_redo: false,
             show_groups: false,
+            typing: musical_typing::MusicalTyping::new(),
             show_plugin_manager: false,
+            show_drum_machine: None,
+            drum_pad: 0,
+            drum_held: None,
+            drum_error: None,
             plugin_manager_search: String::new(),
             plugin_manager_vendor: None,
         }
+    }
+
+    /// Reads the system's output devices and the buffer sizes the chosen one takes.
+    pub fn refresh_audio_list(&mut self) {
+        self.audio_devices = prowave_engine::output_devices();
+        self.audio_buffer_range = prowave_engine::buffer_range(self.audio_prefs.device.as_deref());
     }
 
     /// After a project is replaced: drop editor state (selections, open regions) that indexes
@@ -354,6 +410,59 @@ struct App {
 }
 
 impl App {
+    /// Project Settings > Audio chose another output device or buffer size: the engine restarts
+    /// on it. Playback stops and the playhead stays where it was; the MIDI sender and the audio
+    /// input are started again on the new engine. Refused while recording or bouncing. If the
+    /// new output cannot be opened, the current one keeps playing.
+    fn restart_audio(&mut self, prefs: audio_prefs::AudioPrefs) {
+        if prefs == self.ui.audio_prefs {
+            return;
+        }
+        if self.bounce.is_some()
+            || self.region_bounce.is_some()
+            || self.ui.rec.active()
+            || self.ui.audio_rec.active()
+        {
+            self.ui.status = Some(
+                i18n::tr("Stop the recording or the bounce before changing the audio output.")
+                    .to_string(),
+            );
+            return;
+        }
+        let engine = match prowave_engine::Engine::start_on(prefs.device.as_deref(), prefs.buffer) {
+            Ok(engine) => engine,
+            Err(e) => {
+                tracing::warn!("audio output change refused: {e}");
+                self.ui.status = Some(i18n::trf(
+                    "Cannot use that audio output: {}. The current output keeps playing.",
+                    &[&e],
+                ));
+                return;
+            }
+        };
+        // The new engine starts stopped, so the transport stops here too; the playhead is kept.
+        if self.project.playing {
+            if let Some(old) = self.sync.as_mut() {
+                self.project.position_beats = old.engine.state().position_beats;
+            }
+            self.project.playing = false;
+            self.project.counting_in = false;
+        }
+        // The MIDI sender goes first: its Drop ends its thread before the old engine is dropped.
+        self.midi_out = None;
+        let mut sync = engine_sync::EngineSync::new(engine, &self.project);
+        self.midi_out = start_midi_out(&mut sync);
+        // Dropping the old engine stops its stream.
+        let _ = self.sync.replace(sync);
+        // The monitoring feed of an open input went to the old engine: the input is opened again.
+        self.ui.audio_rec.forget_input();
+        self.ui.audio_info = self.sync.as_mut().map(|s| s.audio_info());
+        self.ui.audio_buffer_range = prowave_engine::buffer_range(prefs.device.as_deref());
+        self.ui.audio_prefs = prefs;
+        self.ui.audio_prefs.save();
+        self.ui.audition.clear();
+    }
+
     /// File > Show in File Manager: opens the folder that holds the project file, with the
     /// project selected where the system supports it.
     fn reveal_project(&mut self) {
@@ -416,6 +525,48 @@ impl App {
             });
             return;
         }
+        if logicx_import::is_supported_path(path) {
+            self.ui.status = Some(match logicx_import::preview(&mut self.project, path) {
+                Ok(status) => {
+                    self.history.record(&self.project);
+                    status
+                }
+                Err(e) => i18n::trf("cannot import {}: {}", &[&path.display(), &e]),
+            });
+            return;
+        }
+        if rex_import::is_supported_path(path) {
+            self.ui.status = Some(match rex_import::import(&mut self.project, path, ctx) {
+                Ok(status) => {
+                    self.history.record(&self.project);
+                    status
+                }
+                Err(e) => i18n::trf("cannot import {}: {}", &[&path.display(), &e]),
+            });
+            return;
+        }
+        if score_import::is_supported_path(path) {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let result = match ext.as_str() {
+                "mxl" | "xml" | "musicxml" => {
+                    score_import::import_musicxml(&mut self.project, path)
+                }
+                "gp" => score_import::import_guitarpro(&mut self.project, path),
+                _ => score_import::import_hydrogen(&mut self.project, path),
+            };
+            self.ui.status = Some(match result {
+                Ok(n) => {
+                    self.history.record(&self.project);
+                    i18n::trf("imported {} tracks from {}", &[&n, &path.display()])
+                }
+                Err(e) => i18n::trf("cannot import {}: {}", &[&path.display(), &e]),
+            });
+            return;
+        }
         if !import::is_audio_path(path) {
             self.ui.status = Some(i18n::trf("not an audio file: {}", &[&path.display()]));
             return;
@@ -437,6 +588,52 @@ impl App {
         self.ui.status = Some(match score_export::export(&self.project, &path) {
             Ok(notes) => i18n::trf("exported {} notes to {}", &[&notes, &path.display()]),
             Err(e) => e,
+        });
+    }
+
+    /// File > Import entries handled by the format-specific readers.
+    fn run_import_cmd(&mut self, cmd: score_import::ImportCmd, ctx: &egui::Context) {
+        use score_import::ImportCmd;
+        let path = match cmd {
+            ImportCmd::LogicX => rfd::FileDialog::new()
+                .set_title(i18n::tr("LogicX Project (Preview)…"))
+                .pick_folder(),
+            ImportCmd::MusicXml => rfd::FileDialog::new()
+                .set_title(i18n::tr("MusicXML Score…"))
+                .add_filter(i18n::tr("MusicXML"), &["musicxml", "xml", "mxl"])
+                .pick_file(),
+            ImportCmd::GuitarPro => rfd::FileDialog::new()
+                .set_title(i18n::tr("Guitar Pro…"))
+                .add_filter(i18n::tr("Guitar Pro"), &["gp"])
+                .pick_file(),
+            ImportCmd::Hydrogen => rfd::FileDialog::new()
+                .set_title(i18n::tr("Hydrogen Song…"))
+                .add_filter(i18n::tr("Hydrogen Song"), &["h2song"])
+                .pick_file(),
+            ImportCmd::Rex => rfd::FileDialog::new()
+                .set_title(i18n::tr("REX Loop…"))
+                .add_filter(i18n::tr("REX Loop"), &["rx2", "rex"])
+                .pick_file(),
+        };
+        let Some(path) = path else {
+            return;
+        };
+        let result = match cmd {
+            ImportCmd::MusicXml => score_import::import_musicxml(&mut self.project, &path)
+                .map(|n| i18n::trf("imported {} tracks from {}", &[&n, &path.display()])),
+            ImportCmd::GuitarPro => score_import::import_guitarpro(&mut self.project, &path)
+                .map(|n| i18n::trf("imported {} tracks from {}", &[&n, &path.display()])),
+            ImportCmd::Hydrogen => score_import::import_hydrogen(&mut self.project, &path)
+                .map(|n| i18n::trf("imported {} tracks from {}", &[&n, &path.display()])),
+            ImportCmd::Rex => rex_import::import(&mut self.project, &path, ctx),
+            ImportCmd::LogicX => logicx_import::preview(&mut self.project, &path),
+        };
+        self.ui.status = Some(match result {
+            Ok(status) => {
+                self.history.record(&self.project);
+                status
+            }
+            Err(e) => i18n::trf("cannot import {}: {}", &[&path.display(), &e]),
         });
     }
 
@@ -488,26 +685,36 @@ impl App {
         }
         let Some(path) = rfd::FileDialog::new()
             .add_filter("WAV", &["wav", "WAV"])
+            .add_filter("FLAC", &["flac", "FLAC"])
             .set_file_name(format!("{}.wav", self.project.name))
             .save_file()
         else {
             return;
         };
-        let Some(sync) = self.sync.as_mut() else {
-            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
-            return;
+        // A name with no extension is a WAV file.
+        let path = if path.extension().is_none() {
+            path.with_extension("wav")
+        } else {
+            path
         };
-        match bounce::Bounce::start(&mut sync.engine, &mut self.project, start, end, path) {
-            Ok(running) => {
-                self.bounce = Some(running);
-                self.region_bounce = None;
-                // Send the seek and Play in this same frame, so the engine starts capturing
-                // exactly when playback starts (no silent lead-in in the file).
-                if let Some(sync) = self.sync.as_mut() {
-                    sync.sync(&mut self.project);
-                }
-            }
+        let engine = self.sync.as_mut().map(|s| &mut s.engine);
+        match bounce::Bounce::start(engine, &mut self.project, start, end, path) {
+            Ok(running) => self.begun_bounce(running, None),
             Err(e) => self.ui.status = Some(e),
+        }
+    }
+
+    /// Keeps a bounce that has just started. A real-time bounce sends its seek and Play in this
+    /// same frame, so the engine starts capturing exactly when playback starts (no silent lead-in
+    /// in the file). An offline bounce has nothing to send: it works on a copy of the project.
+    fn begun_bounce(&mut self, running: bounce::Bounce, placed: Option<(usize, Vec<usize>)>) {
+        let realtime = running.is_realtime();
+        self.bounce = Some(running);
+        self.region_bounce = placed;
+        if realtime {
+            if let Some(sync) = self.sync.as_mut() {
+                sync.sync(&mut self.project);
+            }
         }
     }
 
@@ -577,26 +784,9 @@ impl App {
         else {
             return;
         };
-        let Some(sync) = self.sync.as_mut() else {
-            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
-            return;
-        };
-        match bounce::Bounce::start_track(
-            &mut sync.engine,
-            &mut self.project,
-            track,
-            0.0,
-            end,
-            path,
-        ) {
-            Ok(running) => {
-                self.bounce = Some(running);
-                self.region_bounce = None;
-                // Seek and Play in this same frame, so the capture starts with the sound.
-                if let Some(sync) = self.sync.as_mut() {
-                    sync.sync(&mut self.project);
-                }
-            }
+        let engine = self.sync.as_mut().map(|s| &mut s.engine);
+        match bounce::Bounce::start_track(engine, &mut self.project, track, 0.0, end, path) {
+            Ok(running) => self.begun_bounce(running, None),
             Err(e) => self.ui.status = Some(e),
         }
     }
@@ -645,12 +835,9 @@ impl App {
             return;
         }
         let path = bounce::free_path(&dir, &format!("{} {start:.3}", file_name(&name)));
-        let Some(sync) = self.sync.as_mut() else {
-            self.ui.status = Some("cannot bounce: there is no audio output".to_string());
-            return;
-        };
+        let engine = self.sync.as_mut().map(|s| &mut s.engine);
         match bounce::Bounce::start_regions(
-            &mut sync.engine,
+            engine,
             &mut self.project,
             track,
             &regions,
@@ -658,14 +845,7 @@ impl App {
             end,
             path,
         ) {
-            Ok(running) => {
-                self.bounce = Some(running);
-                self.region_bounce = Some((track, regions));
-                // Seek and Play in this same frame, so the capture starts with the sound.
-                if let Some(sync) = self.sync.as_mut() {
-                    sync.sync(&mut self.project);
-                }
-            }
+            Ok(running) => self.begun_bounce(running, Some((track, regions))),
             Err(e) => self.ui.status = Some(e),
         }
     }
@@ -728,22 +908,23 @@ impl App {
             return;
         };
         self.ui.bouncing = true;
-        if running.poll(&self.project) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            running.cancel(&mut self.project);
+        }
+        if running.advance(&self.project) {
             let percent = (running.progress(&self.project) * 100.0).round();
             self.ui.status = Some(i18n::trf("Bouncing {}%", &[&format!("{percent:.0}")]));
             ctx.request_repaint();
             return;
         }
-        let reached_end = self.project.playing && self.project.position_beats >= running.end_beat;
+        let reached_end = self.project.playing && self.project.position_beats >= running.end_beat();
         let Some(running) = self.bounce.take() else {
             self.ui.bouncing = false;
             return;
         };
         self.ui.bouncing = false;
-        let result = match self.sync.as_mut() {
-            Some(sync) => running.finish(&mut sync.engine, &mut self.project, reached_end),
-            None => Ok(None),
-        };
+        let engine = self.sync.as_mut().map(|s| &mut s.engine);
+        let result = running.finish(engine, &mut self.project, reached_end);
         let placed = self.region_bounce.take();
         match result {
             Ok(Some(done)) => {
@@ -953,6 +1134,9 @@ impl App {
         if let Some(midi) = self.midi.as_mut() {
             midi.poll(&mut input);
         }
+        // The computer keyboard, when Musical Typing is on, makes the same live notes.
+        self.ui.typing.read_keys(ctx);
+        input.extend(self.ui.typing.take());
         let p = &mut self.project;
         let s = &mut self.ui;
         let track = s.rec.target().map_or(p.selected_track, |(t, _)| t);
@@ -971,11 +1155,23 @@ impl App {
                     track: track.min(usize::from(u16::MAX)) as u16,
                 },
                 recorder::LiveNote::Off { pitch } => piano_roll::Audition::Off { pitch },
-                // The engine has no sustain pedal, bend or pressure for the keys yet: they are
-                // only recorded.
-                recorder::LiveNote::Sustain { .. }
-                | recorder::LiveNote::Bend { .. }
-                | recorder::LiveNote::Pressure { .. } => continue,
+                // Bend and modulation reach a SoundFont or an external instrument as they are
+                // played (and are recorded).
+                recorder::LiveNote::Bend { val } => piano_roll::Audition::Control {
+                    track: track.min(usize::from(u16::MAX)) as u16,
+                    number: prowave_engine::PITCH_BEND_CONTROL,
+                    value: val,
+                },
+                recorder::LiveNote::Modulation { val } => piano_roll::Audition::Control {
+                    track: track.min(usize::from(u16::MAX)) as u16,
+                    number: recorder::MODULATION_WHEEL,
+                    value: u16::from(val),
+                },
+                // The engine has no sustain pedal or pressure for the keys yet: they are only
+                // recorded.
+                recorder::LiveNote::Sustain { .. } | recorder::LiveNote::Pressure { .. } => {
+                    continue
+                }
             });
         }
         // Record on an audio track is the audio recorder's (see `record_audio`).
@@ -1264,7 +1460,7 @@ impl eframe::App for App {
             .show(ui, |ui| tracks_area::show(ui, p, s, &meters));
         fx_ui::show(&ctx, p, s, &meters);
         plugin_manager::show(&ctx, p, s);
-        plugins::idle();
+        hosted_plugins::idle();
         automation::show(&ctx, p, s);
         undo_history::show(&ctx, p, s, &mut self.history);
 
@@ -1302,6 +1498,20 @@ impl eframe::App for App {
                     piano_roll::Audition::Off { pitch } => {
                         Some(prowave_engine::Command::NoteOff { pitch })
                     }
+                    piano_roll::Audition::Control { track, .. }
+                        if usize::from(track) >= prowave_engine::MAX_TRACKS =>
+                    {
+                        None
+                    }
+                    piano_roll::Audition::Control {
+                        track,
+                        number,
+                        value,
+                    } => Some(prowave_engine::Command::LiveControl {
+                        track,
+                        number,
+                        value,
+                    }),
                 };
                 if cmd.is_some_and(|cmd| !sync.engine.send(cmd)) {
                     break;
@@ -1324,6 +1534,9 @@ impl eframe::App for App {
         if std::mem::take(&mut self.ui.export_xml_cmd) {
             self.export_score();
         }
+        if let Some(cmd) = self.ui.import_cmd.take() {
+            self.run_import_cmd(cmd, &ctx);
+        }
         if std::mem::take(&mut self.ui.import_audio_cmd) {
             self.import_audio_file(&ctx);
         }
@@ -1345,17 +1558,40 @@ impl eframe::App for App {
         if std::mem::take(&mut self.ui.reveal_cmd) {
             self.reveal_project();
         }
-        if self.ui.settings_tab.is_some() && self.ui.audio_info.is_none() {
-            self.ui.audio_info = self.sync.as_ref().map(|s| s.audio_info());
+        // The Audio tab shows the running output, its buffer size included, so it is read each frame.
+        if self.ui.settings_tab == Some(project_settings::SettingsTab::Audio) {
+            self.ui.audio_info = self.sync.as_mut().map(|s| s.audio_info());
         }
         project_settings::show(&ctx, &mut self.project, &mut self.ui);
+        if let Some(prefs) = self.ui.audio_request.take() {
+            self.restart_audio(prefs);
+        }
         track_dialogs::show(&ctx, &mut self.project, &mut self.ui);
         logicx::show_report(&ctx, &mut self.ui.logicx_report);
         new_track_dialog::show(&ctx, &mut self.project, &mut self.ui);
+        stack_dialog::show(&ctx, &mut self.project, &mut self.ui);
         midi_fx_ui::show(&ctx, &mut self.project, &mut self.ui);
         transform_ui::show(&ctx, &mut self.project, &mut self.ui);
         smart_tempo::show(&ctx, &mut self.project, &mut self.ui);
         group_editor::show(&ctx, &mut self.project, &mut self.ui);
+        let typed = self
+            .project
+            .tracks
+            .get(self.project.selected_track)
+            .map(|t| t.name.clone());
+        let drum_kit = self
+            .project
+            .tracks
+            .get(self.project.selected_track)
+            .is_some_and(|t| {
+                t.drums.is_some() || t.soundfont.as_ref().is_some_and(|sf| sf.bank == 128)
+            });
+        self.ui.typing.follow_track(
+            typed.as_ref().map(|_| self.project.selected_track),
+            drum_kit,
+        );
+        musical_typing::show(&ctx, &mut self.ui.typing, typed.as_deref());
+        drum_machine_ui::show(&ctx, &mut self.project, &mut self.ui);
         self.show_save_prompt(&ctx);
         self.show_revert_prompt(&ctx);
         self.track_history(&ctx);
@@ -1380,6 +1616,32 @@ fn top_bar(ui: &mut egui::Ui, p: &mut Project, s: &mut UiState) {
             .frame(frame)
             .show(ui, |ui| ui.horizontal(|ui| menus::status_line(ui, p, s)));
     }
+}
+
+/// Opens the output the saved choice asks for. A saved device that is gone, or will not start,
+/// gives the system's default output instead; the flag tells the caller that happened.
+fn open_output(
+    prefs: &audio_prefs::AudioPrefs,
+) -> Result<(prowave_engine::Engine, bool), prowave_engine::EngineError> {
+    match prowave_engine::Engine::start_on(prefs.device.as_deref(), prefs.buffer) {
+        Ok(engine) => Ok((engine, false)),
+        Err(e) if prefs.device.is_some() => {
+            tracing::warn!("saved audio output failed ({e}); using the system default");
+            prowave_engine::Engine::start_on(None, prefs.buffer).map(|engine| (engine, true))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The MIDI sender for one engine: it plays the engine's note, time code and clock queues out
+/// on the project's ports.
+fn start_midi_out(sync: &mut engine_sync::EngineSync) -> Option<midi_out::MidiOut> {
+    sync.take_midi_out()
+        .zip(sync.take_mtc_out())
+        .zip(sync.take_clock_out())
+        .map(|((notes, mtc), clock)| {
+            midi_out::MidiOut::start(midi_out::Queues { notes, mtc, clock })
+        })
 }
 
 /// Log to stderr; `RUST_LOG` overrides the default (warnings, plus info from ProWave; the
@@ -1601,7 +1863,7 @@ fn shot_mixer_scene(app: &mut App, kind: &str) {
         // own), since no plug-in file is certain to be installed.
         "plugin" => {
             if let Some(info) = prowave_plugin_host::scan_audio_units().first() {
-                let hosted = Insert::hosted(plugins::add(info, None));
+                let hosted = Insert::new_hosted(hosted_plugins::add(info, None));
                 app.project.tracks[bass].inserts = vec![hosted];
                 app.ui.mixer.fx_window = Some((bass, 0));
             }
@@ -1643,11 +1905,27 @@ fn print_help() {
         "  --layout-shots <folder>   save pictures of the layout at four window sizes, then exit"
     );
     println!("  --screenshot <file.png>   save one picture of the window, then exit");
+    println!("  --scan-ladspa <file>      list the plug-ins in a LADSPA library, then exit (the");
+    println!("                            Plugin Manager reads each library in a child process)");
+    println!("  --scan-vamp <file>        list the analysers in a Vamp library, then exit");
     println!();
     println!("A .prowave path opens that project; other paths are imported as audio files.");
 }
 
 fn main() -> eframe::Result {
+    // The Plugin Manager reads each plug-in library in a copy of this program, so a plug-in
+    // that crashes or hangs does not take the app with it: print what is in it and go.
+    {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        if let [_, flag, path] = args.as_slice() {
+            if flag == "--scan-ladspa" {
+                std::process::exit(plugins::scan_main(std::path::Path::new(path)));
+            }
+            if flag == "--scan-vamp" {
+                std::process::exit(vamp::scan_main(std::path::Path::new(path)));
+            }
+        }
+    }
     bench::mark_start();
     // Started by an update that is waiting for the program to close: put the update in place.
     if updater::run_helper_if_requested() {
@@ -1658,7 +1936,7 @@ fn main() -> eframe::Result {
     // serves the plug-in and never comes back here.
     prowave_plugin_host::serve_if_requested(&all_args);
     // The child process that lists one plug-in file's plug-ins (see `plugins`).
-    if plugins::run_scan_if_requested(&all_args) {
+    if hosted_plugins::run_scan_if_requested(&all_args) {
         return Ok(());
     }
     // `--version` and `--help` answer without opening a window.
@@ -1755,8 +2033,8 @@ fn main() -> eframe::Result {
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
             // The plug-ins of the last run are listed at once, and the scan for new, changed and
             // removed ones runs in the background, as Logic does at every start.
-            plugins::set_repaint(&cc.egui_ctx);
-            plugins::scan(false);
+            hosted_plugins::set_repaint(&cc.egui_ctx);
+            hosted_plugins::scan(false);
             // Every start begins clean; the picture runs need something to show.
             let project = if shots_dir.is_some() || shot_out.is_some() {
                 Project::demo()
@@ -1765,17 +2043,20 @@ fn main() -> eframe::Result {
             };
             let mut audio_error = None;
             let mut midi_out = None;
-            let sync = match prowave_engine::Engine::start() {
-                Ok(e) => {
+            let prefs = audio_prefs::AudioPrefs::load();
+            let sync = match open_output(&prefs) {
+                Ok((e, fell_back)) => {
+                    if fell_back {
+                        audio_error = Some(
+                            i18n::tr(
+                                "The saved output device is not available; using the system default",
+                            )
+                            .to_string(),
+                        );
+                    }
                     let mut sync = engine_sync::EngineSync::new(e, &project);
                     if !measuring {
-                        midi_out = sync
-                            .take_midi_out()
-                            .zip(sync.take_mtc_out())
-                            .zip(sync.take_clock_out())
-                            .map(|((notes, mtc), clock)| {
-                                midi_out::MidiOut::start(midi_out::Queues { notes, mtc, clock })
-                            });
+                        midi_out = start_midi_out(&mut sync);
                     }
                     Some(sync)
                 }
@@ -1790,7 +2071,10 @@ fn main() -> eframe::Result {
                 saved: file_commands::content(&project),
                 history: undo::History::new(&project),
                 project,
-                ui: UiState::new(),
+                ui: UiState {
+                    audio_prefs: prefs,
+                    ..UiState::new()
+                },
                 sync,
                 bounce: None,
                 region_bounce: None,

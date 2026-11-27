@@ -7,7 +7,7 @@
 //! Menu entries that are not implemented yet are shown disabled.
 use crate::i18n::{tr, trf};
 use crate::model::HeaderPart;
-use crate::model::{Project, Region, Track, TrackKind};
+use crate::model::{Project, Region, Track, TrackKind, STACK_COLOR};
 use crate::track_icons::{draw_icon, track_icon};
 use crate::widgets::{
     context_click, context_menu, menu_title, popup_button, stroke, todo_item, BLUE, BTN_BG, TEXT,
@@ -31,6 +31,8 @@ const HEADER_BG: Color32 = Color32::from_rgb(0x41, 0x41, 0x41);
 const HEADER_SEL: Color32 = Color32::from_rgb(0x58, 0x58, 0x58);
 const LANE_BG: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x2a);
 const LANE_SEL: Color32 = Color32::from_rgb(0x30, 0x30, 0x30);
+/// The band over a track stack's tracks in its parent's lane: purple-grey.
+const STACK_BAND: Color32 = Color32::from_rgb(0x5d, 0x52, 0x6e);
 const RULER_BG: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
 const CYCLE: Color32 = Color32::from_rgb(0xd4, 0x9e, 0x2a);
 const MUTE_ON: Color32 = Color32::from_rgb(0x3b, 0x8c, 0xe6);
@@ -94,8 +96,12 @@ impl DragMode {
     }
 }
 
+/// Where the Pencil tool is in [`TOOLS`].
+const PENCIL_TOOL: usize = 1;
 /// Where the Fade tool is in [`TOOLS`].
 const FADE_TOOL: usize = 9;
+/// The shortest region the Pencil draws, in bars (a 16th note of a 4/4 bar).
+const PENCIL_MIN_BARS: f32 = 1.0 / 16.0;
 
 pub(crate) const TOOLS: [&str; 14] = [
     "Pointer Tool",
@@ -128,6 +134,9 @@ pub struct NormalizeJob {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TrackTool {
     Pointer,
+    /// Click or drag on an empty stretch of a MIDI track to draw an empty MIDI region (Logic:
+    /// Pencil tool).
+    Pencil,
     /// Drag on an audio region to set its fade in (left half) or fade out (right half).
     Fade,
 }
@@ -144,6 +153,8 @@ pub struct TracksView {
     pub tool: TrackTool,
     /// A Fade tool drag in progress: `true` for a fade in, `false` for a fade out.
     fade_drag: Option<bool>,
+    /// A Pencil drag in progress: the (track, region) it is drawing.
+    pencil_drag: Option<(usize, usize)>,
     /// A Flex Time marker being dragged: (track, region, marker, the result's length in
     /// seconds when it was grabbed). The length stays fixed for the whole drag: scaling by a
     /// length that the drag itself changes would make the marker run away from the pointer.
@@ -163,6 +174,8 @@ pub struct TracksView {
     lane_menu: Option<(usize, f32)>,
     /// Selected regions besides `selected` (Select All, Shift-click). Never holds `selected`.
     pub extra: Vec<(usize, usize)>,
+    /// Selected tracks besides `Project::selected_track` (Shift- and Command-click on headers).
+    pub track_extra: Vec<usize>,
     /// Width of the lanes at the last frame (for Navigate > Zoom to Fit).
     pub lanes_w: f32,
     grab_beats: f64,
@@ -274,8 +287,60 @@ impl TracksView {
         self.select_many(&all);
     }
 
+    /// Every selected track, in order: the selected track and the ones picked with Shift or
+    /// Command click (Track > Create Track Stack needs two or more).
+    pub fn selected_tracks(&self, p: &crate::model::Project) -> Vec<usize> {
+        let mut all: Vec<usize> = std::iter::once(p.selected_track)
+            .chain(self.track_extra.iter().copied())
+            .filter(|&t| t < p.tracks.len())
+            .collect();
+        all.sort_unstable();
+        all.dedup();
+        all
+    }
+
+    /// Whether track `i` is one of the selected tracks.
+    pub fn track_selected(&self, p: &crate::model::Project, i: usize) -> bool {
+        p.selected_track == i || self.track_extra.contains(&i)
+    }
+
+    /// A click on track `i`'s header, as the Mac and Logic do it: a plain click selects that track
+    /// alone, Shift selects every track from the selected one to it, and Command toggles it in or
+    /// out of the selection.
+    pub fn click_track(
+        &mut self,
+        p: &mut crate::model::Project,
+        i: usize,
+        shift: bool,
+        toggle: bool,
+    ) {
+        if i >= p.tracks.len() {
+            return;
+        }
+        if shift {
+            let (from, to) = (p.selected_track.min(i), p.selected_track.max(i));
+            self.track_extra = (from..=to).filter(|&t| t != p.selected_track).collect();
+        } else if toggle {
+            if !self.track_selected(p, i) {
+                self.track_extra.push(i);
+            } else if i == p.selected_track {
+                // The selected track goes out: the most recently picked one takes its place.
+                if let Some(next) = self.track_extra.pop() {
+                    p.selected_track = next;
+                }
+            } else {
+                self.track_extra.retain(|&t| t != i);
+            }
+        } else {
+            self.track_extra.clear();
+            p.selected_track = i;
+        }
+    }
+
     /// Forgets selected regions the project no longer has (after a delete or an undo).
     pub fn prune(&mut self, p: &crate::model::Project) {
+        self.track_extra
+            .retain(|&t| t < p.tracks.len() && t != p.selected_track);
         let valid = |(t, r): (usize, usize)| p.tracks.get(t).is_some_and(|tr| r < tr.regions.len());
         self.extra.retain(|x| valid(*x));
         if self.selected.is_some_and(|x| !valid(x)) {
@@ -299,6 +364,7 @@ impl Default for TracksView {
             drag_mode: DragMode::NoOverlap,
             tool: TrackTool::Pointer,
             fade_drag: None,
+            pencil_drag: None,
             flex_drag: None,
             catch: true,
             show_tempo: false,
@@ -306,6 +372,7 @@ impl Default for TracksView {
             show_signatures: false,
             selected: None,
             extra: Vec::new(),
+            track_extra: Vec::new(),
             grab_beats: 0.0,
             group_drag: Vec::new(),
             cycle_anchor: None,
@@ -680,6 +747,13 @@ fn draw_fade_tool(g: &Painter, at: Pos2, c: Color32) {
     g.line_segment([at + vec2(-6.0, -5.0), at + vec2(6.0, 5.0)], stroke(c));
 }
 
+/// The Pencil tool's icon: a pencil on a diagonal.
+fn draw_pencil_tool(g: &Painter, at: Pos2, c: Color32) {
+    g.line_segment([at + vec2(-5.0, 5.0), at + vec2(4.0, -4.0)], stroke(c));
+    g.line_segment([at + vec2(-5.0, 5.0), at + vec2(-6.0, 6.0)], stroke(c));
+    g.line_segment([at + vec2(4.0, -4.0), at + vec2(6.0, -6.0)], stroke(c));
+}
+
 fn draw_crosshair(g: &Painter, at: Pos2, c: Color32) {
     g.line_segment([at + vec2(-6.0, 0.0), at + vec2(6.0, 0.0)], stroke(c));
     g.line_segment([at + vec2(0.0, -6.0), at + vec2(0.0, 6.0)], stroke(c));
@@ -840,20 +914,6 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect, lanes_w: f32) {
             ui.close();
         }
         ui.separator();
-        // Folder: the selected track goes into a track stack, as Track > Create Track Stack.
-        if ui
-            .add_enabled(
-                p.selected_track < p.tracks.len(),
-                egui::Button::new(tr("Folder")),
-            )
-            .clicked()
-        {
-            p.create_track_stack(p.selected_track);
-            // Track numbers shift, so the remembered selections may point at other tracks.
-            v.clear_selection();
-            s.piano.selected.clear();
-            ui.close();
-        }
         if ui
             .add_enabled(
                 crate::region_edit::can_quantize(p, v),
@@ -1061,7 +1121,8 @@ fn snap_menu(ui: &Ui, g: &Painter, v: &mut TracksView, rx: f32, cy: f32) -> f32 
     label.left() - 12.0
 }
 
-/// Left-click and Command-click tool menus ending at `rx` (only the Pointer works so far).
+/// Left-click and Command-click tool menus ending at `rx` (the Pointer, Pencil and Fade tools
+/// work so far).
 fn tool_menus(ui: &Ui, g: &Painter, v: &mut TracksView, rx: f32, cy: f32) {
     for (i, key) in ["tool_l", "tool_r"].iter().enumerate() {
         let r = Rect::from_min_size(
@@ -1075,6 +1136,8 @@ fn tool_menus(ui: &Ui, g: &Painter, v: &mut TracksView, rx: f32, cy: f32) {
         let icon_at = pos2(r.left() + 13.0, cy);
         if i == 0 && v.tool == TrackTool::Fade {
             draw_fade_tool(g, icon_at, TEXT);
+        } else if i == 0 && v.tool == TrackTool::Pencil {
+            draw_pencil_tool(g, icon_at, TEXT);
         } else if i == 0 {
             draw_pointer(g, icon_at, TEXT);
         } else {
@@ -1094,6 +1157,7 @@ fn tool_menus(ui: &Ui, g: &Painter, v: &mut TracksView, rx: f32, cy: f32) {
             for (n, t) in TOOLS.iter().enumerate() {
                 let tool = match n {
                     0 => Some(TrackTool::Pointer),
+                    PENCIL_TOOL => Some(TrackTool::Pencil),
                     FADE_TOOL => Some(TrackTool::Fade),
                     _ => None,
                 };
@@ -1170,6 +1234,8 @@ enum CtxAction {
 struct TrackInfo {
     i: usize,
     folder: bool,
+    /// Two or more tracks are selected, so they can be made into a track stack.
+    stackable: bool,
     mute: bool,
     solo: bool,
     custom_height: bool,
@@ -1378,13 +1444,12 @@ fn region_items(
 fn track_items(ui: &mut Ui, t: &TrackInfo, picked: &mut Option<CtxAction>) {
     new_track_items(ui, picked);
     ui.separator();
-    pick(
-        ui,
-        tr("Create Track Stack"),
-        "",
-        CtxAction::CreateStack(t.i),
-        picked,
-    );
+    if ui
+        .add_enabled(t.stackable, egui::Button::new(tr("Create Track Stack")))
+        .clicked()
+    {
+        *picked = Some(CtxAction::CreateStack(t.i));
+    }
     if t.folder {
         pick(
             ui,
@@ -1493,6 +1558,8 @@ fn apply_ctx(action: CtxAction, p: &mut Project, s: &mut UiState, lanes_w: f32) 
         CtxAction::ToggleReverse(t, r) => {
             if let Some(region) = p.tracks.get_mut(t).and_then(|t| t.regions.get_mut(r)) {
                 region.params.reverse = !region.params.reverse;
+                // The engine plays a clip's edits only after the song is rebuilt.
+                p.song_rev += 1;
             }
         }
         CtxAction::Normalize(t, r) => start_normalize(p, s, t, r),
@@ -1518,10 +1585,7 @@ fn apply_ctx(action: CtxAction, p: &mut Project, s: &mut UiState, lanes_w: f32) 
         CtxAction::RepeatRegion => repeat_selected(p, v),
         CtxAction::LocatorsByRegion => set_locators_by_region(p, v),
         CtxAction::DeleteRegion => delete_selected(p, v),
-        CtxAction::CreateStack(i) => {
-            p.create_track_stack(i);
-            forget_track_indexes(s);
-        }
+        CtxAction::CreateStack(_) => s.stack_dialog.open(),
         CtxAction::ReleaseStack(i) => {
             if p.release_track_stack(i) {
                 forget_track_indexes(s);
@@ -1556,6 +1620,11 @@ fn start_normalize(p: &Project, s: &mut UiState, track: usize, region: usize) {
         s.status = Some(tr("Normalize: this region has no recorded audio").into());
         return;
     };
+    // The loudest sample is looked for in the whole file, which a piece does not play.
+    if audio.plays_part() {
+        s.status = Some(tr("This region plays only part of its recording, which this command cannot handle yet").into());
+        return;
+    }
     let jobs = &mut s.tracks.normalize_jobs;
     if jobs.iter().any(|j| (j.track, j.region) == (track, region)) {
         return;
@@ -1632,6 +1701,7 @@ pub fn poll_normalize(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
 /// Track numbers shifted, so a remembered region or note selection may point at another track.
 fn forget_track_indexes(s: &mut UiState) {
     s.tracks.clear_selection();
+    s.tracks.track_extra.clear();
     s.piano.selected.clear();
 }
 
@@ -2115,10 +2185,23 @@ fn draw_region(
         body.lerp_to_gamma(Color32::WHITE, if selected { 0.75 } else { 0.6 })
     };
     let edit = region.audio.is_some() || track.kind == TrackKind::Audio;
-    if let Some(peaks) = region.audio.as_ref().and_then(|a| a.peaks.get()) {
+    if let Some((a, peaks)) = region
+        .audio
+        .as_ref()
+        .and_then(|a| Some((a, a.peaks.get()?)))
+    {
         let gain = 10f32.powf(region.params.gain_db / 20.0);
         let full_x = (full.left(), full.width());
-        draw_peaks(g, inner, full_x, peaks, gain, region.params.reverse, ink);
+        // A piece of a split draws only the part of the file it plays.
+        draw_peaks(
+            g,
+            inner,
+            full_x,
+            a.peaks_part(peaks),
+            gain,
+            region.params.reverse,
+            ink,
+        );
     } else if region.audio.is_some() {
         g.line_segment(
             [
@@ -2409,16 +2492,129 @@ fn slider_to_db(f: f32) -> f32 {
 
 /// Draws track `i`'s header and returns the response of its background (for the right-click
 /// menu; the buttons on it handle their own clicks).
+/// The volume slider of a track header (dB, -60..+6; double-click resets to 0 dB) with the level
+/// meters inside it.
+fn volume_slider(
+    ui: &Ui,
+    g: &Painter,
+    t: &mut Track,
+    i: usize,
+    hdr: Rect,
+    peaks: (f32, f32),
+    silenced: bool,
+) {
+    // Volume slider (dB, -60..+6; double-click resets to 0 dB) and pan knob.
+    // Logic's slider: a dark pill with a grey thumb that stays inside it.
+    let sl = Rect::from_min_size(
+        pos2(hdr.right() - 98.0, hdr.center().y - SLIDER_H / 2.0),
+        vec2(SLIDER_W, SLIDER_H),
+    );
+    let travel = (sl.left() + SLIDER_H / 2.0, sl.right() - SLIDER_H / 2.0);
+    let resp = ui.interact(
+        sl.expand2(vec2(4.0, 6.0)),
+        id(("vol", i)),
+        Sense::click_and_drag(),
+    );
+    if let Some(pt) = resp.interact_pointer_pos() {
+        let f = (pt.x - travel.0) / (travel.1 - travel.0);
+        t.volume_db = slider_to_db(f.clamp(0.0, 1.0));
+    }
+    if resp.double_clicked() {
+        t.volume_db = 0.0;
+    }
+    g.rect_filled(sl, SLIDER_H / 2.0, Color32::from_rgb(55, 54, 54));
+    // Level meter inside the pill, as in Logic: two thin bars (L over R) that follow the
+    // slider's own scale, green, yellow from -6 dB and red above 0 dB.
+    let silent = t.mute || silenced;
+    for (k, peak) in [peaks.0, peaks.1].into_iter().enumerate() {
+        let db = crate::mixer::lin_to_db(peak);
+        if db <= -60.0 {
+            continue;
+        }
+        let y = sl.center().y - 3.0 + k as f32 * 3.5;
+        let x0 = sl.left() + 3.0;
+        let x_at = |db: f32| x0 + (sl.right() - 3.0 - x0) * db_to_slider(db);
+        let mut from = -60.0f32;
+        for edge in [-6.0f32, 0.0, 6.0] {
+            let to = db.min(edge);
+            if to > from {
+                let r = Rect::from_min_max(pos2(x_at(from), y), pos2(x_at(to), y + 2.5));
+                let color = if silent {
+                    Color32::from_gray(0x70)
+                } else {
+                    crate::mixer::meter_colour(to - 0.01)
+                };
+                g.rect_filled(r, 1.0, color);
+            }
+            from = edge;
+        }
+    }
+    let knob = pos2(
+        travel.0 + (travel.1 - travel.0) * db_to_slider(t.volume_db),
+        sl.center().y,
+    );
+    g.circle_filled(knob, SLIDER_H / 2.0 - 1.0, Color32::from_rgb(136, 134, 135));
+    g.circle_stroke(
+        knob,
+        SLIDER_H / 2.0 - 1.0,
+        Stroke::new(1.0, Color32::from_rgb(98, 97, 97)),
+    );
+}
+
+/// The pan knob of a track header (drag up or down; double-click centres it).
+fn pan_knob(ui: &Ui, g: &Painter, t: &mut Track, i: usize, hdr: Rect) {
+    let kc = pos2(hdr.right() - 22.0, hdr.center().y);
+    let kresp = ui.interact(
+        Rect::from_center_size(kc, vec2(22.0, 22.0)),
+        id(("pan", i)),
+        Sense::click_and_drag(),
+    );
+    if kresp.dragged() {
+        t.pan = (t.pan - kresp.drag_delta().y * 0.01).clamp(-1.0, 1.0);
+    }
+    if kresp.double_clicked() {
+        t.pan = 0.0;
+    }
+    crate::widgets::draw_knob(g, kc, 9.0, t.pan);
+}
+
+/// The lane band of a track stack: the span, in quarter notes, of the regions of the tracks
+/// inside it. `None` when none of them has a region.
+fn stack_band(p: &Project, i: usize) -> Option<(f64, f64)> {
+    let end = p.folder_end(i);
+    let mut span: Option<(f64, f64)> = None;
+    for t in &p.tracks[i + 1..end] {
+        for r in &t.regions {
+            let (a, b) = (p.region_start_beats(r), p.region_end_beats(r));
+            span = Some(span.map_or((a, b), |(x, y)| (x.min(a), y.max(b))));
+        }
+    }
+    span
+}
+
+/// What a track header shows besides the project: the level meters, whether solo silences the
+/// track, and whether the track is among the selected ones (Shift- or Command-click).
+#[derive(Clone, Copy)]
+struct HeaderState {
+    peaks: (f32, f32),
+    silenced: bool,
+    picked: bool,
+}
+
 fn header(
     ui: &Ui,
     g: &Painter,
     p: &mut Project,
     i: usize,
     hdr: Rect,
-    peaks: (f32, f32),
-    silenced: bool,
+    state: HeaderState,
 ) -> egui::Response {
-    let selected = p.selected_track == i;
+    let HeaderState {
+        peaks,
+        silenced,
+        picked,
+    } = state;
+    let selected = p.selected_track == i || picked;
     // Track > Configure Track Header: the parts the user hid are not drawn (their space stays).
     let (show_number, show_icon, show_name, show_buttons, show_volume, show_pan) = (
         !p.header_hidden.contains(&HeaderPart::Number),
@@ -2443,15 +2639,14 @@ fn header(
             TEXT_DIM,
         );
     }
+    // The click that selects the track is handled by the caller, which knows the modifier keys.
     let resp = ui.interact(hdr, id(("hdr", i)), Sense::click());
-    if resp.clicked() || context_click(&resp) {
-        p.selected_track = i;
-    }
 
     let h = hdr.height();
     let icon_size = (h - 14.0).clamp(22.0, 40.0);
     let indent = f32::from(p.tracks[i].indent) * INDENT_W;
-    let folder = p.tracks[i].kind == TrackKind::Folder;
+    // A track stack's parent: the arrow folds its tracks, and its level and mute reach them.
+    let folder = p.tracks[i].is_stack_parent();
     let content_x = hdr.left() + NUM_W + 6.0 + indent;
     if folder {
         // Fold arrow: click to hide or show the tracks inside.
@@ -2463,6 +2658,14 @@ fn header(
             p.tracks[i].folded = !p.tracks[i].folded;
         }
         disclosure_triangle(g, arrow.center(), !p.tracks[i].folded, TEXT_DIM);
+    }
+    if p.tracks[i].indent > 0 {
+        // The tracks inside a stack are marked with a thin bar at the left of their block.
+        let x = hdr.left() + NUM_W + 6.0 + f32::from(p.tracks[i].indent - 1) * INDENT_W + 5.0;
+        g.line_segment(
+            [pos2(x, hdr.top()), pos2(x, hdr.bottom())],
+            Stroke::new(1.0, STACK_COLOR),
+        );
     }
     let icon = Rect::from_min_size(
         pos2(
@@ -2500,6 +2703,14 @@ fn header(
     if folder {
         if !compact && show_buttons {
             folder_buttons(ui, g, p, i, name_x, hdr.center().y + 3.0, selected);
+        }
+        // A stack's level scales the tracks inside it; a Summing Stack is a strip, so it has a
+        // pan knob too. A folder track has no pan.
+        if show_volume {
+            volume_slider(ui, g, &mut p.tracks[i], i, hdr, peaks, silenced);
+        }
+        if show_pan && p.tracks[i].kind == TrackKind::Aux {
+            pan_knob(ui, g, &mut p.tracks[i], i, hdr);
         }
         return resp;
     }
@@ -2570,78 +2781,10 @@ fn header(
     }
 
     if show_volume {
-        // Volume slider (dB, -60..+6; double-click resets to 0 dB) and pan knob.
-        // Logic's slider: a dark pill with a grey thumb that stays inside it.
-        let sl = Rect::from_min_size(
-            pos2(hdr.right() - 98.0, hdr.center().y - SLIDER_H / 2.0),
-            vec2(SLIDER_W, SLIDER_H),
-        );
-        let travel = (sl.left() + SLIDER_H / 2.0, sl.right() - SLIDER_H / 2.0);
-        let resp = ui.interact(
-            sl.expand2(vec2(4.0, 6.0)),
-            id(("vol", i)),
-            Sense::click_and_drag(),
-        );
-        if let Some(pt) = resp.interact_pointer_pos() {
-            let f = (pt.x - travel.0) / (travel.1 - travel.0);
-            t.volume_db = slider_to_db(f.clamp(0.0, 1.0));
-        }
-        if resp.double_clicked() {
-            t.volume_db = 0.0;
-        }
-        g.rect_filled(sl, SLIDER_H / 2.0, Color32::from_rgb(55, 54, 54));
-        // Level meter inside the pill, as in Logic: two thin bars (L over R) that follow the
-        // slider's own scale, green, yellow from -6 dB and red above 0 dB.
-        let silent = t.mute || silenced;
-        for (k, peak) in [peaks.0, peaks.1].into_iter().enumerate() {
-            let db = crate::mixer::lin_to_db(peak);
-            if db <= -60.0 {
-                continue;
-            }
-            let y = sl.center().y - 3.0 + k as f32 * 3.5;
-            let x0 = sl.left() + 3.0;
-            let x_at = |db: f32| x0 + (sl.right() - 3.0 - x0) * db_to_slider(db);
-            let mut from = -60.0f32;
-            for edge in [-6.0f32, 0.0, 6.0] {
-                let to = db.min(edge);
-                if to > from {
-                    let r = Rect::from_min_max(pos2(x_at(from), y), pos2(x_at(to), y + 2.5));
-                    let color = if silent {
-                        Color32::from_gray(0x70)
-                    } else {
-                        crate::mixer::meter_colour(to - 0.01)
-                    };
-                    g.rect_filled(r, 1.0, color);
-                }
-                from = edge;
-            }
-        }
-        let knob = pos2(
-            travel.0 + (travel.1 - travel.0) * db_to_slider(t.volume_db),
-            sl.center().y,
-        );
-        g.circle_filled(knob, SLIDER_H / 2.0 - 1.0, Color32::from_rgb(136, 134, 135));
-        g.circle_stroke(
-            knob,
-            SLIDER_H / 2.0 - 1.0,
-            Stroke::new(1.0, Color32::from_rgb(98, 97, 97)),
-        );
+        volume_slider(ui, g, t, i, hdr, peaks, silenced);
     }
-
     if show_pan {
-        let kc = pos2(hdr.right() - 22.0, hdr.center().y);
-        let kresp = ui.interact(
-            Rect::from_center_size(kc, vec2(22.0, 22.0)),
-            id(("pan", i)),
-            Sense::click_and_drag(),
-        );
-        if kresp.dragged() {
-            t.pan = (t.pan - kresp.drag_delta().y * 0.01).clamp(-1.0, 1.0);
-        }
-        if kresp.double_clicked() {
-            t.pan = 0.0;
-        }
-        crate::widgets::draw_knob(g, kc, 9.0, t.pan);
+        pan_knob(ui, g, t, i, hdr);
     }
     resp
 }
@@ -2787,11 +2930,39 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
         }
         let y = lanes.top() + top - scroll_y;
         let row = Rect::from_min_size(pos2(lanes.left(), y), vec2(lanes.width(), row_h));
-        if p.selected_track == i {
+        if v.track_selected(p, i) {
             g.rect_filled(row, 0.0, LANE_SEL);
         }
         if p.tracks[i].kind == TrackKind::Folder {
             g.rect_filled(row, 0.0, Color32::from_white_alpha(10));
+        }
+        // A stack's lane shows a band over the span its tracks use, named at both ends.
+        if p.tracks[i].is_stack_parent() {
+            if let Some((from, to)) = stack_band(p, i) {
+                let band = Rect::from_min_max(
+                    pos2(x_of(from), row.top() + 3.0),
+                    pos2(x_of(to), row.bottom() - 3.0),
+                )
+                .intersect(lanes);
+                if band.width() > 0.0 && band.height() > 0.0 {
+                    g.rect_filled(band, 3.0, STACK_BAND);
+                    let name = p.tracks[i].name.as_str();
+                    g.text(
+                        pos2(band.left() + 5.0, band.center().y),
+                        Align2::LEFT_CENTER,
+                        name,
+                        FontId::proportional(11.0),
+                        Color32::WHITE,
+                    );
+                    g.text(
+                        pos2(band.right() - 5.0, band.center().y),
+                        Align2::RIGHT_CENTER,
+                        name,
+                        FontId::proportional(11.0),
+                        Color32::WHITE,
+                    );
+                }
+            }
         }
         g.line_segment(
             [row.left_bottom(), row.right_bottom()],
@@ -2816,7 +2987,9 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
     }
 
     // Click on an empty lane: select that track, deselect regions.
-    let lane_resp = ui.interact(lanes, id("lanes"), Sense::click());
+    // Drags on empty lanes are for the Pencil; regions are drawn over the lanes and take their
+    // own drags.
+    let lane_resp = ui.interact(lanes, id("lanes"), Sense::click_and_drag());
     let mut picked: Option<CtxAction> = None;
     if lane_resp.clicked() || context_click(&lane_resp) {
         if let Some(pt) = lane_resp.interact_pointer_pos() {
@@ -2890,6 +3063,52 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
         }
     };
     let mut moved = false;
+    // Pencil tool (Logic: draw a MIDI region): a click on an empty stretch of a MIDI track
+    // makes a region one bar long; a drag sets its length, both snapped as the grid is.
+    if v.tool == TrackTool::Pencil {
+        let pencil_row = |pt: egui::Pos2| {
+            row_at(&rows, pt.y - lanes.top() + scroll_y)
+                .filter(|row| p.tracks[*row].kind.has_regions())
+                .filter(|row| p.tracks[*row].kind != TrackKind::Audio)
+        };
+        if lane_resp.drag_started() || lane_resp.clicked() {
+            if let Some(pt) = lane_resp.interact_pointer_pos() {
+                if let Some(row) = pencil_row(pt) {
+                    let at = snap_pos(beat_of(pt.x).max(0.0));
+                    let start_bar = p.beats_to_bar(at) as f32 + 1.0;
+                    let bar_len = if lane_resp.clicked() {
+                        1.0
+                    } else {
+                        PENCIL_MIN_BARS
+                    };
+                    if let Some(ri) = p.add_midi_region(row, start_bar, bar_len) {
+                        p.selected_track = row;
+                        v.selected = Some((row, ri));
+                        if lane_resp.drag_started() {
+                            v.pencil_drag = Some((row, ri));
+                        } else {
+                            moved = true;
+                        }
+                    }
+                }
+            }
+        }
+        if let (Some((row, ri)), true, Some(pt)) = (
+            v.pencil_drag,
+            lane_resp.dragged(),
+            lane_resp.interact_pointer_pos(),
+        ) {
+            let start = p.region_start_beats(&p.tracks[row].regions[ri]);
+            let end = snap_pos(beat_of(pt.x).max(0.0));
+            let len = (p.beats_to_bar(end) - p.beats_to_bar(start)) as f32;
+            p.tracks[row].regions[ri].len_bars = len.max(PENCIL_MIN_BARS);
+            moved = true;
+        }
+        if lane_resp.drag_stopped() {
+            v.pencil_drag = None;
+            moved = true;
+        }
+    }
     for (ti, &(top, row_h)) in rows.iter().enumerate() {
         if row_h <= 0.0 {
             continue;
@@ -3249,11 +3468,26 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
         let hdr = Rect::from_min_size(pos2(headers.left(), y), vec2(HEADER_W, row_h));
         let peaks = meters.tracks.get(i).copied().unwrap_or((0.0, 0.0));
         let silenced = silenced_by_solo(p, i);
-        let resp = header(ui, &gh, p, i, hdr, peaks, silenced);
+        let state = HeaderState {
+            peaks,
+            silenced,
+            picked: v.track_extra.contains(&i),
+        };
+        let resp = header(ui, &gh, p, i, hdr, state);
+        // Shift and Command keep the other selected tracks; a right-click on an unselected
+        // track selects it alone, as Logic does.
+        if resp.clicked() && !crate::widgets::context_click(&resp) {
+            let m = ui.input(|k| k.modifiers);
+            v.click_track(p, i, m.shift, m.command);
+        } else if crate::widgets::context_click(&resp) && !v.track_selected(p, i) {
+            v.click_track(p, i, false, false);
+        }
+        let stackable = v.selected_tracks(p).len() >= 2;
         let t = &p.tracks[i];
         let info = TrackInfo {
             i,
-            folder: t.kind == TrackKind::Folder,
+            folder: t.is_stack_parent(),
+            stackable,
             mute: t.mute,
             solo: t.solo,
             custom_height: t.height != 1.0,
@@ -3263,7 +3497,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
                 .filter(|g| *g != i)
                 .map(|_| t.params.follow_groove),
         };
-        let shown = s.tracks.shot_menu == Some((i, None));
+        let shown = v.shot_menu == Some((i, None));
         crate::widgets::context_menu_shown(&resp, shown, |ui| track_items(ui, &info, &mut picked));
     }
     if let Some(action) = picked {
@@ -3630,8 +3864,8 @@ mod row_tests {
     fn the_tracks_of_a_folded_folder_take_no_room() {
         let mut p = Project::demo();
         p.tracks.truncate(4);
-        let folder = p.create_track_stack(1); // wraps track 1: [t0, F, t1, t2, t3]
-        assert_eq!(folder, 1);
+        let folder = p.create_track_stack(&[1], false); // wraps track 1: [t0, F, t1, t2, t3]
+        assert_eq!(folder, Some(1));
         let open = row_layout(&p, 56.0);
         assert_eq!(open.len(), 5);
         assert!(open.iter().all(|&(_, h)| h == 56.0));
@@ -3780,6 +4014,138 @@ mod row_tests {
         assert_eq!(s.status, None);
     }
 
+    /// Runs one frame of the Tracks area with `events` and returns nothing: the project and
+    /// the UI state are changed in place, as the app does each frame.
+    fn run_tracks_frame(
+        ctx: &egui::Context,
+        p: &mut Project,
+        s: &mut UiState,
+        meters: &crate::mixer::Meters,
+        events: Vec<egui::Event>,
+    ) {
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| show(ui, p, s, meters));
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn the_pencil_draws_a_midi_region_by_click_and_drag_in_the_tracks_area() {
+        use egui::{Event, PointerButton};
+        let mut p = Project::empty();
+        p.tracks.clear();
+        let ti = p.add_track(TrackKind::Instrument);
+        let mut s = UiState::new();
+        s.tracks.tool = TrackTool::Pencil;
+        let meters = crate::mixer::Meters::default();
+        let ctx = egui::Context::default();
+        // The first track's lane: its top is the top of the lanes (56 points down), and a bar is
+        // 62 points wide from the lanes' left edge (340 points).
+        let lane_y = 76.0;
+        let bar_x = |bar: f32| 340.0 + bar * 62.0 + 4.0;
+        let press = |pos: Pos2, pressed: bool| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![]);
+
+        // A click on empty lane space: one bar long, from where the pointer is.
+        let click = pos2(bar_x(2.0), lane_y);
+        run_tracks_frame(
+            &ctx,
+            &mut p,
+            &mut s,
+            &meters,
+            vec![Event::PointerMoved(click)],
+        );
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![press(click, true)]);
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![press(click, false)]);
+        let regions = &p.tracks[ti].regions;
+        assert_eq!(regions.len(), 1, "a click adds one region");
+        assert_eq!(regions[0].len_bars, 1.0, "a click makes a one-bar region");
+        assert!(
+            regions[0].notes.is_empty(),
+            "the region is empty, ready to draw in"
+        );
+        let clicked_start = regions[0].start_bar;
+        assert!(
+            (clicked_start - 3.0).abs() < 0.5,
+            "starts where clicked: {clicked_start}"
+        );
+
+        // A drag across empty lane space further along: the region grows with the pointer.
+        let (from, to) = (pos2(bar_x(6.0), lane_y), pos2(bar_x(9.0), lane_y));
+        run_tracks_frame(
+            &ctx,
+            &mut p,
+            &mut s,
+            &meters,
+            vec![Event::PointerMoved(from)],
+        );
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![press(from, true)]);
+        run_tracks_frame(
+            &ctx,
+            &mut p,
+            &mut s,
+            &meters,
+            vec![Event::PointerMoved(pos2(from.x + 10.0, lane_y))],
+        );
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![Event::PointerMoved(to)]);
+        run_tracks_frame(&ctx, &mut p, &mut s, &meters, vec![press(to, false)]);
+        let regions = &p.tracks[ti].regions;
+        assert_eq!(regions.len(), 2, "the drag adds a second region");
+        let dragged = &regions[1];
+        assert!(
+            dragged.len_bars > 2.0,
+            "the drag sets the length: {}",
+            dragged.len_bars
+        );
+        assert!(
+            dragged.start_bar > regions[0].start_bar,
+            "the drag starts later"
+        );
+        assert!(s.tracks.pencil_drag.is_none(), "the drag is finished");
+    }
+
+    #[test]
+    fn the_pencil_and_fade_tools_sit_where_their_menu_entries_are() {
+        assert_eq!(TOOLS[PENCIL_TOOL], "Pencil Tool");
+        assert_eq!(TOOLS[FADE_TOOL], "Fade Tool");
+        assert_eq!(TOOLS[0], "Pointer Tool");
+    }
+
+    #[test]
+    fn reverse_region_tells_the_engine_to_rebuild_the_song() {
+        let (mut p, _dir) = project_with_wav(0.5);
+        let mut s = UiState::new();
+        let (ti, ri) = p
+            .tracks
+            .iter()
+            .enumerate()
+            .find_map(|(ti, t)| {
+                t.regions
+                    .iter()
+                    .position(|r| r.audio.is_some())
+                    .map(|ri| (ti, ri))
+            })
+            .expect("the imported audio region");
+        let rev = p.song_rev;
+        apply_ctx(CtxAction::ToggleReverse(ti, ri), &mut p, &mut s, 1000.0);
+        assert!(p.tracks[ti].regions[ri].params.reverse);
+        assert_ne!(p.song_rev, rev, "the engine must hear the reversed clip");
+        apply_ctx(CtxAction::ToggleReverse(ti, ri), &mut p, &mut s, 1000.0);
+        assert!(
+            !p.tracks[ti].regions[ri].params.reverse,
+            "a second pick turns it off"
+        );
+    }
+
     #[test]
     fn the_fade_tool_measures_from_the_edge_in_sixteenths() {
         // A region from beat 8, 4 beats long.
@@ -3926,9 +4292,8 @@ mod flex_marker_tests {
             controls: Vec::new(),
             folder: None,
             audio: Some(AudioRegion {
-                file,
-                peaks: Arc::new(OnceLock::new()),
                 flex: Some(flex),
+                ..AudioRegion::whole(file, Arc::new(OnceLock::new()))
             }),
             params: RegionParams::default(),
             generated: None,

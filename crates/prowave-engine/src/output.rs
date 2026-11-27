@@ -3,7 +3,7 @@ use crate::core::{
     dsp_load, AudioClip, ClipEdit, Command, EngineCore, EngineState, Garbage, MidiOutEvent, Shared,
     StateReader,
 };
-use crate::disk::{AudioError, AudioFile, DiskThread};
+use crate::disk::{AudioError, AudioFile, DiskThread, FileSpan};
 use crate::mtc::MtcMessage;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
@@ -88,6 +88,42 @@ mod queue_tests {
     }
 }
 
+#[cfg(test)]
+mod buffer_tests {
+    use super::*;
+
+    #[test]
+    fn choices_are_the_powers_of_two_the_device_supports() {
+        assert_eq!(buffer_choices(None), vec![32, 64, 128, 256, 512, 1024]);
+        assert_eq!(buffer_choices(Some((16, 512))), vec![32, 64, 128, 256, 512]);
+        assert_eq!(buffer_choices(Some((2048, 4096))), Vec::<u32>::new());
+        assert_eq!(buffer_choices(Some((32, 1024))), BUFFER_CHOICES.to_vec());
+    }
+
+    #[test]
+    fn a_requested_buffer_is_limited_to_the_device_range() {
+        assert_eq!(clamp_buffer(64, None), 64);
+        assert_eq!(clamp_buffer(4, Some((16, 8192))), 16);
+        assert_eq!(clamp_buffer(100_000, Some((16, 8192))), 8192);
+        assert_eq!(clamp_buffer(0, None), 1, "never a zero-frame callback");
+        // A broken range never panics; the upper end wins.
+        assert_eq!(clamp_buffer(64, Some((512, 128))), 128);
+    }
+
+    #[test]
+    fn an_unknown_output_device_is_an_error_not_a_panic() {
+        assert!(Engine::start_on(Some("no such output device"), None).is_err());
+    }
+
+    #[test]
+    fn listing_the_outputs_never_panics_and_ids_are_usable() {
+        for device in output_devices() {
+            assert!(!device.id.is_empty());
+            assert!(device.id.len() <= MAX_DEVICE_ID_CHARS);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum EngineError {
     NoOutputDevice,
@@ -121,12 +157,100 @@ pub fn peak_of(file: &AudioFile) -> Result<f32, EngineError> {
     file.peak().map_err(EngineError::from)
 }
 
+/// The I/O buffer sizes the app offers, in samples (Logic Pro: Settings > Audio).
+pub const BUFFER_CHOICES: [u32; 6] = [32, 64, 128, 256, 512, 1024];
+
+/// Longest device id the app accepts; a longer one is skipped rather than stored.
+const MAX_DEVICE_ID_CHARS: usize = 256;
+
+/// An audio output device of this computer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputDevice {
+    /// Identifies the device to [`Engine::start_on`] (the system's own id).
+    pub id: String,
+    /// The name to show.
+    pub name: String,
+}
+
+fn device_label(d: &cpal::Device) -> String {
+    d.description()
+        .map(|d| d.name().to_string())
+        .or_else(|_| d.id().map(|i| i.to_string()))
+        .unwrap_or_else(|_| "Output".into())
+}
+
+/// The output devices of the default audio system. Empty when there are none or the system
+/// cannot be asked; never panics.
+pub fn output_devices() -> Vec<OutputDevice> {
+    let host = cpal::default_host();
+    let Ok(devices) = host.output_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|d| {
+            let id = d.id().ok()?.to_string();
+            if id.is_empty() || id.len() > MAX_DEVICE_ID_CHARS {
+                return None;
+            }
+            Some(OutputDevice {
+                name: device_label(&d),
+                id,
+            })
+        })
+        .collect()
+}
+
+/// The default audio system's output device with this id, if it is still there.
+fn find_output(id: &str) -> Option<cpal::Device> {
+    let host = cpal::default_host();
+    host.output_devices()
+        .ok()?
+        .find(|d| d.id().is_ok_and(|i| i.to_string() == id))
+}
+
+/// The buffer sizes `device_id` (`None`: the default output) can take, in frames, from its
+/// default configuration. `None` when the device does not say (or is not there).
+pub fn buffer_range(device_id: Option<&str>) -> Option<(u32, u32)> {
+    let device = match device_id {
+        Some(id) => find_output(id)?,
+        None => cpal::default_host().default_output_device()?,
+    };
+    let config = device.default_output_config().ok()?;
+    match config.buffer_size() {
+        SupportedBufferSize::Range { min, max } => Some((*min, *max)),
+        SupportedBufferSize::Unknown => None,
+    }
+}
+
+/// The [`BUFFER_CHOICES`] a device with `range` supports. Without a known range, all of them.
+pub fn buffer_choices(range: Option<(u32, u32)>) -> Vec<u32> {
+    BUFFER_CHOICES
+        .into_iter()
+        .filter(|&n| match range {
+            Some((lo, hi)) => (lo..=hi).contains(&n),
+            None => true,
+        })
+        .collect()
+}
+
+/// `n` frames, limited to what the device supports when its range is known. Never panics,
+/// even for a range whose ends are in the wrong order.
+pub fn clamp_buffer(n: u32, range: Option<(u32, u32)>) -> u32 {
+    let n = n.max(1);
+    match range {
+        Some((lo, hi)) => n.max(lo).min(hi),
+        None => n,
+    }
+}
+
 /// The running audio output. Dropping it stops the sound.
 enum Output {
     Cpal(#[allow(dead_code)] Stream),
     /// Windows: our own WASAPI stream with the smallest period the audio engine allows.
     #[cfg(windows)]
     Wasapi(#[allow(dead_code)] crate::wasapi::LowLatencyStream),
+    /// No device: the engine is driven by [`Engine::render_offline`].
+    Offline,
 }
 
 /// UI-thread handle. Not `Send` on some platforms (cpal `Stream`); keep it on the UI thread.
@@ -139,8 +263,14 @@ pub struct Engine {
     clock_out: Option<rtrb::Consumer<crate::clock::ClockMessage>>,
     sample_rate: u32,
     device_name: String,
+    /// The id the engine was opened with, `None` for the system's default output.
+    device_id: Option<String>,
+    /// The buffer size asked for (clamped to the device), `None` for the device's default.
+    buffer_frames: Option<u32>,
     _output: Output,
     disk: DiskThread,
+    /// The core of an offline engine (see [`Engine::offline`]), which nothing else runs.
+    offline: Option<Box<EngineCore>>,
 }
 
 /// Renders the engine into a device buffer of any sample format and channel count. Lives on
@@ -204,6 +334,36 @@ impl Engine {
         Self::start_with(None)
     }
 
+    /// Starts on the output device `device_id` (an [`OutputDevice::id`]), or on the system's
+    /// default output when it is `None`, which is exactly [`Engine::start_with`]. An id that is
+    /// not there is an error, so the caller can fall back to the default. The Windows
+    /// low-latency path is used for the default output only.
+    pub fn start_on(
+        device_id: Option<&str>,
+        buffer_frames: Option<u32>,
+    ) -> Result<Self, EngineError> {
+        let Some(id) = device_id else {
+            return Self::start_with(buffer_frames);
+        };
+        let device = find_output(id)
+            .ok_or_else(|| EngineError::Backend(format!("output device {id} is not there")))?;
+        Self::start_on_device(&device, buffer_frames).map(|mut engine| {
+            engine.device_id = Some(id.to_string());
+            engine
+        })
+    }
+
+    /// The buffer size asked for, clamped to the device, in frames. `None` when the device's
+    /// default was used. The size the callbacks actually get is `EngineState::block_frames`.
+    pub fn buffer_frames(&self) -> Option<u32> {
+        self.buffer_frames
+    }
+
+    /// The id the engine was opened on, `None` for the system's default output.
+    pub fn device_id(&self) -> Option<&str> {
+        self.device_id.as_deref()
+    }
+
     /// Like [`Engine::start`], but asks for `buffer_frames` per callback (clamped to what the
     /// device supports). Smaller buffers lower latency (Logic: I/O Buffer Size).
     pub fn start_with(buffer_frames: Option<u32>) -> Result<Self, EngineError> {
@@ -239,6 +399,55 @@ impl Engine {
             }
         }
         Err(last)
+    }
+
+    /// An engine with no sound card, for offline rendering: [`Engine::render_offline`] makes
+    /// its audio as fast as the processor allows, with the same commands, streams and readers as
+    /// a device engine. Nothing plays. It can be made on any thread, and needs no device.
+    pub fn offline(sample_rate: u32) -> Result<Self, EngineError> {
+        let (tx, rx) = RingBuffer::<Command>::new(1024);
+        let (gtx, grx) = RingBuffer::<Garbage>::new(GARBAGE_CAPACITY);
+        let shared = Arc::new(Shared::new());
+        let mut core = EngineCore::new(sample_rate, rx, gtx, shared.clone());
+        core.set_offline(true);
+        let readers = core.take_readers();
+        let state = readers
+            .state
+            .ok_or_else(|| EngineError::Backend("no state reader".into()))?;
+        Ok(Self {
+            commands: CommandQueue {
+                tx,
+                garbage: grx,
+                credits: GARBAGE_CAPACITY,
+            },
+            shared,
+            state,
+            midi_out: readers.midi,
+            mtc_out: readers.mtc,
+            clock_out: readers.clock,
+            sample_rate,
+            device_name: "offline".to_string(),
+            device_id: None,
+            buffer_frames: None,
+            _output: Output::Offline,
+            disk: DiskThread::spawn(),
+            offline: Some(Box::new(core)),
+        })
+    }
+
+    /// Makes the next `out.len() / 2` frames of stereo audio on an [`Engine::offline`] engine
+    /// (interleaved, left then right), with every command sent so far applied. Not in real time:
+    /// the frames are as fast as the processor makes them, and a streamed region or a plug-in
+    /// that runs in its own process waits for its data rather than letting silence through.
+    /// Errors on an engine that plays on a device.
+    pub fn render_offline(&mut self, out: &mut [f32]) -> Result<(), EngineError> {
+        let core = self
+            .offline
+            .as_mut()
+            .ok_or_else(|| EngineError::Backend("this engine plays on a device".into()))?;
+        core.set_device_info((out.len() / 2) as u32, 0);
+        assert_no_alloc::assert_no_alloc(|| core.process(out));
+        Ok(())
     }
 
     /// Starts on the ASIO host (Windows builds with the `asio` feature only).
@@ -288,15 +497,18 @@ impl Engine {
             clock_out: readers.clock,
             sample_rate: info.sample_rate,
             device_name: info.device_name,
+            device_id: None,
+            buffer_frames: Some(info.period_frames),
             _output: Output::Wasapi(stream),
             disk: DiskThread::spawn(),
+            offline: None,
         })
     }
 
     fn start_on_host(host: &cpal::Host, buffer_frames: Option<u32>) -> Result<Self, EngineError> {
         let mut last = EngineError::NoOutputDevice;
         if let Some(device) = host.default_output_device() {
-            match Self::start_on(&device, buffer_frames) {
+            match Self::start_on_device(&device, buffer_frames) {
                 Ok(engine) => return Ok(engine),
                 Err(e) => {
                     tracing::warn!("default audio output failed: {e}");
@@ -309,7 +521,7 @@ impl Engine {
         if let Ok(devices) = host.output_devices() {
             for device in devices {
                 let name = device.id().map(|i| i.to_string()).unwrap_or_default();
-                match Self::start_on(&device, buffer_frames) {
+                match Self::start_on_device(&device, buffer_frames) {
                     Ok(engine) => {
                         tracing::info!("using audio output {name}");
                         return Ok(engine);
@@ -325,7 +537,10 @@ impl Engine {
     }
 
     /// Starts on `device`. If the requested buffer size is refused, retries with its default.
-    fn start_on(device: &cpal::Device, buffer_frames: Option<u32>) -> Result<Self, EngineError> {
+    fn start_on_device(
+        device: &cpal::Device,
+        buffer_frames: Option<u32>,
+    ) -> Result<Self, EngineError> {
         match Self::start_device(device, buffer_frames) {
             Err(e) if buffer_frames.is_some() => {
                 tracing::warn!("buffer size {buffer_frames:?} refused ({e}); using the default");
@@ -352,8 +567,8 @@ impl Engine {
             SupportedBufferSize::Unknown => None,
         };
         let mut config: StreamConfig = supported.into();
+        let buffer_frames = buffer_frames.map(|n| clamp_buffer(n, range));
         if let Some(n) = buffer_frames {
-            let n = range.map_or(n, |(lo, hi)| n.clamp(lo, hi));
             config.buffer_size = BufferSize::Fixed(n);
         }
         let sample_rate = config.sample_rate;
@@ -395,8 +610,11 @@ impl Engine {
             clock_out: readers.clock,
             sample_rate,
             device_name,
+            device_id: None,
+            buffer_frames,
             _output: Output::Cpal(stream),
             disk: DiskThread::spawn(),
+            offline: None,
         })
     }
 
@@ -467,13 +685,35 @@ impl Engine {
         edit: ClipEdit,
         clips_in_song: usize,
     ) -> AudioClip {
-        self.disk.stream_with_ring(
+        self.stream_span_in(
+            file,
+            track,
+            start_beat,
+            edit,
+            clips_in_song,
+            FileSpan::default(),
+        )
+    }
+
+    /// [`Engine::stream_clip_in`] for the part of `file` that `span` says: the clip starts
+    /// `span.start` frames into the file and plays `span.len` of them (see [`FileSpan`]).
+    pub fn stream_span_in(
+        &self,
+        file: &AudioFile,
+        track: u16,
+        start_beat: f64,
+        edit: ClipEdit,
+        clips_in_song: usize,
+        span: FileSpan,
+    ) -> AudioClip {
+        self.disk.stream_span_with_ring(
             file,
             self.sample_rate,
             track,
             start_beat,
             edit,
             crate::disk::ring_blocks_for(clips_in_song),
+            span,
         )
     }
 
@@ -522,4 +762,250 @@ where
             None,
         )
         .map_err(|e| EngineError::Backend(e.to_string()))
+}
+
+#[cfg(test)]
+mod offline_tests {
+    use super::*;
+    use crate::core::{
+        AudioClip, CaptureSink, ClipEdit, EngineCore, NoteEvent, Shared, Song, TrackMix,
+    };
+    use crate::fx::{Chain, Fx, FxKind, MAX_FX_PARAMS};
+    use crate::plugin::{BlockEffect, PLUGIN_BLOCK};
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+
+    /// Frames of stereo audio rendered per call in these tests.
+    const BLOCK: usize = 512;
+
+    fn render(engine: &mut Engine, frames: usize) -> Vec<f32> {
+        let mut out = vec![0f32; frames * 2];
+        for block in out.chunks_mut(BLOCK * 2) {
+            engine
+                .render_offline(block)
+                .unwrap_or_else(|e| panic!("an offline engine renders: {e}"));
+        }
+        out
+    }
+
+    /// Plays `commands` on a new offline engine at `sample_rate` and renders `frames`.
+    fn run(sample_rate: u32, commands: Vec<Command>, frames: usize) -> (Vec<f32>, Engine) {
+        let mut engine =
+            Engine::offline(sample_rate).unwrap_or_else(|e| panic!("offline engine: {e}"));
+        for c in commands {
+            assert!(engine.send(c), "the command queue takes the commands");
+        }
+        let out = render(&mut engine, frames);
+        (out, engine)
+    }
+
+    /// The commands that make a song from `notes` play from the start.
+    fn song_play(notes: Vec<NoteEvent>, clips: Vec<AudioClip>) -> Vec<Command> {
+        vec![
+            Command::SetTempoMap(Box::default()),
+            Command::SetSong(Box::new(
+                Song::new(notes, vec![TrackMix::default()]).with_clips(clips),
+            )),
+            Command::SetPosition { beat: 0.0 },
+            Command::Play,
+        ]
+    }
+
+    fn note(start: f64, len: f64, pitch: u8) -> NoteEvent {
+        NoteEvent {
+            start_beat: start,
+            end_beat: start + len,
+            pitch,
+            vel: 100,
+            track: 0,
+        }
+    }
+
+    fn temp_wav(name: &str, sample_rate: u32, frames: usize, f: impl Fn(usize) -> f32) -> PathBuf {
+        let stereo: Vec<f32> = (0..frames)
+            .flat_map(|n| {
+                let s = f(n);
+                [s, s]
+            })
+            .collect();
+        let path =
+            std::env::temp_dir().join(format!("prowave-offline-{}-{name}.wav", std::process::id()));
+        crate::write_wav(&path, &stereo, sample_rate)
+            .unwrap_or_else(|e| panic!("write the test WAV: {e}"));
+        path
+    }
+
+    #[test]
+    fn an_empty_song_renders_silence() {
+        let (out, _engine) = run(48_000, song_play(Vec::new(), Vec::new()), 9_600);
+        assert_eq!(out.len(), 9_600 * 2);
+        assert!(out.iter().all(|s| *s == 0.0), "nothing plays");
+    }
+
+    #[test]
+    fn a_note_renders_sound() {
+        let (out, _engine) = run(
+            48_000,
+            song_play(vec![note(0.0, 4.0, 69)], Vec::new()),
+            24_000,
+        );
+        let peak = out.iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "an A4 for two beats is heard (peak {peak})");
+        assert!(out.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn the_same_commands_render_the_same_frames() {
+        let notes = || vec![note(0.0, 2.0, 60), note(1.0, 2.0, 64), note(2.5, 1.0, 67)];
+        let (a, _) = run(48_000, song_play(notes(), Vec::new()), 48_000);
+        let (b, _) = run(48_000, song_play(notes(), Vec::new()), 48_000);
+        assert!(a.iter().any(|s| *s != 0.0));
+        assert!(
+            a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()),
+            "two offline renders are bit-identical"
+        );
+    }
+
+    #[test]
+    fn a_streamed_region_comes_out_as_its_file_without_underruns() {
+        // One second of a 440 Hz sine at the engine's rate, through the disk thread.
+        let frames = 48_000;
+        let path = temp_wav("same-rate", 48_000, frames, |n| {
+            0.5 * (std::f32::consts::TAU * 440.0 * n as f32 / 48_000.0).sin()
+        });
+        let file = AudioFile::open(&path).unwrap_or_else(|e| panic!("open the test WAV: {e:?}"));
+        let mut engine = Engine::offline(48_000).unwrap_or_else(|e| panic!("offline engine: {e}"));
+        let clip = engine.stream_clip_in(&file, 0, 0.0, ClipEdit::default(), 1);
+        for c in song_play(Vec::new(), vec![clip]) {
+            assert!(engine.send(c));
+        }
+        let out = render(&mut engine, frames);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            engine.shared().underruns.load(Ordering::Relaxed),
+            0,
+            "no gaps"
+        );
+        // The master fader's level is the only gain between the file and the output.
+        let gain = 0.8f32;
+        let worst = (0..frames)
+            .map(|n| {
+                let source = 0.5 * (std::f32::consts::TAU * 440.0 * n as f32 / 48_000.0).sin();
+                (out[2 * n] - gain * source).abs()
+            })
+            .fold(0f32, f32::max);
+        assert!(
+            worst < 1e-4,
+            "every frame is the file's frame (worst error {worst})"
+        );
+    }
+
+    #[test]
+    fn a_region_from_a_file_at_another_rate_is_resampled_closely() {
+        let frames = 44_100;
+        let path = temp_wav("other-rate", 44_100, frames, |n| {
+            0.5 * (std::f32::consts::TAU * 440.0 * n as f32 / 44_100.0).sin()
+        });
+        let file = AudioFile::open(&path).unwrap_or_else(|e| panic!("open the test WAV: {e:?}"));
+        let mut engine = Engine::offline(48_000).unwrap_or_else(|e| panic!("offline engine: {e}"));
+        let clip = engine.stream_clip_in(&file, 0, 0.0, ClipEdit::default(), 1);
+        for c in song_play(Vec::new(), vec![clip]) {
+            assert!(engine.send(c));
+        }
+        let out = render(&mut engine, 44_000);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(engine.shared().underruns.load(Ordering::Relaxed), 0);
+        let worst = (0..44_000)
+            .map(|m| {
+                let t = m as f32 / 48_000.0;
+                let want = 0.8 * 0.5 * (std::f32::consts::TAU * 440.0 * t).sin();
+                (out[2 * m] - want).abs()
+            })
+            .fold(0f32, f32::max);
+        assert!(
+            worst < 5e-3,
+            "linear resampling stays close (worst error {worst})"
+        );
+    }
+
+    /// A plug-in that only records whether the engine told it about offline rendering.
+    struct Recorder(Arc<AtomicBool>);
+
+    impl BlockEffect for Recorder {
+        fn set_param(&mut self, _index: usize, _norm: f32) {}
+        fn process(
+            &mut self,
+            _in_l: &[f32],
+            _in_r: &[f32],
+            _out_l: &mut [f32],
+            _out_r: &mut [f32],
+        ) {
+        }
+        fn reset(&mut self) {}
+        fn boxed_clone(&self) -> Option<Box<dyn BlockEffect>> {
+            Some(Box::new(Recorder(Arc::clone(&self.0))))
+        }
+        fn set_offline(&mut self, offline: bool) {
+            self.0.store(offline, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn a_plug_in_in_a_track_is_told_about_offline_rendering() {
+        let told = Arc::new(AtomicBool::new(false));
+        let mut fx = Fx::new(FxKind::Plugin, [0.0; MAX_FX_PARAMS], false, 48_000.0);
+        fx.set_plugin(Box::new(Recorder(Arc::clone(&told))));
+        let chain = Chain::new(vec![fx]);
+        let mut commands = song_play(Vec::new(), Vec::new());
+        commands.push(Command::SetInserts {
+            track: 0,
+            chain: Box::new(chain),
+        });
+        let (_out, _engine) = run(48_000, commands, PLUGIN_BLOCK * 4);
+        assert!(
+            told.load(Ordering::Relaxed),
+            "the plug-in waits for its blocks"
+        );
+    }
+
+    /// The real-time path (a core that is not offline, handing its frames over with
+    /// `Command::SetCapture`) hears exactly what the offline render makes: offline changes how
+    /// the core waits for data, not what it plays.
+    #[test]
+    fn the_live_capture_is_bit_for_bit_the_offline_render() {
+        let notes = || vec![note(0.0, 4.0, 60), note(1.0, 2.0, 67), note(2.5, 1.0, 72)];
+        let frames = 24_000;
+        let (offline, _) = run(48_000, song_play(notes(), Vec::new()), frames);
+
+        let (mut tx, rx) = RingBuffer::<Command>::new(1024);
+        let (trash_tx, _trash_rx) = RingBuffer::new(64);
+        let mut core = EngineCore::new(48_000, rx, trash_tx, Arc::new(Shared::new()));
+        let (captured_tx, mut captured) = RingBuffer::<[f32; 2]>::new(frames * 2);
+        let sink = CaptureSink {
+            frames: captured_tx,
+            dropped: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+        assert!(tx.push(Command::SetCapture(Some(sink))).is_ok());
+        for c in song_play(notes(), Vec::new()) {
+            assert!(tx.push(c).is_ok());
+        }
+        let mut out = vec![0f32; frames * 2];
+        for block in out.chunks_mut(BLOCK * 2) {
+            core.process(block);
+        }
+        let mut heard = Vec::with_capacity(frames * 2);
+        while let Ok(frame) = captured.pop() {
+            heard.extend_from_slice(&frame);
+        }
+        assert_eq!(heard.len(), offline.len());
+        assert!(
+            heard
+                .iter()
+                .zip(&offline)
+                .all(|(a, b)| a.to_bits() == b.to_bits()),
+            "the capture and the offline render are identical"
+        );
+    }
 }

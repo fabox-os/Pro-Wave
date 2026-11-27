@@ -12,6 +12,9 @@ rtrb = "0.4.0"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = "2.21"
+
 # The plug-in's own process, for this crate's tests (the app is that program in a release).
 [[bin]]
 name = "prowave-plugin-host"

@@ -140,9 +140,6 @@ pub(crate) fn builtin_name(s: &str) -> Option<&'static str> {
         if c.name == s {
             return Some(c.name);
         }
-        if c.instrument == Some(s) {
-            return c.instrument;
-        }
         if let Some(fx) = c.fx.iter().find(|f| **f == s) {
             return Some(fx);
         }
@@ -210,25 +207,32 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// One effect as a file keeps it: Pro Wave's own with its settings, a hosted plug-in with what
-/// finds it again and its state.
+/// One effect as a file keeps it: Pro Wave's own with its settings, a LADSPA plug-in with its
+/// library and settings, a hosted plug-in with what finds it again and its state.
 fn insert_doc(s: &crate::model::Insert) -> prowave_project::InsertDoc {
-    let plugin = crate::plugins::info(s.plugin).map(|info| prowave_project::PluginDoc {
+    let hosted = crate::hosted_plugins::info(s.hosted).map(|info| prowave_project::PluginDoc {
         format: info.format.name().into(),
         id: info.id,
         name: info.name,
         vendor: info.vendor,
         path: info.path.to_string_lossy().into_owned(),
-        state: crate::plugins::state(s.plugin)
+        state: crate::hosted_plugins::state(s.hosted)
             .map(|state| hex(&state))
             .unwrap_or_default(),
+        ..Default::default()
     });
     prowave_project::InsertDoc {
         kind: s.name().into(),
         bypass: s.bypass,
         params: s.params[..s.kind.params().len()].to_vec(),
-        plugin,
+        ir_file: s.ir_file.and_then(crate::ir_files::to_doc),
+        plugin: hosted.or_else(|| s.plugin.and_then(crate::plugins::to_doc)),
     }
+}
+
+/// Whether a plug-in in a file is a CLAP, VST3 or Audio Unit one (not a LADSPA one).
+fn is_hosted_doc(d: &prowave_project::PluginDoc) -> bool {
+    !d.format.eq_ignore_ascii_case("ladspa")
 }
 
 /// A hosted plug-in from a file, put in the session's rack with its state. The plug-in is
@@ -236,16 +240,18 @@ fn insert_doc(s: &crate::model::Insert) -> prowave_project::InsertDoc {
 /// path the file names; one that is not installed keeps its slot (and its state, for the next
 /// save) and passes the sound through. A format this version does not know is left out.
 fn hosted_from_doc(d: &prowave_project::PluginDoc, bypass: bool) -> Option<crate::model::Insert> {
-    let format = crate::plugins::Format::from_name(&d.format)?;
-    let info = crate::plugins::find(format, &d.id).unwrap_or_else(|| crate::plugins::PluginInfo {
-        format,
-        id: d.id.clone(),
-        name: d.name.clone(),
-        vendor: d.vendor.clone(),
-        path: std::path::PathBuf::from(&d.path),
+    let format = crate::hosted_plugins::Format::from_name(&d.format)?;
+    let info = crate::hosted_plugins::find(format, &d.id).unwrap_or_else(|| {
+        crate::hosted_plugins::PluginInfo {
+            format,
+            id: d.id.clone(),
+            name: d.name.clone(),
+            vendor: d.vendor.clone(),
+            path: std::path::PathBuf::from(&d.path),
+        }
     });
     let state = unhex(&d.state).filter(|state| !state.is_empty());
-    let mut insert = crate::model::Insert::hosted(crate::plugins::add(&info, state));
+    let mut insert = crate::model::Insert::new_hosted(crate::hosted_plugins::add(&info, state));
     insert.bypass = bypass;
     Some(insert)
 }
@@ -254,10 +260,15 @@ fn hosted_from_doc(d: &prowave_project::PluginDoc, bypass: bool) -> Option<crate
 fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::Insert> {
     fx.iter()
         .filter_map(|d| {
-            if let Some(plugin) = &d.plugin {
+            if let Some(plugin) = d.plugin.as_ref().filter(|p| is_hosted_doc(p)) {
                 return hosted_from_doc(plugin, d.bypass);
             }
             let kind = prowave_engine::FxKind::from_name(&d.kind)?;
+            // A plug-in effect with no plug-in named is no effect at all, and the other way round.
+            let plugin = d.plugin.as_ref().and_then(crate::plugins::from_doc);
+            if (kind == prowave_engine::FxKind::Plugin) != plugin.is_some() {
+                return None;
+            }
             let mut params = [0.0; prowave_engine::MAX_FX_PARAMS];
             for (slot, v) in params.iter_mut().zip(&d.params) {
                 *slot = *v;
@@ -279,7 +290,14 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
                 kind,
                 bypass: d.bypass,
                 params: kind.clamp_params(params),
-                plugin: 0,
+                // Only a Space Designer plays an impulse-response file.
+                ir_file: d
+                    .ir_file
+                    .as_deref()
+                    .filter(|_| kind == prowave_engine::FxKind::Reverb)
+                    .and_then(crate::ir_files::from_doc),
+                plugin,
+                hosted: 0,
             })
         })
         .take(prowave_engine::MAX_INSERTS)
@@ -288,7 +306,11 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
 
 /// The sends of a track in a file: the list, else (older files) the single send.
 fn sends_from_doc(t: &prowave_project::TrackDoc) -> Vec<SendSlot> {
-    let valid = |bus: u8| (1..=8).contains(&bus).then_some(bus);
+    let valid = |bus: u16| {
+        (1..=prowave_engine::MAX_BUSES as u16)
+            .contains(&bus)
+            .then_some(bus)
+    };
     let mut sends: Vec<SendSlot> = t
         .sends
         .iter()
@@ -337,7 +359,7 @@ fn automation_from_doc(t: &prowave_project::TrackDoc) -> crate::model::Automatio
         // A hosted plug-in has more parameters than Pro Wave's own effects do.
         let hosted =
             t.fx.get(usize::from(l.slot))
-                .is_some_and(|d| d.plugin.is_some());
+                .is_some_and(|d| d.plugin.as_ref().is_some_and(is_hosted_doc));
         let known = usize::from(l.slot) < prowave_engine::MAX_INSERTS
             && (hosted || usize::from(l.param) < prowave_engine::MAX_FX_PARAMS);
         let target = AutoTarget::Fx {
@@ -470,6 +492,7 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             height: t.height,
             indent: t.indent,
             folded: t.folded,
+            summing_stack: t.summing_stack,
             vca: t.vca,
             midi_port: t.midi_port.clone(),
             midi_channel: t.midi_channel,
@@ -478,12 +501,16 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
             soundfont: t.soundfont.as_ref().map(|s| s.path.clone()),
             soundfont_bank: t.soundfont.as_ref().map_or(0, |s| s.bank),
             soundfont_program: t.soundfont.as_ref().map_or(0, |s| s.program),
+            sampler: t.sampler.as_ref().map(sampler_doc),
+            epiano: t.epiano.map(|e| e.params.to_vec()),
+            drums: t.drums.as_ref().map(drums_doc),
             icon: t.icon.map(|k| k.name().to_string()),
             input: match t.input {
                 InputSource::Mono(c) | InputSource::Stereo(c) => c,
             },
             input_stereo: matches!(t.input, InputSource::Stereo(_)),
             output: t.output,
+            aux_bus: t.aux_bus,
             groove: t.params.groove,
             follow_groove: t.params.follow_groove,
             midi_fx: t
@@ -592,6 +619,8 @@ pub fn to_doc(p: &Project) -> (ProjectDoc, Vec<MediaFile>) {
                                 .collect(),
                         }
                     }),
+                    audio_start: r.audio.as_ref().map_or(0, |a| a.start_frame),
+                    audio_frames: r.audio.as_ref().and_then(|a| a.len_frames),
                     mute: r.params.mute,
                     quantize: r.params.quantize,
                     transpose: r.params.transpose,
@@ -775,6 +804,9 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
                         Some(f) => {
                             let mut a = audio_region(f.clone(), ctx);
                             a.flex = r.flex.as_ref().map(|d| flex_from_doc(d, f.clone()));
+                            // A region cut from its file plays the part it was saved with.
+                            a.start_frame = r.audio_start;
+                            a.len_frames = r.audio_frames;
                             Some(a)
                         }
                         None => continue,
@@ -862,6 +894,9 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             midi_program: t.midi_program.map(|p| p.min(127)),
             midi_bank: t.midi_bank.map(|b| b.min(16383)),
             soundfont: soundfont_of(t),
+            sampler: sampler_of(t),
+            epiano: epiano_of(t),
+            drums: drums_of(t),
             icon: t
                 .icon
                 .as_deref()
@@ -872,6 +907,15 @@ pub fn from_doc(doc: &ProjectDoc, media_dir: &Path, ctx: &egui::Context) -> (Pro
             } else {
                 0
             },
+            aux_bus: if usize::from(t.aux_bus) <= prowave_engine::MAX_BUSES {
+                t.aux_bus
+            } else {
+                0
+            },
+            // Only an Aux strip with a bus of its own can be the parent of a Summing Stack.
+            summing_stack: t.summing_stack
+                && t.kind == TrackKindDoc::Aux
+                && (1..=prowave_engine::MAX_BUSES).contains(&usize::from(t.aux_bus)),
             midi_fx: t
                 .midi_fx
                 .iter()
@@ -1140,6 +1184,115 @@ fn soundfont_of(t: &TrackDoc) -> Option<crate::model::SoundFontUse> {
         path: path.to_string(),
         bank: t.soundfont_bank.min(128),
         program: t.soundfont_program.min(127),
+    })
+}
+
+/// A track's Drum Machine as the project file keeps it.
+fn drums_doc(d: &crate::drum_kit::DrumsUse) -> prowave_project::DrumsDoc {
+    prowave_project::DrumsDoc {
+        pads: d
+            .pads
+            .iter()
+            .map(|p| prowave_project::PadDoc {
+                kind: p.settings.kind.name().to_string(),
+                tune: p.settings.tune,
+                decay: p.settings.decay,
+                tone: p.settings.tone,
+                level_db: p.settings.level_db,
+                pan: p.settings.pan,
+                choke: p.settings.choke,
+                sample: p.sample.as_ref().map(|s| s.to_string_lossy().into_owned()),
+            })
+            .collect(),
+    }
+}
+
+/// The Drum Machine a saved track plays: pads that are missing from the file start as the
+/// starting kit's, an unknown drum is the starting kit's pad too, and every setting is put into
+/// range.
+fn drums_of(t: &TrackDoc) -> Option<crate::drum_kit::DrumsUse> {
+    use prowave_engine::drum_machine::{PadKind, PadSettings};
+    let d = t.drums.as_ref()?;
+    let mut kit = crate::drum_kit::DrumsUse::new();
+    for (pad, saved) in kit.pads.iter_mut().zip(&d.pads) {
+        let Some(kind) = PadKind::from_name(&saved.kind) else {
+            continue;
+        };
+        pad.settings = PadSettings {
+            kind,
+            tune: saved.tune,
+            decay: saved.decay,
+            tone: saved.tone,
+            level_db: saved.level_db,
+            pan: saved.pan,
+            choke: saved.choke,
+        }
+        .clamped();
+        pad.sample = saved
+            .sample
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && kind == PadKind::Sample)
+            .map(std::path::PathBuf::from);
+    }
+    Some(kit)
+}
+
+/// A track's Sampler as the project file keeps it.
+fn sampler_doc(s: &crate::model::SamplerUse) -> prowave_project::SamplerDoc {
+    use crate::sampler_load::SamplerSource;
+    let (root_key, looped) = match &s.source {
+        SamplerSource::Audio { root, looped, .. } => (*root, *looped),
+        _ => (60, false),
+    };
+    prowave_project::SamplerDoc {
+        kind: s.source.kind().to_string(),
+        path: s.source.path().to_string_lossy().into_owned(),
+        root_key,
+        looped,
+        params: s.params.to_vec(),
+    }
+}
+
+/// The Sampler a saved track plays: nothing for an unknown kind or an empty path; the dials are
+/// put into range (missing ones start at their defaults).
+fn sampler_of(t: &TrackDoc) -> Option<crate::model::SamplerUse> {
+    use crate::sampler_load::SamplerSource;
+    let d = t.sampler.as_ref()?;
+    let path = std::path::PathBuf::from(d.path.trim());
+    if d.path.trim().is_empty() {
+        return None;
+    }
+    let source = match d.kind.as_str() {
+        "sfz" => SamplerSource::Sfz(path),
+        "exs" => SamplerSource::Exs(path),
+        "audio" => SamplerSource::Audio {
+            path,
+            root: d.root_key.min(127),
+            looped: d.looped,
+        },
+        _ => return None,
+    };
+    let mut params = prowave_engine::sampler::defaults();
+    for (slot, v) in params.iter_mut().zip(&d.params) {
+        *slot = *v;
+    }
+    Some(crate::model::SamplerUse {
+        source,
+        params: prowave_engine::sampler::clamp(params),
+    })
+}
+
+/// The Electric Piano a saved track plays: its dials, put into range (missing ones start at
+/// their defaults).
+fn epiano_of(t: &TrackDoc) -> Option<crate::model::EPianoUse> {
+    let saved = t.epiano.as_ref()?;
+    let mut params = prowave_engine::epiano::defaults();
+    for (slot, v) in params.iter_mut().zip(saved) {
+        *slot = *v;
+    }
+    Some(crate::model::EPianoUse {
+        params: prowave_engine::epiano::clamp(params),
     })
 }
 
@@ -1457,6 +1610,102 @@ pub(crate) mod tests {
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         let top = prowave_engine::MAX_INPUT_CHANNELS as u16 - 2;
         assert_eq!(r.tracks[1].input, InputSource::Stereo(top));
+    }
+
+    #[test]
+    fn an_electric_piano_keeps_its_dials_and_hand_edited_ones_are_put_into_range() {
+        use crate::model::EPianoUse;
+        let mut p = Project::empty();
+        let mut dials = prowave_engine::epiano::defaults();
+        dials[prowave_engine::epiano::dial::BARK] = 0.9;
+        dials[prowave_engine::epiano::dial::TREMOLO_DEPTH] = 0.4;
+        p.tracks[0].epiano = Some(EPianoUse { params: dials });
+        let (mut doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0].epiano.as_ref().map(Vec::len),
+            Some(prowave_engine::epiano::PARAMS)
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].epiano, Some(EPianoUse { params: dials }));
+        // Too few numbers: the rest start at their defaults. Wild ones are clamped.
+        doc.tracks[0].epiano = Some(vec![9.0, f32::NAN]);
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        let e = r.tracks[0].epiano.expect("a piano");
+        assert_eq!(e.params[0], 1.0);
+        assert_eq!(e.params[1], prowave_engine::epiano::DIALS[1].default);
+        assert_eq!(e.params[2], prowave_engine::epiano::DIALS[2].default);
+        // A project without one has none.
+        doc.tracks[0].epiano = None;
+        let (n, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(n.tracks[0].epiano, None);
+    }
+
+    #[test]
+    fn a_space_designers_impulse_response_file_is_saved_and_only_a_space_designer_keeps_it() {
+        use crate::model::Insert;
+        let file = crate::ir_files::intern(Path::new("/irs/cathedral.wav"));
+        let mut sd = Insert::new(prowave_engine::FxKind::Reverb);
+        sd.params[prowave_engine::sd::IR_TYPE] = 2.0;
+        sd.ir_file = Some(file);
+        let mut p = Project::empty();
+        p.tracks[0].inserts = vec![sd, Insert::new(prowave_engine::FxKind::Delay)];
+        p.master_inserts = vec![sd];
+        let (mut doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0].fx[0].ir_file.as_deref(),
+            Some("/irs/cathedral.wav")
+        );
+        assert_eq!(doc.tracks[0].fx[1].ir_file, None);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].inserts[0].ir_file, Some(file));
+        assert_eq!(
+            q.master_inserts[0].ir_file,
+            Some(file),
+            "the Stereo Out keeps it too"
+        );
+        // A file named on another effect, or an empty path, is dropped.
+        doc.tracks[0].fx[1].ir_file = Some("/irs/cathedral.wav".into());
+        doc.tracks[0].fx[0].ir_file = Some("  ".into());
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(r.tracks[0].inserts[0].ir_file, None);
+        assert_eq!(r.tracks[0].inserts[1].ir_file, None);
+        // An old project has none.
+        doc.tracks[0].fx[0].ir_file = None;
+        let (o, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(o.tracks[0].inserts[0].ir_file, None);
+    }
+
+    #[test]
+    fn a_ladspa_effect_is_saved_with_its_plugin_and_a_plugin_less_one_is_dropped() {
+        use crate::model::Insert;
+        let id = crate::plugins::intern(&crate::plugins::PluginRef {
+            library: "/plugins/saved.so".into(),
+            label: "saved".into(),
+            unique_id: 9,
+            name: "Saved One".into(),
+        });
+        let mut p = Project::empty();
+        let mut ins = Insert::new_plugin(id);
+        ins.params[0] = 0.75;
+        p.tracks[0].inserts = vec![ins, Insert::new(prowave_engine::FxKind::Delay)];
+        let (mut doc, _) = to_doc(&p);
+        assert_eq!(
+            doc.tracks[0].fx[0]
+                .plugin
+                .as_ref()
+                .map(|d| d.label.as_str()),
+            Some("saved")
+        );
+        assert!(doc.tracks[0].fx[1].plugin.is_none());
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].inserts[0].plugin, Some(id));
+        assert_eq!(q.tracks[0].inserts[0].params[0], 0.75);
+        assert_eq!(q.tracks[0].inserts[1].plugin, None);
+        // A "Plug-in" with no plug-in named, or a plug-in named on another effect, is dropped.
+        doc.tracks[0].fx[0].plugin = None;
+        doc.tracks[0].fx[1].plugin = to_doc(&p).0.tracks[0].fx[0].plugin.clone();
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert!(r.tracks[0].inserts.is_empty());
     }
 
     #[test]
@@ -1815,6 +2064,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_part_of_a_file_that_a_split_region_plays_is_saved_and_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut p = Project::empty();
+        let wav = dir.path().join("take.wav");
+        write_wav(&wav);
+        crate::import::import_audio(&mut p, &wav, &ctx).unwrap();
+        let t = p.tracks.len() - 1;
+        {
+            let a = p.tracks[t].regions[0].audio.as_mut().unwrap();
+            a.start_frame = 1_000;
+            a.len_frames = Some(2_000);
+        }
+        let path = save_project(&p, &dir.path().join("split")).unwrap();
+        let (q, warnings) = open_project(&path, &ctx).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let a = q.tracks[t].regions[0].audio.as_ref().unwrap();
+        assert_eq!((a.start_frame, a.len_frames), (1_000, Some(2_000)));
+    }
+
+    #[test]
     fn effects_sends_and_automation_are_saved_and_damaged_ones_are_tamed() {
         use crate::model::{AutoMode, AutoTarget, Insert};
         use prowave_engine::FxKind;
@@ -1917,6 +2187,7 @@ pub(crate) mod tests {
             kind: "Delay".into(),
             bypass: false,
             params: vec![f32::NAN, 1e30, -5.0],
+            ..Default::default()
         };
         doc.tracks[1].fx = vec![
             prowave_project::InsertDoc {
@@ -1933,7 +2204,7 @@ pub(crate) mod tests {
             }));
         doc.tracks[1].sends = (0..30)
             .map(|k| prowave_project::SendDoc {
-                bus: k as u8,
+                bus: k as u16,
                 level: 9.0,
                 pre: false,
             })
@@ -2306,7 +2577,7 @@ pub(crate) mod tests {
         let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(q.notes, p.notes);
         assert_eq!(q.tracks[0].output, 2);
-        doc.tracks[0].output = 200;
+        doc.tracks[0].output = 2000;
         doc.notes = "x".repeat(crate::side_panes::MAX_NOTES + 10);
         let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
         assert_eq!(r.tracks[0].output, 0, "no such bus");
@@ -2314,8 +2585,148 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_sampler_is_saved_with_its_source_and_dials_and_odd_saves_are_handled() {
+        use crate::model::SamplerUse;
+        use crate::sampler_load::SamplerSource;
+        let mut p = Project::empty();
+        let mut dials = prowave_engine::sampler::defaults();
+        dials[prowave_engine::sampler::dial::ATTACK] = 250.0;
+        p.tracks[0].sampler = Some(SamplerUse {
+            source: SamplerSource::Audio {
+                path: "/s/pad.wav".into(),
+                root: 48,
+                looped: true,
+            },
+            params: dials,
+        });
+        let (mut doc, _) = to_doc(&p);
+        let saved = doc.tracks[0].sampler.clone().expect("saved");
+        assert_eq!(
+            (
+                saved.kind.as_str(),
+                saved.path.as_str(),
+                saved.root_key,
+                saved.looped
+            ),
+            ("audio", "/s/pad.wav", 48, true)
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(q.tracks[0].sampler, p.tracks[0].sampler);
+        for (kind, source) in [
+            ("sfz", SamplerSource::Sfz("/s/kit.sfz".into())),
+            ("exs", SamplerSource::Exs("/s/kit.exs".into())),
+        ] {
+            doc.tracks[0].sampler = Some(prowave_project::SamplerDoc {
+                kind: kind.into(),
+                path: "/s/kit.".to_string() + kind,
+                params: vec![99.0, 1e9],
+                ..Default::default()
+            });
+            let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+            let s = r.tracks[0].sampler.clone().expect("a sampler");
+            assert_eq!(s.source, source);
+            // Wild dials are clamped and missing ones start at their defaults.
+            assert_eq!(s.params[0], 12.0);
+            assert_eq!(s.params[1], 2000.0);
+            assert_eq!(s.params[2], prowave_engine::sampler::DIALS[2].default);
+        }
+        // An unknown kind, an empty path, or no sampler: none.
+        for bad in ["wavetable", ""] {
+            doc.tracks[0].sampler = Some(prowave_project::SamplerDoc {
+                kind: if bad.is_empty() {
+                    "sfz".into()
+                } else {
+                    bad.into()
+                },
+                path: if bad.is_empty() {
+                    "  ".into()
+                } else {
+                    "/s/x".into()
+                },
+                ..Default::default()
+            });
+            let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+            assert_eq!(r.tracks[0].sampler, None, "{bad:?}");
+        }
+        doc.tracks[0].sampler = None;
+        let (n, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(n.tracks[0].sampler, None);
+    }
+
+    #[test]
+    fn a_drum_machine_is_saved_pad_by_pad_and_odd_saves_are_put_right() {
+        use crate::drum_kit::DrumsUse;
+        use prowave_engine::drum_machine::PadKind;
+        let mut kit = DrumsUse::new();
+        kit.pads[1].settings = PadKind::Sample.settings();
+        kit.pads[1].settings.tune = -3.0;
+        kit.pads[1].sample = Some("/kits/snap.wav".into());
+        kit.pads[6].settings.choke = 4;
+        kit.pads[0].settings.level_db = -4.5;
+        let mut p = Project::empty();
+        p.tracks[0].drums = Some(kit.clone());
+        let (mut doc, _) = to_doc(&p);
+        let saved = doc.tracks[0].drums.clone().expect("saved");
+        assert_eq!(saved.pads.len(), 16);
+        assert_eq!(
+            (saved.pads[1].kind.as_str(), saved.pads[1].sample.as_deref()),
+            ("Sample", Some("/kits/snap.wav"))
+        );
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(
+            q.tracks[0].drums,
+            Some(kit),
+            "the kit comes back as it was saved"
+        );
+        // A short list keeps the rest of the starting kit; an unknown drum is the starting
+        // kit's pad; wild numbers are put into range; a sample path on a synthesized pad is
+        // dropped.
+        doc.tracks[0].drums = Some(prowave_project::DrumsDoc {
+            pads: vec![
+                prowave_project::PadDoc {
+                    kind: "Tom".into(),
+                    tune: 99.0,
+                    decay: f32::NAN,
+                    tone: -1.0,
+                    level_db: 1e9,
+                    pan: 5.0,
+                    choke: 200,
+                    sample: Some("/x.wav".into()),
+                },
+                prowave_project::PadDoc {
+                    kind: "Tuba".into(),
+                    tune: 5.0,
+                    ..Default::default()
+                },
+            ],
+        });
+        let (r, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        let k = r.tracks[0].drums.clone().expect("a kit");
+        let s0 = k.pads[0].settings;
+        assert_eq!(
+            (s0.kind, s0.tune, s0.decay, s0.tone, s0.level_db, s0.pan),
+            (PadKind::Tom, 12.0, 1.0, 0.0, 6.0, 1.0)
+        );
+        assert_eq!(s0.choke, prowave_engine::drum_machine::MAX_CHOKE);
+        assert_eq!(k.pads[0].sample, None, "only a sample pad has a file");
+        assert_eq!(
+            k.pads[1],
+            DrumsUse::new().pads[1],
+            "an unknown drum is the starting pad"
+        );
+        assert_eq!(
+            k.pads[2],
+            DrumsUse::new().pads[2],
+            "a missing pad is the starting pad"
+        );
+        doc.tracks[0].drums = None;
+        let (n, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(n.tracks[0].drums, None);
+    }
+
+    #[test]
     fn a_hosted_plug_in_is_saved_with_what_finds_it_and_its_state() {
-        use crate::plugins::{self, Format, PluginInfo};
+        use crate::hosted_plugins::{self as plugins, Format, PluginInfo};
         // Not installed here: the slot, the names and the state still survive a save.
         let info = PluginInfo {
             format: Format::Vst3,
@@ -2327,10 +2738,11 @@ pub(crate) mod tests {
         use prowave_engine::FxKind;
         let here = (Path::new("."), egui::Context::default());
         let mut p = Project::demo();
-        let mut hosted = crate::model::Insert::hosted(plugins::add(&info, Some(vec![0, 1, 254])));
+        let mut hosted =
+            crate::model::Insert::new_hosted(plugins::add(&info, Some(vec![0, 1, 254])));
         hosted.bypass = true;
         p.tracks[0].inserts = vec![crate::model::Insert::new(FxKind::Gate), hosted];
-        p.master_inserts = vec![crate::model::Insert::hosted(plugins::add(&info, None))];
+        p.master_inserts = vec![crate::model::Insert::new_hosted(plugins::add(&info, None))];
 
         let (doc, _) = to_doc(&p);
         let saved = doc.tracks[0].fx[1]
@@ -2348,11 +2760,11 @@ pub(crate) mod tests {
         let (q, _) = from_doc(&doc, here.0, &here.1);
         let back = q.tracks[0].inserts[1];
         assert_eq!(q.tracks[0].inserts[0].kind, FxKind::Gate);
-        assert_eq!((back.kind, back.bypass), (FxKind::External, true));
-        assert_ne!(back.plugin, 0);
+        assert_eq!((back.kind, back.bypass), (FxKind::Plugin, true));
+        assert_ne!(back.hosted, 0);
         assert_eq!(back.name(), "Far Away EQ");
-        assert_eq!(plugins::info(back.plugin), Some(info));
-        assert_eq!(plugins::state(back.plugin), Some(vec![0, 1, 254]));
+        assert_eq!(plugins::info(back.hosted), Some(info));
+        assert_eq!(plugins::state(back.hosted), Some(vec![0, 1, 254]));
         // Saved again while still not installed, the slot keeps its file entry and its state.
         let (again, _) = to_doc(&q);
         let kept = again.tracks[0].fx[1]
@@ -2364,7 +2776,7 @@ pub(crate) mod tests {
             (saved.id.as_str(), "0001fe")
         );
         assert_eq!(q.master_inserts.len(), 1);
-        assert_eq!(plugins::state(q.master_inserts[0].plugin), None);
+        assert_eq!(plugins::state(q.master_inserts[0].hosted), None);
 
         // A format a later version adds, or a damaged state, never stops a project opening.
         let mut odd = doc.clone();
@@ -2376,8 +2788,165 @@ pub(crate) mod tests {
             1,
             "the unknown format is left out"
         );
-        assert_eq!(plugins::state(r.master_inserts[0].plugin), None);
+        assert_eq!(plugins::state(r.master_inserts[0].hosted), None);
         assert_eq!(unhex(&hex(&[7, 0, 255])), Some(vec![7, 0, 255]));
         assert_eq!(unhex("abc"), None);
+    }
+}
+
+#[cfg(test)]
+mod stack_io_tests {
+    use super::{from_doc, to_doc};
+    use crate::model::{Project, Track, TrackKind};
+    use prowave_project::{ProjectDoc, TrackDoc, TrackKindDoc};
+    use std::path::Path;
+
+    fn four() -> Project {
+        let mut p = Project::empty();
+        p.tracks = ["a", "b", "c", "d"]
+            .iter()
+            .map(|n| Track::new(*n, TrackKind::Instrument))
+            .collect();
+        p
+    }
+
+    /// Name, kind, nesting, summing flag, bus listened to and output, per track.
+    fn shape(p: &Project) -> Vec<(String, TrackKind, u8, bool, u16, u16)> {
+        p.tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    t.kind,
+                    t.indent,
+                    t.summing_stack,
+                    t.aux_bus,
+                    t.output,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn folder_and_summing_stacks_and_their_routing_survive_a_save() {
+        let mut p = four();
+        p.create_track_stack(&[0, 2], false);
+        p.create_track_stack(&[3, 4], true);
+        p.tracks[0].volume_db = -4.5;
+        let (doc, _) = to_doc(&p);
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert_eq!(shape(&q), shape(&p));
+        assert_eq!(q.tracks[0].volume_db, -4.5, "a folder's level is kept");
+        let sub = q
+            .tracks
+            .iter()
+            .find(|t| t.summing_stack)
+            .expect("the summing stack is back");
+        assert_eq!(sub.name, "Sub 1");
+        assert_eq!(
+            q.aux_bus_of(q.tracks.iter().position(|t| t.summing_stack).unwrap()),
+            sub.aux_bus
+        );
+    }
+
+    #[test]
+    fn a_file_without_stacks_loads_with_none() {
+        let doc = ProjectDoc {
+            tracks: vec![TrackDoc {
+                name: "Old".into(),
+                kind: TrackKindDoc::Aux,
+                ..TrackDoc::default()
+            }],
+            ..ProjectDoc::default()
+        };
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        assert!(
+            !q.tracks[0].summing_stack,
+            "no bus of its own, so not a Summing Stack"
+        );
+    }
+
+    #[test]
+    fn hostile_stack_fields_are_repaired_without_a_panic() {
+        let track = |name: &str, kind, indent: u8| TrackDoc {
+            name: name.into(),
+            kind,
+            indent,
+            ..TrackDoc::default()
+        };
+        let mut doc = ProjectDoc {
+            tracks: vec![
+                track("A", TrackKindDoc::Instrument, 200),
+                // An Aux flagged as a summing stack with no bus is not one.
+                TrackDoc {
+                    summing_stack: true,
+                    ..track("B", TrackKindDoc::Aux, 9)
+                },
+                // A summing flag on an instrument, and an output to a bus that does not exist.
+                TrackDoc {
+                    summing_stack: true,
+                    output: 999,
+                    ..track("C", TrackKindDoc::Instrument, 1)
+                },
+                // A real summing stack on bus 7.
+                TrackDoc {
+                    summing_stack: true,
+                    aux_bus: 7,
+                    ..track("Sub", TrackKindDoc::Aux, 0)
+                },
+                TrackDoc {
+                    output: 300,
+                    ..track("D", TrackKindDoc::Instrument, 3)
+                },
+            ],
+            ..ProjectDoc::default()
+        };
+        // A bus beyond the 256 there are is refused as an Aux bus too.
+        doc.tracks.push(TrackDoc {
+            summing_stack: true,
+            aux_bus: 300,
+            ..track("E", TrackKindDoc::Aux, 0)
+        });
+        let (q, _) = from_doc(&doc, Path::new("."), &egui::Context::default());
+        let got: Vec<(String, u8, bool, u16, u16)> = q
+            .tracks
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    t.indent,
+                    t.summing_stack,
+                    t.aux_bus,
+                    t.output,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("A".to_string(), 0, false, 0, 0),
+                ("B".to_string(), 0, false, 0, 0),
+                ("C".to_string(), 0, false, 0, 0),
+                ("Sub".to_string(), 0, true, 7, 0),
+                ("D".to_string(), 1, false, 0, 0),
+                ("E".to_string(), 0, false, 0, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_engine_sends_the_children_of_a_summing_stack_to_its_bus() {
+        let mut p = four();
+        let at = p.create_track_stack(&[1, 2], true).expect("a bus is free");
+        let bus = p.tracks[at].aux_bus;
+        let child = crate::engine_sync::route_of(&p, 2);
+        assert_eq!(child.output, bus);
+        let parent = crate::engine_sync::route_of(&p, at);
+        assert_eq!(
+            parent.bus_in, bus,
+            "the Aux strip plays the bus its children fill"
+        );
+        assert_eq!(parent.output, 0, "and it plays to Stereo Out");
+        assert_eq!(crate::engine_sync::route_of(&p, 0).output, 0);
     }
 }

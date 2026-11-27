@@ -32,6 +32,10 @@ pub enum LiveNote {
     Pressure {
         val: u8,
     },
+    /// The modulation wheel (controller 1), 0-127.
+    Modulation {
+        val: u8,
+    },
 }
 
 /// What [`update`] did, for the app to react to (selection, messages).
@@ -67,6 +71,8 @@ pub struct Recorder {
     played: Vec<(f64, LiveNote)>,
     /// The transport was running at the last frame.
     was_playing: bool,
+    /// Whether the count-in has started in this session (to distinguish before/after).
+    count_in: crate::count_in::CountIn,
 }
 
 impl Recorder {
@@ -102,7 +108,8 @@ fn record_track(p: &Project) -> Option<usize> {
 
 /// Call once per frame with the notes played since the last one.
 pub fn update(rec: &mut Recorder, p: &mut Project, input: &[LiveNote]) -> Outcome {
-    let want = p.recording && p.playing && !p.counting_in;
+    let active = rec.active();
+    let want = crate::count_in::wants_recording(p, &mut rec.count_in, active);
     remember_played(rec, p, input, want);
     let pedal_before = rec.pedal;
     for ev in input {
@@ -193,6 +200,11 @@ pub fn capture(rec: &mut Recorder, p: &mut Project) -> Option<(usize, usize)> {
             LiveNote::Pressure { val } => controls.push(Control {
                 start: now as f32,
                 num: CHANNEL_PRESSURE,
+                val: u16::from(val),
+            }),
+            LiveNote::Modulation { val } => controls.push(Control {
+                start: now as f32,
+                num: MODULATION_WHEEL,
                 val: u16::from(val),
             }),
         }
@@ -346,6 +358,11 @@ fn record(rec: &mut Recorder, p: &mut Project, t: usize, r: usize, input: &[Live
                 num: CHANNEL_PRESSURE,
                 val: u16::from(val),
             }),
+            LiveNote::Modulation { val } => region.controls.push(Control {
+                start: now as f32,
+                num: MODULATION_WHEEL,
+                val: u16::from(val),
+            }),
         }
     }
     // Held notes keep growing, and so does the region.
@@ -360,6 +377,8 @@ fn record(rec: &mut Recorder, p: &mut Project, t: usize, r: usize, input: &[Live
 
 /// The sustain pedal's controller number.
 pub const SUSTAIN: u8 = 64;
+/// The modulation wheel's controller number.
+pub const MODULATION_WHEEL: u8 = 1;
 
 /// The shortest note, in beats (a 64th note).
 const MIN_LEN: f32 = 0.0625;
@@ -443,6 +462,7 @@ mod tests {
 
     fn project() -> Project {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.truncate(1);
         p.tracks[0].regions.clear();
         p
@@ -538,6 +558,7 @@ mod tests {
     #[test]
     fn record_needs_an_instrument_track() {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.clear();
         p.recording = true;
         p.playing = true;
@@ -556,6 +577,34 @@ mod tests {
         p.tracks[0].regions.clear();
         assert_eq!(update(&mut rec, &mut p, &[on(60)]), Outcome::Finished(None));
         assert!(!rec.active());
+    }
+
+    #[test]
+    fn the_modulation_wheel_and_the_pitch_bend_from_the_typing_keys_are_recorded_as_controls() {
+        let mut p = project();
+        let mut rec = Recorder::default();
+        p.recording = true;
+        p.playing = true;
+        update(&mut rec, &mut p, &[]);
+        p.position_beats = 1.0;
+        update(
+            &mut rec,
+            &mut p,
+            &[
+                on(60),
+                LiveNote::Modulation { val: 76 },
+                LiveNote::Bend { val: 16383 },
+            ],
+        );
+        let controls = &p.tracks[0].regions[0].controls;
+        assert!(controls
+            .iter()
+            .any(|c| c.num == MODULATION_WHEEL && c.val == 76));
+        assert!(controls
+            .iter()
+            .any(|c| c.num == PITCH_BEND && c.val == 16383));
+        // (A recording also starts with the pedal's state.)
+        assert!(controls.len() >= 2);
     }
 
     #[test]
@@ -661,6 +710,7 @@ mod tests {
     #[test]
     fn a_region_that_moved_is_never_written_into() {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.truncate(1);
         p.tracks[0].regions.clear();
         let mut other = Track::new("Other", TrackKind::Instrument);
@@ -718,6 +768,42 @@ mod tests {
         p.counting_in = true;
         assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
         assert!(!rec.active());
+        p.counting_in = false;
+        assert!(matches!(
+            update(&mut rec, &mut p, &[]),
+            Outcome::Started(..)
+        ));
+    }
+
+    #[test]
+    fn an_aborted_count_in_does_not_start_the_next_recording_early() {
+        let mut p = project();
+        p.count_in = true;
+        let mut rec = Recorder::default();
+
+        // First attempt: the count-in starts, then the user stops before a take begins.
+        p.recording = true;
+        p.playing = true;
+        p.counting_in = true;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
+        p.playing = false;
+        p.recording = false;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
+
+        // The next attempt, in the frame before sync sends CountIn, must still wait.
+        p.recording = true;
+        p.playing = true;
+        p.counting_in = false;
+        assert_eq!(
+            update(&mut rec, &mut p, &[]),
+            Outcome::Nothing,
+            "a stale count-in must not start a take"
+        );
+        assert!(!rec.active());
+
+        // It starts only when the new count-in has finished.
+        p.counting_in = true;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
         p.counting_in = false;
         assert!(matches!(
             update(&mut rec, &mut p, &[]),

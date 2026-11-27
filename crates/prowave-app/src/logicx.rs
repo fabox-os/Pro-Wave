@@ -8,17 +8,17 @@
 //! Whatever the reader cannot decode yet is an empty field, so it is left out here and picked up
 //! as soon as the reader fills it in. The report lists what was not read.
 //!
-//! Plug-ins are found by their format and id, as `plugins::find` does for a project file. One
+//! Plug-ins are found by their format and id, as `hosted_plugins::find` does for a project file. One
 //! that is not installed keeps its slot and its saved state, and passes the sound through until
 //! it is installed (see `plugins::missing`). Stock Logic plug-ins are not hosted: a name Pro Wave
 //! has an effect for gives that effect with its default settings, and the rest are listed in the
 //! report. The report window says what was carried over and what was not.
 
+use crate::hosted_plugins::{self, Format, PluginInfo};
 use crate::i18n::{tr, trf};
 use crate::model::{
     Insert, Note, Project, Region, RegionParams, Track, TrackKind, MAX_BPM, MIN_BPM,
 };
-use crate::plugins::{self, Format, PluginInfo};
 use prowave_engine::{AudioFile, FxKind};
 use prowave_logicx_import as logic;
 use std::fmt::Write as _;
@@ -70,10 +70,10 @@ pub fn is_bundle(path: &Path) -> bool {
 pub fn import_into(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result<Report, String> {
     let full = read(path)?;
     let media = media_dir(path);
-    let mut report = map_into(p, &full, media.as_deref(), ctx, &plugins::find);
+    let mut report = map_into(p, &full, media.as_deref(), ctx, &hosted_plugins::find);
     // A plug-in is looked up in the catalog as it is at this moment: while the scan runs, one
     // that is installed may not be in it yet.
-    if plugins::scan_status() != plugins::Scan::Done && !report.missing.is_empty() {
+    if hosted_plugins::scan_status() != hosted_plugins::Scan::Done && !report.missing.is_empty() {
         report.notes.push(
             tr("The plug-in scan has not finished, so a plug-in shown as not found may still be found.")
                 .to_string(),
@@ -91,7 +91,7 @@ pub fn new_project(path: &Path, ctx: &egui::Context) -> Result<(Project, Report)
     p.selected_track = 0;
     p.name = full.info.name.clone();
     let media = media_dir(path);
-    let report = map_into(&mut p, &full, media.as_deref(), ctx, &plugins::find);
+    let report = map_into(&mut p, &full, media.as_deref(), ctx, &hosted_plugins::find);
     Ok((p, report))
 }
 
@@ -153,7 +153,7 @@ fn track_kind(kind: logic::TrackKind) -> Option<TrackKind> {
     }
 }
 
-/// Looks up an installed plug-in by format and id (`plugins::find` in the app, a fake catalog
+/// Looks up an installed plug-in by format and id (`hosted_plugins::find` in the app, a fake catalog
 /// in the tests).
 type Lookup<'a> = &'a dyn Fn(Format, &str) -> Option<PluginInfo>;
 
@@ -365,7 +365,7 @@ fn inserts_of(
                     report.with_settings += 1;
                 }
                 // The state goes to the plug-in exactly as the project stores it.
-                let mut insert = Insert::hosted(plugins::add(&info, slot.state.clone()));
+                let mut insert = Insert::new_hosted(hosted_plugins::add(&info, slot.state.clone()));
                 if let Some(bypass) = slot.bypass {
                     insert.bypass = bypass;
                 }
@@ -916,13 +916,13 @@ mod tests {
             &installed,
         );
         let insert = p.tracks[0].inserts[0];
-        assert_ne!(insert.plugin, 0);
+        assert_ne!(insert.hosted, 0);
         assert!(insert.bypass);
         assert_eq!(
-            plugins::info(insert.plugin),
+            hosted_plugins::info(insert.hosted),
             installed(Format::AudioUnit, PRO_Q_ID)
         );
-        assert_eq!(plugins::state(insert.plugin), Some(STATE.to_vec()));
+        assert_eq!(hosted_plugins::state(insert.hosted), Some(STATE.to_vec()));
         assert!(report.missing.is_empty());
         assert_eq!(report.with_settings, 1);
     }
@@ -955,7 +955,7 @@ mod tests {
             &nothing,
         );
         let insert = p.tracks[0].inserts[0];
-        let info = plugins::info(insert.plugin).unwrap();
+        let info = hosted_plugins::info(insert.hosted).unwrap();
         assert_eq!(info.format, Format::AudioUnit);
         assert_eq!(info.id, PRO_Q_ID);
         assert_eq!(info.name, "Pro-Q 4");
@@ -964,7 +964,7 @@ mod tests {
             "the manufacturer code, until the reader knows the vendor"
         );
         assert!(info.path.as_os_str().is_empty());
-        assert_eq!(plugins::state(insert.plugin), Some(STATE.to_vec()));
+        assert_eq!(hosted_plugins::state(insert.hosted), Some(STATE.to_vec()));
         assert_eq!(
             report.missing,
             [("Pro-Q 4".to_string(), "FabF".to_string())]
@@ -1321,10 +1321,10 @@ mod tests {
             let hosted = inst
                 .inserts
                 .iter()
-                .find(|i| i.plugin != 0)
+                .find(|i| i.hosted != 0)
                 .unwrap_or_else(|| panic!("a hosted plug-in on Inst 1: {report:?}"));
-            assert_eq!(plugins::name(hosted.plugin), "Pro-Q 4");
-            let state = plugins::state(hosted.plugin).unwrap_or_default();
+            assert_eq!(hosted_plugins::name(hosted.hosted), "Pro-Q 4");
+            let state = hosted_plugins::state(hosted.hosted).unwrap_or_default();
             assert!(!state.is_empty(), "the saved settings");
             let audio_3 = p
                 .tracks

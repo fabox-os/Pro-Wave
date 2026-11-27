@@ -60,8 +60,20 @@ fn region_bar_color(c: Color32) -> Color32 {
 /// Live notes the Piano Roll wants to play; `main` forwards them to the engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Audition {
-    On { pitch: u8, vel: u8, track: u16 },
-    Off { pitch: u8 },
+    On {
+        pitch: u8,
+        vel: u8,
+        track: u16,
+    },
+    Off {
+        pitch: u8,
+    },
+    /// A controller played live on a track: its number (128 is the pitch bend) and value.
+    Control {
+        track: u16,
+        number: u8,
+        value: u16,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -184,6 +196,25 @@ fn piano_step(snap: Snap, beat_px: f32, beats_per_bar: f64, beat_unit: f64) -> f
             _ => beat_unit as f32,
         },
         other => snap_step(other, beat_px, beats_per_bar, beat_unit) as f32,
+    }
+}
+
+/// Pixels a page-follow leaves between the view's left edge and the playhead.
+const FOLLOW_MARGIN: f32 = 8.0;
+
+/// The horizontal scroll that keeps the playhead on screen while the transport plays or records.
+/// `playhead_px` is the playhead in content pixels (beats times the beat width). While it is in
+/// the view, the scroll is unchanged; once it leaves the view on either side, the view pages so
+/// the playhead sits near its left edge, as Logic's Page follow does. The caller clamps the result
+/// to the content.
+pub fn follow_scroll(scroll_x: f32, view_w: f32, playhead_px: f32) -> f32 {
+    if !(scroll_x.is_finite() && view_w.is_finite() && playhead_px.is_finite()) {
+        return scroll_x;
+    }
+    if playhead_px >= scroll_x && playhead_px <= scroll_x + view_w {
+        scroll_x
+    } else {
+        (playhead_px - FOLLOW_MARGIN).max(0.0)
     }
 }
 
@@ -765,6 +796,10 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState) {
                 0x66
             }),
         );
+    }
+    // While the transport plays or records, the view follows the playhead (see `follow_scroll`).
+    if (p.playing || p.recording) && (0.0..=f64::from(len_beats)).contains(&position) {
+        v.scroll_x = follow_scroll(v.scroll_x, grid.width(), position as f32 * v.beat_px);
     }
     v.scroll_y = v.scroll_y.clamp(0.0, (content_h - grid.height()).max(0.0));
     v.scroll_x = v.scroll_x.clamp(0.0, (content_w - grid.width()).max(0.0));
@@ -1665,6 +1700,39 @@ mod tests {
         assert_eq!(piano_step(Snap::Smart, 10.0, 3.0, 0.5), 0.5);
         assert_eq!(piano_step(Snap::Smart, 100.0, 3.0, 0.5), 0.125);
         assert_eq!(piano_step(Snap::Beat, 100.0, 3.0, 0.5), 0.5);
+    }
+
+    #[test]
+    fn follow_keeps_the_view_while_the_playhead_is_visible() {
+        // Visible range is [100, 500]; a playhead inside it changes nothing.
+        assert_eq!(follow_scroll(100.0, 400.0, 300.0), 100.0);
+        assert_eq!(follow_scroll(100.0, 400.0, 100.0), 100.0);
+        assert_eq!(follow_scroll(100.0, 400.0, 500.0), 100.0);
+    }
+
+    #[test]
+    fn follow_pages_forward_when_the_playhead_leaves_the_right_edge() {
+        // Issue 150: once the playhead passes the visible range the view must page to it.
+        let scroll = follow_scroll(100.0, 400.0, 900.0);
+        assert_eq!(scroll, 900.0 - FOLLOW_MARGIN);
+        // And the playhead is then on screen.
+        assert!((scroll..=scroll + 400.0).contains(&900.0));
+    }
+
+    #[test]
+    fn follow_pages_back_when_the_playhead_is_before_the_view() {
+        // A loop back or a locate to the left.
+        assert_eq!(
+            follow_scroll(800.0, 400.0, 50.0),
+            (50.0 - FOLLOW_MARGIN).max(0.0)
+        );
+        assert_eq!(follow_scroll(800.0, 400.0, 2.0), 0.0);
+    }
+
+    #[test]
+    fn follow_ignores_a_non_finite_playhead() {
+        assert_eq!(follow_scroll(120.0, 400.0, f32::NAN), 120.0);
+        assert_eq!(follow_scroll(120.0, f32::INFINITY, 300.0), 120.0);
     }
 
     #[test]

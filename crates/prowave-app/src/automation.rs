@@ -42,9 +42,9 @@ fn current(t: &Track, target: AutoTarget) -> f32 {
             .inserts
             .get(slot as usize)
             .and_then(|i| {
-                if i.plugin != 0 {
+                if i.hosted != 0 {
                     // A hosted plug-in keeps its own settings, as positions 0..=1.
-                    return Some(crate::plugins::param(i.plugin, param as usize));
+                    return Some(crate::hosted_plugins::param(i.hosted, param as usize));
                 }
                 let info = i.kind.params().get(param as usize)?;
                 Some(info.to_norm(i.params[param as usize]))
@@ -122,8 +122,8 @@ fn set_control(t: &mut Track, target: AutoTarget, value: f32) {
         AutoTarget::Pan => t.pan = value.clamp(-1.0, 1.0),
         AutoTarget::Fx { slot, param } => {
             if let Some(ins) = t.inserts.get_mut(slot as usize) {
-                if ins.plugin != 0 {
-                    crate::plugins::set_param(ins.plugin, param as usize, value);
+                if ins.hosted != 0 {
+                    crate::hosted_plugins::set_param(ins.hosted, param as usize, value);
                 } else if let Some(info) = ins.kind.params().get(param as usize) {
                     if value.is_finite() {
                         ins.params[param as usize] = value.clamp(info.min, info.max);
@@ -177,9 +177,9 @@ pub fn lane_label(t: &Track, target: AutoTarget) -> String {
         AutoTarget::Volume => tr("Volume").to_string(),
         AutoTarget::Pan => tr("Pan").to_string(),
         AutoTarget::Fx { slot, param } => {
-            let hosted = t.inserts.get(slot as usize).filter(|i| i.plugin != 0);
+            let hosted = t.inserts.get(slot as usize).filter(|i| i.hosted != 0);
             if let Some(i) = hosted {
-                let param = crate::plugins::param_name(i.plugin, param as usize);
+                let param = crate::hosted_plugins::param_name(i.hosted, param as usize);
                 return format!("{} · {param}", i.name());
             }
             match t
@@ -355,8 +355,8 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
                         for (slot, ins) in t.inserts.iter().enumerate() {
                             // A lane names its parameter in one byte: a hosted plug-in's
                             // first 256 can be automated.
-                            let count = if ins.plugin != 0 {
-                                crate::plugins::param_count(ins.plugin).min(256)
+                            let count = if ins.hosted != 0 {
+                                crate::hosted_plugins::param_count(ins.hosted).min(256)
                             } else {
                                 ins.kind.params().len()
                             };

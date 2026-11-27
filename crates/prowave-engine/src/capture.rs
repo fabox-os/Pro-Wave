@@ -130,9 +130,28 @@ pub struct Recorded {
     pub frames: u64,
     pub sample_rate: u32,
     pub channels: u16,
+    /// How many frames at the start of the file are the audio that went by before the sound the
+    /// performer heard reached the program (the output latency plus the input's own delay).
+    /// They are kept in the file, never cut: a region that skips them lines the take up with the
+    /// song, and a wrong delay then costs a little alignment, never the whole take.
+    pub latency_frames: u64,
     /// Audio was lost: the ring overflowed, the file filled up, or the disk failed. The file
     /// holds what was written before.
     pub lost: bool,
+}
+
+/// The longest delay an input or an output is believed to have. Some audio systems report
+/// timestamps in clocks that do not agree (the "capture time" is zero, say), which came out as
+/// a delay of hours: the recording was then cut that much later and so never held a sample.
+const MAX_PLAUSIBLE_LATENCY_US: u64 = 500_000;
+
+/// `us` if it can be a real device delay, else 0 (unknown).
+fn plausible_latency(us: u64) -> u64 {
+    if us <= MAX_PLAUSIBLE_LATENCY_US {
+        us
+    } else {
+        0
+    }
 }
 
 /// State shared by the device callback, the writer thread and the UI.
@@ -184,19 +203,25 @@ where
     for (slot, p) in shared.peaks.iter().zip(peak).take(channels) {
         slot.fetch_max(p.to_bits(), Ordering::Relaxed);
     }
-    match producer.write_chunk_uninit(data.len()) {
+    // The chunk makes its samples visible to the writer when it drops, so the frame count is
+    // published only after that: a `Stop` that reads it can then always find those samples.
+    let pushed = match producer.write_chunk_uninit(data.len()) {
         Ok(chunk) => {
             chunk.fill_from_iter(
                 data.iter()
                     .map(|s| <f32 as FromSample<T>>::from_sample_(*s)),
             );
-            shared
-                .frames_pushed
-                .fetch_add((data.len() / channels) as u64, Ordering::Release);
+            true
         }
         Err(_) => {
             shared.overruns.fetch_add(1, Ordering::Relaxed);
+            false
         }
+    };
+    if pushed {
+        shared
+            .frames_pushed
+            .fetch_add((data.len() / channels) as u64, Ordering::Release);
     }
 }
 
@@ -290,6 +315,7 @@ struct Rec {
     file: WavFile,
     /// The first frame of the stream that belongs to the recording.
     from_frame: u64,
+    latency_frames: u64,
     frames: u64,
     lost: bool,
     /// The file can take no more (full, or the disk failed).
@@ -322,6 +348,7 @@ impl Rec {
 
     fn finish(self) -> Result<Recorded, CaptureError> {
         let (path, frames, lost) = (self.path, self.frames, self.lost);
+        let latency_frames = self.latency_frames;
         let (channels, sample_rate) = (self.file.channels, self.file.sample_rate);
         self.file.finish()?;
         Ok(Recorded {
@@ -329,6 +356,7 @@ impl Rec {
             frames,
             sample_rate,
             channels,
+            latency_frames,
             lost,
         })
     }
@@ -340,10 +368,12 @@ enum Ctl {
         path: PathBuf,
         source: InputSource,
         from_frame: u64,
+        latency_frames: u64,
         reply: Sender<Result<(), CaptureError>>,
     },
     Stop {
         id: u32,
+        up_to: u64,
         reply: Sender<Result<Recorded, CaptureError>>,
     },
 }
@@ -415,19 +445,50 @@ fn writer_loop(
                 path,
                 source,
                 from_frame,
+                latency_frames,
                 reply,
             }) => {
-                let result =
-                    start_rec(&path, source, from_frame, channels, sample_rate).map(|mut rec| {
-                        // The part that went by before this message was handled.
-                        let have = (history.len() / channels) as u64;
-                        history.make_contiguous();
-                        rec.feed(consumed - have, history.as_slices().0, channels);
-                        recs.push((id, rec));
-                    });
+                let result = start_rec(
+                    &path,
+                    source,
+                    from_frame,
+                    latency_frames,
+                    channels,
+                    sample_rate,
+                )
+                .map(|mut rec| {
+                    // The part that went by before this message was handled.
+                    let have = (history.len() / channels) as u64;
+                    history.make_contiguous();
+                    rec.feed(consumed - have, history.as_slices().0, channels);
+                    recs.push((id, rec));
+                });
                 let _ = reply.send(result);
             }
-            Some(Ctl::Stop { id, reply }) => {
+            Some(Ctl::Stop { id, up_to, reply }) => {
+                // Drain the ring up to the frames the device had delivered when Stop was
+                // requested, so a writer thread that fell behind does not lose the end of the
+                // take (or all of it). If the device stopped, the ring empties and we stop.
+                while consumed < up_to {
+                    let n = ring.slots() / channels * channels;
+                    if n == 0 {
+                        break;
+                    }
+                    scratch.clear();
+                    if let Ok(chunk) = ring.read_chunk(n) {
+                        let (a, b) = chunk.as_slices();
+                        scratch.extend_from_slice(a);
+                        scratch.extend_from_slice(b);
+                        chunk.commit_all();
+                    }
+                    for (_, rec) in &mut recs {
+                        rec.feed(consumed, &scratch, channels);
+                    }
+                    consumed += (scratch.len() / channels) as u64;
+                    history.extend(scratch.iter().copied());
+                    let extra = history.len().saturating_sub(history_samples);
+                    history.drain(..extra);
+                }
                 let result = match recs.iter().position(|(i, _)| *i == id) {
                     Some(at) => recs.remove(at).1.finish(),
                     None => Err(CaptureError::Closed),
@@ -454,6 +515,7 @@ fn start_rec(
     path: &Path,
     source: InputSource,
     from_frame: u64,
+    latency_frames: u64,
     channels: usize,
     sample_rate: u32,
 ) -> Result<Rec, CaptureError> {
@@ -468,6 +530,7 @@ fn start_rec(
         source,
         file: WavFile::create(path, source.file_channels(), sample_rate)?,
         from_frame,
+        latency_frames,
         frames: 0,
         lost: false,
         closed: false,
@@ -546,10 +609,12 @@ fn find_device(id: Option<&str>) -> Option<cpal::Device> {
     let hosts = hosts();
     if let Some(wanted) = id {
         for host in &hosts {
-            let found = host
-                .input_devices()
-                .ok()?
-                .find(|d| d.id().is_ok_and(|i| i.to_string() == wanted));
+            // A host that cannot list its inputs (JACK that is not running, say) is skipped, not
+            // the end of the search.
+            let Ok(mut devices) = host.input_devices() else {
+                continue;
+            };
+            let found = devices.find(|d| d.id().is_ok_and(|i| i.to_string() == wanted));
             if found.is_some() {
                 return found;
             }
@@ -664,6 +729,11 @@ impl Capture {
         &self.device_name
     }
 
+    /// Frames the device has delivered since it was opened (0 means it never called back).
+    pub fn frames_received(&self) -> u64 {
+        self.shared.frames_pushed.load(Ordering::Acquire)
+    }
+
     /// Callbacks whose audio was lost because the writer thread could not keep up.
     pub fn overruns(&self) -> u64 {
         self.shared.overruns.load(Ordering::Relaxed)
@@ -689,18 +759,19 @@ impl Capture {
 
     /// Starts recording `source` into the WAV file `path`. `latency_us` is the delay of what
     /// the track is playing from the program to the ear (the output latency): a performer
-    /// plays along with what they hear, so the recording is cut that much later, plus the
-    /// input's own delay, which lines it up with the song. Returns the recording's id.
+    /// plays along with what they hear, so the take sounds that much late, plus the input's own
+    /// delay. The file keeps every frame from the moment of the call; the delay is reported in
+    /// [`Recorded::latency_frames`], for the region to skip. Returns the recording's id.
     pub fn start(
         &mut self,
         path: &Path,
         source: InputSource,
         latency_us: u32,
     ) -> Result<u32, CaptureError> {
-        let total_us =
-            u64::from(latency_us) + u64::from(self.shared.latency_us.load(Ordering::Relaxed));
-        let skip = total_us * u64::from(self.sample_rate) / 1_000_000;
-        let from_frame = self.shared.frames_pushed.load(Ordering::Acquire) + skip;
+        let total_us = plausible_latency(u64::from(latency_us))
+            + plausible_latency(u64::from(self.shared.latency_us.load(Ordering::Relaxed)));
+        let latency_frames = total_us * u64::from(self.sample_rate) / 1_000_000;
+        let from_frame = self.shared.frames_pushed.load(Ordering::Acquire);
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         let (reply, answer) = mpsc::channel();
@@ -712,6 +783,7 @@ impl Capture {
                 path: path.to_path_buf(),
                 source,
                 from_frame,
+                latency_frames,
                 reply,
             })
             .map_err(|_| CaptureError::Closed)?;
@@ -723,12 +795,13 @@ impl Capture {
     /// written.
     pub fn stop(&mut self, id: u32) -> Result<Recorded, CaptureError> {
         // What the callback has delivered up to now reaches the file before it closes: the
-        // writer thread empties the ring before it looks at this message.
+        // writer thread empties the ring up to this frame count before it finishes the file.
+        let up_to = self.shared.frames_pushed.load(Ordering::Acquire);
         let (reply, answer) = mpsc::channel();
         self.ctl
             .as_ref()
             .ok_or(CaptureError::Closed)?
-            .send(Ctl::Stop { id, reply })
+            .send(Ctl::Stop { id, up_to, reply })
             .map_err(|_| CaptureError::Closed)?;
         answer.recv().map_err(|_| CaptureError::Closed)?
     }
@@ -762,9 +835,8 @@ where
             move |data: &[T], info: &InputCallbackInfo| {
                 let ts = info.timestamp();
                 let lag = ts.callback.duration_since(ts.capture).as_micros();
-                cb_shared
-                    .latency_us
-                    .store(lag.min(u128::from(u32::MAX)) as u32, Ordering::Relaxed);
+                let lag = plausible_latency(lag.min(u128::from(u32::MAX)) as u64);
+                cb_shared.latency_us.store(lag as u32, Ordering::Relaxed);
                 assert_no_alloc::assert_no_alloc(|| {
                     push(data, channels, &mut producer, &cb_shared);
                     push_monitor(data, &mut monitor);
@@ -872,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn the_latency_is_cut_from_the_start() {
+    fn the_latency_is_reported_and_no_audio_is_cut() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("late.wav");
         let (mut cap, mut tx, shared) = fake(1, 48_000);
@@ -881,12 +953,12 @@ mod tests {
         push(&ramp(0, 1000, 1), 1, &mut tx, &shared);
         settle();
         let done = cap.stop(id).unwrap();
-        assert_eq!(done.frames, 520);
         assert_eq!(
-            read_back(&path)[0],
-            4800.0,
-            "frame 480 is the first one kept"
+            done.frames, 1000,
+            "the file holds everything that was played"
         );
+        assert_eq!(done.latency_frames, 480, "the region skips these");
+        assert_eq!(read_back(&path)[0], 0.0, "frame 0 is the first one kept");
     }
 
     #[test]
@@ -906,6 +978,7 @@ mod tests {
                 path: path.clone(),
                 source: InputSource::Mono(0),
                 from_frame: 150,
+                latency_frames: 0,
                 reply,
             })
             .unwrap();
@@ -1039,5 +1112,36 @@ mod tests {
         assert_eq!(InputSource::Mono(0).needs(), 1);
         assert_eq!(InputSource::Stereo(2).needs(), 4);
         assert_eq!(InputSource::Stereo(0).file_channels(), 2);
+    }
+
+    #[test]
+    fn an_absurd_reported_delay_does_not_swallow_the_recording() {
+        // Some systems report a capture time that is not on the callback's clock: the input
+        // "lag" came out as hours and the recording was cut that much later, so it was empty.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("take.wav");
+        let (mut cap, mut tx, shared) = fake(1, 48_000);
+        shared.latency_us.store(u32::MAX, Ordering::Relaxed);
+        let id = cap.start(&path, InputSource::Mono(0), u32::MAX).unwrap();
+        let wave = vec![0.25f32; 48_000];
+        for block in wave.chunks(512) {
+            push(block, 1, &mut tx, &shared);
+        }
+        settle();
+        assert_eq!(cap.frames_received(), 48_000);
+        let done = cap.stop(id).unwrap();
+        assert_eq!(done.frames, 48_000, "every frame is kept");
+        assert_eq!(
+            done.latency_frames, 0,
+            "an absurd delay is taken as unknown"
+        );
+    }
+
+    #[test]
+    fn a_believable_delay_still_cuts_the_start() {
+        assert_eq!(plausible_latency(12_000), 12_000);
+        assert_eq!(plausible_latency(500_000), 500_000);
+        assert_eq!(plausible_latency(500_001), 0);
+        assert_eq!(plausible_latency(u64::from(u32::MAX)), 0);
     }
 }

@@ -17,17 +17,24 @@ mod clock;
 mod convolver;
 mod core;
 mod disk;
+pub mod drum_machine;
+pub mod epiano;
+mod flac;
 mod flex;
 mod fx;
 mod gain_smoothing;
 pub mod hydrogen;
+pub mod ir_file;
 #[cfg(not(target_arch = "wasm32"))]
 mod mapped;
 mod monitor;
 mod mtc;
 mod output;
+pub mod plugin;
 pub mod pult_eq;
 mod routing;
+pub mod sample_file;
+pub mod sampler;
 mod sf2;
 mod soundfont;
 mod synth;
@@ -43,8 +50,8 @@ pub use crate::capture::{
 };
 pub use crate::clock::{song_position, tick_index, ClockMessage, TICKS_PER_BEAT};
 pub use crate::convolver::{
-    ir_preview, ir_samples, ir_seconds, sd, volume_env, Convolver, BLOCK as CONVOLVER_BLOCK,
-    IR_NAMES, IR_PARAMS, MAX_IR_SECONDS,
+    ir_preview, ir_preview_with, ir_samples, ir_samples_with, ir_seconds, sd, volume_env,
+    Convolver, BLOCK as CONVOLVER_BLOCK, IR_NAMES, IR_PARAMS, MAX_IR_SECONDS,
 };
 pub use crate::core::{
     dsp_load, AudioClip, CaptureSink, ClipEdit, Command, ControlEvent, EngineCore, EngineState,
@@ -52,27 +59,34 @@ pub use crate::core::{
     MAX_TRACKS,
 };
 pub use crate::disk::{
-    ring_blocks_for, AudioError, AudioFile, DiskThread, RING_BLOCKS, RING_BLOCKS_MAX,
+    ring_blocks_for, AudioError, AudioFile, DiskThread, FileSpan, RING_BLOCKS, RING_BLOCKS_MAX,
 };
+pub use crate::flac::{encode_flac, write_flac};
 pub use crate::flex::{
     detect_notes, hz_to_midi, pitch_track, shift_pitch, warp, write_wav, DetectedNote, FlexMode,
     PitchShift, WarpPoint, MAX_POINTS as MAX_FLEX_POINTS,
 };
 pub use crate::fx::{
-    eq_response_db, response_db, Chain, ExternalFx, Fx, FxKind, ParamInfo, Pdc, AMP_CABS,
-    AMP_MODELS, EXTERNAL_BLOCK, MAX_FX_PARAMS, MAX_INSERTS,
+    eq_response_db, response_db, Chain, Fx, FxKind, ParamInfo, Pdc, AMP_CABS, AMP_MODELS,
+    MAX_FX_PARAMS, MAX_INSERTS,
 };
 pub use crate::monitor::{InputFeed, MonitorTrack, MAX_MONITORS};
 pub use crate::mtc::{
     full_frame, quarter_frame_data, rate_code, rate_of_code, MtcDecoder, MtcEvent, MtcGenerator,
     MtcMessage,
 };
-pub use crate::output::{peak_of, Engine, EngineError};
+pub use crate::output::{
+    buffer_choices, buffer_range, output_devices, peak_of, Engine, EngineError, OutputDevice,
+    BUFFER_CHOICES,
+};
+pub use crate::plugin::{BlockEffect, PLUGIN_BLOCK};
 pub use crate::routing::{
     curve_shape, lane_value, send_gain, AutoLane, AutoPoint, AutoTarget, Route, SendSpec,
     MAX_AUTO_POINTS, MAX_BUSES, MAX_SENDS,
 };
-pub use crate::soundfont::{PresetInfo, SfPlayer, SoundFontBank, MAX_SOUNDFONT_BYTES};
+pub use crate::soundfont::{
+    PresetInfo, SfPlayer, SoundFontBank, MAX_SOUNDFONT_BYTES, PITCH_BEND_CONTROL,
+};
 pub use crate::synth::{Kit, SynthPatch, VoiceKind, Wave};
 pub use crate::tempo_map::{
     MusicalPosition, SignatureEvent, Smpte, SmpteRate, TempoCurve, TempoEvent, TempoMap, MAX_BPM,

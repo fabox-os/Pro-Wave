@@ -74,7 +74,19 @@ const SUBMENUS: &[(&str, &[&str])] = &[
         ],
     ),
     ("Movie", &["Open Movie…", "Remove Movie"]),
-    ("Import", &["Audio File…", "MIDI File…", "Other Projects…"]),
+    (
+        "Import",
+        &[
+            "Audio File…",
+            "MIDI File…",
+            "MusicXML Score…",
+            "Guitar Pro…",
+            "Hydrogen Song…",
+            "REX Loop…",
+            "LogicX Project (Preview)…",
+            "Other Projects…",
+        ],
+    ),
     (
         "Export",
         &[
@@ -281,6 +293,7 @@ const WINDOW: &[&str] = &[
     "Smart Tempo",
     "Piano Roll",
     "Mixer",
+    "Show Musical Typing",
     "Plugin Manager",
     "Video",
     "-",
@@ -306,6 +319,7 @@ const LANGUAGE: &[&str] = &[
     "Français",
     "Deutsch",
     "Español",
+    "Italiano",
     "Português (Portugal)",
     "Português (Brasil)",
     "Filipino",
@@ -441,6 +455,10 @@ fn shortcut(label: &str) -> Option<KeyboardShortcut> {
         "Show Inspector" => Key::I,
         "Show List Editors" => Key::D,
         "Show Mixer" => Key::X,
+        // Logic's key command for Musical Typing.
+        "Show Musical Typing" => {
+            return Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::K));
+        }
         _ => return None,
     };
     Some(KeyboardShortcut::new(Modifiers::NONE, key))
@@ -509,7 +527,7 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Configure Track Header…" | "Show Master Track" => true,
         // Mix > Edit Groups…: with no group yet it still opens, to make the first one.
         "Edit Groups…" => true,
-        // Window > Plugin Manager: the installed plug-ins and the ones in use.
+        "Show Musical Typing" => true,
         "Plugin Manager" => true,
         // Opens the Space Designer on the selected track (adding one when it has none). The
         // mastering presets go on the Stereo Out strip (the master bus).
@@ -545,6 +563,12 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         "Audio File…" => true,
         // File > Import > Other Projects…: imports a GarageBand bundle's audio.
         "Other Projects…" => true,
+        // File > Import > MusicXML / Guitar Pro / Hydrogen Song: any file the readers accept.
+        "MusicXML Score…"
+        | "Guitar Pro…"
+        | "Hydrogen Song…"
+        | "REX Loop…"
+        | "LogicX Project (Preview)…" => true,
         // File > Bounce > Project or Section…: something must be there to bounce, and one
         // bounce at a time.
         "Project or Section…" => !s.bouncing && p.tracks.iter().any(|t| !t.regions.is_empty()),
@@ -573,6 +597,8 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         // File > Show in File Manager: a project that has been saved is on disk.
         "Show in File Manager" => s.has_path,
         "Delete Track" => p.tracks.len() > 1,
+        // A stack needs two or more selected tracks to put into it.
+        "Create Track Stack…" => s.tracks.selected_tracks(p).len() >= 2,
         "Release Track Stack" => p
             .tracks
             .get(p.selected_track)
@@ -593,7 +619,6 @@ pub(crate) fn enabled(label: &str, p: &Project, s: &crate::UiState) -> bool {
         | "New Aux Track"
         | "New VCA Track"
         | "New External MIDI Track"
-        | "Create Track Stack…"
         | "Go to Beginning"
         | "Go to End"
         | "Go to Left Locator"
@@ -693,6 +718,14 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         }
         "Show Master Track" => p.show_master_track = !p.show_master_track,
         "Edit Groups…" => s.show_groups = true,
+        // Window > Show Musical Typing (Cmd+K): the computer keyboard plays the selected
+        // instrument; closing it lets go of every key.
+        "Show Musical Typing" => {
+            s.typing.open = !s.typing.open;
+            if !s.typing.open {
+                s.typing.release_all();
+            }
+        }
         "Plugin Manager" => s.show_plugin_manager = true,
         "Select All" => s.tracks.select_all(p),
         "Join" => crate::region_edit::join_selected(p, &mut s.tracks),
@@ -772,6 +805,13 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
         }
         "MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Import),
         "Audio File…" => s.import_audio_cmd = true,
+        "MusicXML Score…" => s.import_cmd = Some(crate::score_import::ImportCmd::MusicXml),
+        "Guitar Pro…" => s.import_cmd = Some(crate::score_import::ImportCmd::GuitarPro),
+        "Hydrogen Song…" => s.import_cmd = Some(crate::score_import::ImportCmd::Hydrogen),
+        "REX Loop…" => s.import_cmd = Some(crate::score_import::ImportCmd::Rex),
+        "LogicX Project (Preview)…" => {
+            s.import_cmd = Some(crate::score_import::ImportCmd::LogicX)
+        }
         "Other Projects…" => s.open_band_cmd = true,
         "Selection as MIDI File…" => s.midi_cmd = Some(crate::midi_file::MidiCmd::Export),
         "Score as MusicXML…" => s.export_xml_cmd = true,
@@ -854,10 +894,8 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
             let w = s.tracks.lanes_w;
             crate::tracks_area::zoom_to_fit(p, &mut s.tracks, w);
         }
-        "Create Track Stack…" => {
-            p.create_track_stack(p.selected_track);
-            forget_region_selection(s);
-        }
+        // Track > Create Track Stack…: the dialog asks which kind, for the selected tracks.
+        "Create Track Stack…" => s.stack_dialog.open(),
         "Bigger Interface" | "Smaller Interface" | "Actual Interface Size" => {
             let dir = match label {
                 "Bigger Interface" => 1,
@@ -1111,6 +1149,10 @@ pub fn handle_keys(ctx: &egui::Context, p: &mut Project, s: &mut crate::UiState)
         return;
     }
     for label in ["Show Library", "Show Inspector", "Show Mixer"] {
+        // With Musical Typing open the letter keys are notes (Y, I and X included).
+        if s.typing.open {
+            break;
+        }
         if let Some(k) = shortcut(label) {
             if ctx.input_mut(|i| i.consume_shortcut(&k)) {
                 apply(label, p, s);
@@ -1137,6 +1179,7 @@ pub fn handle_keys(ctx: &egui::Context, p: &mut Project, s: &mut crate::UiState)
         "Bigger Interface",
         "Smaller Interface",
         "Actual Interface Size",
+        "Show Musical Typing",
     ] {
         if let Some(k) = shortcut(label) {
             if ctx.input_mut(|i| i.consume_shortcut(&k)) {
@@ -1248,6 +1291,7 @@ mod tests {
                         s.import_audio_cmd,
                         s.export_xml_cmd,
                         s.open_band_cmd,
+                        s.import_cmd,
                     ),
                 ),
                 (
@@ -1260,7 +1304,7 @@ mod tests {
                     p.header_hidden.len(),
                     s.track_dialog.is_some(),
                     p.tracks.get(p.selected_track).is_some_and(|t| t.rec),
-                    (s.show_groups, s.show_plugin_manager)
+                    (s.show_groups, s.typing.open, s.show_plugin_manager)
                 ),
                 (
                     s.tracks.show_tempo,
@@ -1432,22 +1476,26 @@ mod tests {
     }
 
     #[test]
-    fn track_stack_entries_group_and_release_the_selected_track() {
+    fn create_track_stack_needs_two_tracks_and_opens_the_dialog() {
         let (mut p, mut s) = (Project::demo(), crate::UiState::new());
         assert!(TRACK.contains(&"Create Track Stack…") && TRACK.contains(&"Release Track Stack"));
         p.selected_track = 2;
         s.tracks.select_only(2, 0);
-        let n = p.tracks.len();
+        assert!(
+            !enabled("Create Track Stack…", &p, &s),
+            "one track is not enough"
+        );
+        s.tracks.click_track(&mut p, 3, false, true);
+        assert!(enabled("Create Track Stack…", &p, &s));
         apply("Create Track Stack…", &mut p, &mut s);
+        assert!(s.stack_dialog.open, "the dialog asks which kind to make");
+        // The dialog's Create makes the stack from the tracks (Folder Stack by default).
+        let n = p.tracks.len();
+        let picked = s.tracks.selected_tracks(&p);
+        assert!(p.create_track_stack(&picked, false).is_some());
         assert_eq!(p.tracks.len(), n + 1);
-        assert_eq!(
-            (p.tracks[2].kind, p.tracks[3].indent),
-            (TrackKind::Folder, 1)
-        );
-        assert_eq!(
-            s.tracks.selected, None,
-            "indexes moved, so the selection is dropped"
-        );
+        assert_eq!(p.tracks[2].kind, TrackKind::Folder);
+        assert_eq!((p.tracks[3].indent, p.tracks[4].indent), (1, 1));
         apply("Release Track Stack", &mut p, &mut s);
         assert_eq!(p.tracks.len(), n);
         assert!(p

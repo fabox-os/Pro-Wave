@@ -2,7 +2,9 @@
 //! `cargo test -p prowave-plugin-host --test installed -- --ignored --nocapture`.
 //! `PROWAVE_TEST_PLUGINS` narrows the files scanned to those whose path contains it.
 
-use prowave_plugin_host::{installed, load, scan_audio_units, scan_file, Format, PluginInfo};
+use prowave_plugin_host::{
+    installed, load, load_sandboxed, scan_audio_units, scan_file, Format, PluginInfo,
+};
 
 fn exercise(info: &PluginInfo) {
     let instance = match load(info, 48_000.0, 64) {
@@ -119,4 +121,53 @@ fn installed_plugins_show_their_own_window() {
             instance.crashed()
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+fn assert_editor_is_available(format: Format) {
+    let display = std::env::var_os("DISPLAY").expect("run this test on an X11 display");
+    assert!(
+        !display.to_string_lossy().is_empty(),
+        "DISPLAY is set but empty"
+    );
+    let only = std::env::var("PROWAVE_TEST_PLUGINS").unwrap_or_default();
+    let program = std::path::Path::new(env!("CARGO_BIN_EXE_prowave-plugin-host"));
+    for path in installed(format) {
+        if !path.to_string_lossy().contains(&only) {
+            continue;
+        }
+        let found = match scan_file(format, &path) {
+            Ok(found) => found,
+            Err(error) => {
+                println!("{}: {error}", path.display());
+                continue;
+            }
+        };
+        for info in found {
+            match load_sandboxed(&info, 48_000.0, 64, program) {
+                Ok(instance) => {
+                    if instance.has_editor() {
+                        println!("{:?} {}: editor available", info.format, info.name);
+                        return;
+                    }
+                }
+                Err(error) => println!("{:?} {}: {error}", info.format, info.name),
+            }
+        }
+    }
+    panic!("no installed {format:?} plug-in reported an editor on DISPLAY");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs CLAP plug-ins installed on this computer, and a screen"]
+fn clap_editor_is_available_on_x11() {
+    assert_editor_is_available(Format::Clap);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs VST3 plug-ins installed on this computer, and a screen"]
+fn vst3_editor_is_available_on_x11() {
+    assert_editor_is_available(Format::Vst3);
 }

@@ -99,6 +99,10 @@ pub struct RegionDoc {
     pub comp: Vec<CompDoc>,
     /// Path inside the archive (`media/…`) for audio regions.
     pub audio: Option<String>,
+    /// Audio regions: where the sound starts in that file, in the file's own frames, and how
+    /// many frames it plays (none: to the end). Older files have neither: the whole file.
+    pub audio_start: u64,
+    pub audio_frames: Option<u64>,
     pub mute: bool,
     /// Playback quantize grid in beats.
     pub quantize: Option<f32>,
@@ -235,7 +239,7 @@ pub struct TrackDoc {
     pub velocity: i8,
     pub key_limit: (u8, u8),
     pub vel_limit: (u8, u8),
-    pub send_bus: Option<u8>,
+    pub send_bus: Option<u16>,
     pub send_level: f32,
     pub send_pre: bool,
     /// The effects of the channel strip, first to last (`inserts` has their names for older
@@ -263,6 +267,9 @@ pub struct TrackDoc {
     pub indent: u8,
     /// A `Folder` track whose tracks are hidden in the Tracks area.
     pub folded: bool,
+    /// An Aux strip that is the parent of a Summing Stack (its children send to its bus). Files
+    /// from before Summing Stacks have none.
+    pub summing_stack: bool,
     /// The `Vca` track (its index in `tracks`) that controls this track's level.
     pub vca: Option<usize>,
     /// External MIDI tracks: the MIDI output port (by name) and the channel, 1-16.
@@ -275,6 +282,12 @@ pub struct TrackDoc {
     pub soundfont: Option<String>,
     pub soundfont_bank: u16,
     pub soundfont_program: u8,
+    /// The Sampler the track plays (none: not a Sampler).
+    pub sampler: Option<SamplerDoc>,
+    /// The dials of an Electric Piano the track plays (none: not an Electric Piano).
+    pub epiano: Option<Vec<f32>>,
+    /// The Drum Machine the track plays (none: not a Drum Machine).
+    pub drums: Option<DrumsDoc>,
     /// The icon the user picked (`IconKind::name`); absent or unknown names give the automatic one.
     pub icon: Option<String>,
     /// Audio tracks: the first input channel they record (0 is Input 1), and whether they
@@ -282,7 +295,10 @@ pub struct TrackDoc {
     pub input: u16,
     pub input_stereo: bool,
     /// The bus the track plays into; 0 is Stereo Out.
-    pub output: u8,
+    pub output: u16,
+    /// The bus an Aux track was made to listen to; 0 is the bus of its rank among the Aux
+    /// tracks.
+    pub aux_bus: u16,
     /// MIDI FX, first to last.
     pub midi_fx: Vec<MidiFxDoc>,
     /// The Groove Track, and the tracks that follow it.
@@ -299,19 +315,23 @@ pub struct InsertDoc {
     pub kind: String,
     pub bypass: bool,
     pub params: Vec<f32>,
-    /// A hosted plug-in (CLAP, VST3, Audio Unit) instead of one of Pro Wave's effects; `kind`
-    /// is then its name and `params` is empty.
+    /// A Space Designer's impulse-response file (its path), when it plays one.
+    pub ir_file: Option<String>,
+    /// A hosted plug-in (LADSPA, CLAP, VST3, Audio Unit) instead of one of Pro Wave's effects;
+    /// `kind` is then its name. A LADSPA effect's settings are the insert's `params`; the other
+    /// formats keep theirs in `PluginDoc::state`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginDoc>,
 }
 
-/// A hosted plug-in in an effect slot: which one, and its own state.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+/// A hosted plug-in in an effect slot: which one, and for most formats its own state.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct PluginDoc {
-    /// "CLAP", "VST3" or "Audio Unit".
+    /// "LADSPA", "CLAP", "VST3" or "Audio Unit".
     pub format: String,
-    /// What names the plug-in in its format: a CLAP id, a VST3 class id, an Audio Unit's codes.
+    /// What names the plug-in in its format: a CLAP id, a VST3 class id, an Audio Unit's codes
+    /// (empty for LADSPA, which uses `label` and `unique_id`).
     pub id: String,
     pub name: String,
     pub vendor: String,
@@ -320,6 +340,49 @@ pub struct PluginDoc {
     pub path: String,
     /// The plug-in's state as it gave it, in hexadecimal (empty: none).
     pub state: String,
+    /// LADSPA: the library file when the project was saved (on another machine the file name
+    /// is looked for in the plug-in folders), and which plug-in in it.
+    pub library: String,
+    pub label: String,
+    pub unique_id: u64,
+}
+
+/// A track's Sampler in a project file: where its sounds come from and its dials.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct SamplerDoc {
+    /// `sfz`, `exs` or `audio`.
+    pub kind: String,
+    /// The instrument or audio file.
+    pub path: String,
+    /// For `audio`: the key the sample sounds at, and whether it loops.
+    pub root_key: u8,
+    pub looped: bool,
+    /// The dials (Level, Attack, Release).
+    pub params: Vec<f32>,
+}
+
+/// A track's Drum Machine in a project file: its sixteen pads.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct DrumsDoc {
+    pub pads: Vec<PadDoc>,
+}
+
+/// One drum pad in a project file.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct PadDoc {
+    /// The drum: `Kick`, `Snare`, `Sample`…
+    pub kind: String,
+    pub tune: f32,
+    pub decay: f32,
+    pub tone: f32,
+    pub level_db: f32,
+    pub pan: f32,
+    pub choke: u8,
+    /// The sample file of a `Sample` pad.
+    pub sample: Option<String>,
 }
 
 /// The automation lane of one effect parameter.
@@ -367,7 +430,7 @@ impl Default for GroupDoc {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct SendDoc {
-    pub bus: u8,
+    pub bus: u16,
     pub level: f32,
     pub pre: bool,
 }
@@ -426,6 +489,7 @@ impl Default for TrackDoc {
             height: 1.0,
             indent: 0,
             folded: false,
+            summing_stack: false,
             vca: None,
             midi_port: None,
             midi_channel: 1,
@@ -434,10 +498,14 @@ impl Default for TrackDoc {
             soundfont: None,
             soundfont_bank: 0,
             soundfont_program: 0,
+            sampler: None,
+            epiano: None,
+            drums: None,
             icon: None,
             input: 0,
             input_stereo: false,
             output: 0,
+            aux_bus: 0,
             midi_fx: Vec::new(),
             groove: false,
             follow_groove: false,
@@ -918,6 +986,23 @@ mod tests {
         load(&file, &out).unwrap();
         assert!(!dir.path().join("escape.txt").exists());
         assert!(!out.join("other").exists());
+    }
+
+    #[test]
+    fn a_region_saved_before_the_part_fields_plays_its_whole_file() {
+        // Files from before the split work have neither field: the defaults are the whole file.
+        let old: RegionDoc =
+            serde_json::from_str(r#"{"name":"Take","audio":"media/0_take.wav","len_bars":4.0}"#)
+                .unwrap();
+        assert_eq!((old.audio_start, old.audio_frames), (0, None));
+        let saved = RegionDoc {
+            audio_start: 5,
+            audio_frames: Some(9),
+            ..RegionDoc::default()
+        };
+        let back: RegionDoc =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!((back.audio_start, back.audio_frames), (5, Some(9)));
     }
 
     #[test]

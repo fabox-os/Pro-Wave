@@ -6,7 +6,9 @@
 //! bundle). A library is loaded once and never unloaded: unloading code that may still have
 //! threads or static data is where hosts crash.
 
-use crate::{buffer_text, c_text, Backend, Error, Format, ParamInfo, PluginInfo, MAX_CHANGES};
+use crate::{
+    buffer_text, c_text, Backend, EditorParent, Error, Format, ParamInfo, PluginInfo, MAX_CHANGES,
+};
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -477,12 +479,30 @@ static HOST_GUI: HostGui = HostGui {
     closed: host_closed,
 };
 
-/// The window API this system's plug-in views use (none where views are not hosted yet).
-const WINDOW_API: Option<&CStr> = if cfg!(target_os = "macos") {
-    Some(c"cocoa")
-} else {
-    None
-};
+/// CLAP's X11 window API id, from `CLAP_WINDOW_API_X11` in `clap/ext/gui.h`.
+#[cfg(target_os = "linux")]
+pub(crate) const CLAP_X11_API: &CStr = c"x11";
+
+/// CLAP's `clap_xwnd`: the X11 window id, with no display pointer in the ABI handle.
+#[cfg(target_os = "linux")]
+#[repr(transparent)]
+pub(crate) struct ClapX11Window(pub(crate) std::os::raw::c_ulong);
+
+#[cfg(target_os = "linux")]
+impl ClapX11Window {
+    /// The pointer-sized value CLAP reads as its `clap_window_t.x11` union member.
+    fn handle(&self) -> *mut c_void {
+        self.0 as usize as *mut c_void
+    }
+}
+
+/// The window API this system's plug-in views use (none on other systems).
+#[cfg(target_os = "macos")]
+const WINDOW_API: Option<&CStr> = Some(c"cocoa");
+#[cfg(target_os = "linux")]
+const WINDOW_API: Option<&CStr> = Some(CLAP_X11_API);
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+const WINDOW_API: Option<&CStr> = None;
 
 /// # Safety
 /// `host` is null or the `Host` this module made, whose `data` is the backend's `HostState`.
@@ -889,13 +909,21 @@ impl Backend for ClapBackend {
         }
     }
 
-    fn main_editor_open(&self, parent: *mut c_void) -> Option<(u32, u32)> {
+    fn main_editor_open(&self, parent: EditorParent) -> Option<(u32, u32)> {
+        let handle = match parent {
+            #[cfg(target_os = "macos")]
+            EditorParent::Cocoa(view) => view,
+            #[cfg(target_os = "linux")]
+            EditorParent::X11 { window, .. } => {
+                ClapX11Window(window as std::os::raw::c_ulong).handle()
+            }
+        };
         let api = WINDOW_API?;
         // SAFETY: a non-null extension is static data of the plug-in.
         let gui = unsafe { self.gui_ext.as_ref() }?;
         let window = GuiWindow {
             api: api.as_ptr(),
-            handle: parent,
+            handle,
         };
         let (mut width, mut height) = (0u32, 0u32);
         // SAFETY: the extension's functions on the main thread, in CLAP's order: create, put
@@ -1043,5 +1071,26 @@ impl Drop for ClapBackend {
                 destroy(self.plugin);
             }
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::{ClapX11Window, CLAP_X11_API};
+    use std::os::raw::c_ulong;
+
+    #[test]
+    fn clap_uses_the_x11_window_api() {
+        assert_eq!(CLAP_X11_API.to_bytes(), b"x11");
+    }
+
+    #[test]
+    fn clap_x11_window_handle_has_the_abi_layout() {
+        assert_eq!(
+            std::mem::size_of::<ClapX11Window>(),
+            std::mem::size_of::<c_ulong>()
+        );
+        let window = ClapX11Window(42);
+        assert_eq!(window.handle() as usize, 42);
     }
 }

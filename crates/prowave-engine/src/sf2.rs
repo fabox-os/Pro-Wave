@@ -93,8 +93,10 @@ pub fn build(name: &str, samples: &[Sample], presets: &[Preset]) -> Vec<u8> {
             igen.extend_from_slice(&gen(43, range(zone.key_lo, zone.key_hi)));
             igen.extend_from_slice(&gen(44, range(zone.vel_lo, zone.vel_hi)));
             igen.extend_from_slice(&gen(58, u16::from(zone.root_key)));
-            igen.extend_from_slice(&gen(53, zone.sample as u16));
             igen.extend_from_slice(&gen(48, zone.attenuation as u16));
+            // The sample comes last: a zone whose last generator is not the sample is a global
+            // zone to a SoundFont reader, and plays nothing.
+            igen.extend_from_slice(&gen(53, zone.sample as u16));
             gen_index += 5;
             zone_index += 1;
         }

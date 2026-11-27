@@ -8,6 +8,7 @@ use crate::automation;
 use crate::i18n::{tr, trf};
 use crate::mixer::Meters;
 use crate::model::{AutoTarget, Insert, Project, Track};
+use crate::plugin_ui_prefs::PluginUiMode;
 use crate::UiState;
 use egui::{
     pos2, vec2, Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, Sense,
@@ -58,6 +59,8 @@ enum Family {
 
 fn family(kind: FxKind) -> (Family, &'static str, Color32) {
     match kind {
+        // A plug-in has its own window (a LADSPA one `plugin_rack`, a hosted one `plugin_window`).
+        FxKind::Plugin => (Family::Filter, "Plug-in", FILTER_TEAL),
         FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => (Family::Eq, "EQ", EQ_BLUE),
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => {
             (Family::Dynamics, "Dynamics", DYN_AMBER)
@@ -66,8 +69,6 @@ fn family(kind: FxKind) -> (Family, &'static str, Color32) {
         FxKind::Delay | FxKind::Chorus | FxKind::Phaser => (Family::Time, "Time", TIME_BLUE),
         FxKind::Overdrive | FxKind::Amp => (Family::Drive, "Drive", DRIVE_RUST),
         FxKind::Filter => (Family::Filter, "Filter", FILTER_TEAL),
-        // A hosted plug-in has its own window (`plugin_window`), not a family's.
-        FxKind::External => (Family::Filter, "Plug-in", FILTER_TEAL),
     }
 }
 
@@ -99,8 +100,8 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
     };
     // One plug-in window at a time, as in Logic with its Link button on: another slot's
     // window takes the place of the one that was open.
-    forget_editor(s, (insert.plugin != 0).then_some(insert.plugin));
-    if insert.plugin != 0 {
+    forget_editor(s, (insert.hosted != 0).then_some(insert.hosted));
+    if insert.hosted != 0 {
         plugin_window(ctx, p, s, ti, slot, insert);
         return;
     }
@@ -136,9 +137,9 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
     }
     let mut open = true;
     let title = if master {
-        format!("{} · {}", tr("Stereo Out"), insert.name())
+        format!("{} · {}", tr("Stereo Out"), insert.label())
     } else {
-        format!("{} · {}", p.tracks[ti].name, insert.name())
+        format!("{} · {}", p.tracks[ti].name, insert.label())
     };
     let beat = p.position_beats;
     let mut edited = insert;
@@ -164,6 +165,8 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
                     ui.add_space(10.0);
                     if edited.kind == FxKind::Amp {
                         amp_faceplate(ui, &mut edited, track, slot, beat, &mut edits);
+                    } else if edited.kind == FxKind::Plugin {
+                        plugin_rack(ui, &edited, track, slot, beat, accent, &mut edits);
                     } else {
                         knob_rack(ui, &mut edited, track, slot, beat, accent, &mut edits);
                     }
@@ -223,11 +226,35 @@ pub struct EditorWindow {
 /// instead.
 const EDITOR_GRACE: f64 = 2.0;
 
+/// Which of Logic's two hosted plug-in views to draw: its own window or the parameter sliders.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PluginView {
+    Sliders,
+    Editor,
+}
+
+/// The view for one frame: sliders when there is no usable editor, otherwise a one-off choice
+/// from the insert's menu, otherwise the saved preference (sliders by default).
+pub(crate) fn plugin_view(
+    has_editor: bool,
+    crashed: bool,
+    preferred: PluginUiMode,
+    explicit: Option<PluginUiMode>,
+) -> PluginView {
+    if crashed || !has_editor {
+        return PluginView::Sliders;
+    }
+    match explicit.unwrap_or(preferred) {
+        PluginUiMode::Sliders => PluginView::Sliders,
+        PluginUiMode::Editor => PluginView::Editor,
+    }
+}
+
 /// Closes the plug-in window that is not the one the Mixer has open any more.
 fn forget_editor(s: &mut UiState, keep: Option<u32>) {
     if let Some(editor) = s.mixer.plugin_editor {
         if keep != Some(editor.plugin) {
-            if let Some(instance) = crate::plugins::instance(editor.plugin) {
+            if let Some(instance) = crate::hosted_plugins::instance(editor.plugin) {
                 instance.close_editor();
             }
             s.mixer.plugin_editor = None;
@@ -255,17 +282,27 @@ fn plugin_window(
     } else {
         p.tracks[ti].name.clone()
     };
-    let instance = crate::plugins::instance(insert.plugin);
-    let info = crate::plugins::info(insert.plugin);
-    let crashed = crate::plugins::crashed(insert.plugin);
+    let instance = crate::hosted_plugins::instance(insert.hosted);
+    let info = crate::hosted_plugins::info(insert.hosted);
+    let crashed = crate::hosted_plugins::crashed(insert.hosted);
+    let has_editor = !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
+    let view = plugin_view(
+        has_editor,
+        crashed,
+        s.mixer.preferred_plugin_ui,
+        s.mixer.plugin_view_override,
+    );
+    if view == PluginView::Sliders {
+        // Controls (or a plug-in without a usable view) must not leave its window behind.
+        forget_editor(s, None);
+    }
     let mut open = true;
     let mut bypass = insert.bypass;
     let mut reload = false;
     let now = ctx.input(|i| i.time);
 
     // The Editor view: the plug-in's own window, until it is closed there.
-    let wants_editor =
-        !s.mixer.plugin_controls && !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
+    let wants_editor = view == PluginView::Editor;
     if let (true, Some(instance)) = (wants_editor, &instance) {
         if instance.take_power_click() {
             bypass = !bypass;
@@ -274,7 +311,7 @@ fn plugin_window(
         let editor = s.mixer.plugin_editor.get_or_insert_with(|| {
             instance.open_editor(&owner, bypass);
             EditorWindow {
-                plugin: insert.plugin,
+                plugin: insert.hosted,
                 asked: now,
                 seen: false,
             }
@@ -324,8 +361,6 @@ fn plugin_window(
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             // Logic's View menu: Controls is this window, Editor the plug-in's.
-                            let has_editor =
-                                !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
                             if has_editor {
                                 let label = RichText::new(tr("Editor")).size(10.5);
                                 if ui.add(egui::Button::new(label)).clicked() {
@@ -354,7 +389,7 @@ fn plugin_window(
                     }
                     let Some(instance) = &instance else {
                         // Loaded by the engine's next sync, or not at all: say which.
-                        let text = crate::plugins::error(insert.plugin)
+                        let text = crate::hosted_plugins::error(insert.hosted)
                             .unwrap_or_else(|| tr("Loading…").to_string());
                         ui.label(RichText::new(text).color(DIM));
                         return;
@@ -372,7 +407,7 @@ fn plugin_window(
                 });
         });
     if to_editor {
-        s.mixer.plugin_controls = false;
+        s.mixer.plugin_view_override = Some(PluginUiMode::Editor);
         s.mixer.plugin_editor = None;
     }
     // A slider move goes through the strip's automation, as a built-in effect's knob does: it
@@ -414,8 +449,8 @@ fn apply_plugin_window(
     if let Some(found) = inserts.and_then(|list| list.get_mut(slot)) {
         found.bypass = bypass;
         if reload {
-            if let Some(fresh) = crate::plugins::again(insert.plugin) {
-                found.plugin = fresh;
+            if let Some(fresh) = crate::hosted_plugins::again(insert.hosted) {
+                found.hosted = fresh;
             }
         }
     }
@@ -432,7 +467,7 @@ fn apply_plugin_window(
 /// they cannot be automated (the Stereo Out strip, a parameter past the 256th).
 fn plugin_controls(
     ui: &mut Ui,
-    instance: &crate::plugins::Instance,
+    instance: &crate::hosted_plugins::Instance,
     search: &str,
     track: Option<&Track>,
     slot: usize,
@@ -543,7 +578,7 @@ fn header(
             ui.horizontal(|ui| {
                 ui.label(RichText::new(family_name).size(9.5).color(accent));
                 ui.label(RichText::new("·").size(10.0).color(FAINT));
-                ui.label(RichText::new(edited.kind.name()).size(13.5).color(TXT));
+                ui.label(RichText::new(edited.label()).size(13.5).color(TXT));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .add(
@@ -597,7 +632,7 @@ fn visual(ui: &mut Ui, insert: &Insert, reduction: f32, beat: f64, accent: Color
         FxKind::Phaser => phaser_panel(ui, &params, beat, accent),
         FxKind::Overdrive => drive_panel(ui, &params, accent),
         FxKind::Filter => filter_panel(ui, &params, accent),
-        FxKind::Amp | FxKind::Reverb | FxKind::External => {}
+        FxKind::Amp | FxKind::Reverb | FxKind::Plugin => {}
     }
 }
 
@@ -625,11 +660,105 @@ fn knob_rack(
                 .unwrap_or(insert.params[k]);
             let locked = played.is_some() || !automation::editable(track, target);
             let automated = !track.auto.lane(target).is_empty();
-            let change = param_knob(ui, info, value, locked, automated, accent, insert.kind);
+            let change = param_knob(
+                ui,
+                info,
+                value,
+                locked,
+                automated,
+                accent,
+                insert.kind,
+                None,
+            );
             if let Some((value, ended)) = change {
                 edits.push(Edit {
                     param: k,
                     value,
+                    ended,
+                });
+            }
+        }
+    });
+}
+
+/// The names of a plug-in's controls as `&'static str`, for [`ParamInfo`]: each distinct name is
+/// kept once for the life of the program (a plug-in has a few dozen at most).
+fn static_name(name: &str) -> &'static str {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let mut map = NAMES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = map.get(name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    map.insert(name.to_string(), leaked);
+    leaked
+}
+
+/// The knobs of a LADSPA effect: one for each control input, in the plug-in's own name and
+/// range (a toggle shows On or Off, a whole-number control steps). The settings are kept as
+/// positions from 0 to 1, so automation lanes work like those of the built-in effects.
+fn plugin_rack(
+    ui: &mut Ui,
+    insert: &Insert,
+    track: &Track,
+    slot: usize,
+    beat: f64,
+    accent: Color32,
+    edits: &mut Vec<Edit>,
+) {
+    let Some(id) = insert.plugin else {
+        return;
+    };
+    let Some(info) = crate::plugins::info(id) else {
+        ui.label(tr(
+            "This plug-in is not on this computer; the sound passes through.",
+        ));
+        return;
+    };
+    if info.controls.is_empty() {
+        ui.label(tr("This plug-in has no settings."));
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for (k, c) in info.controls.iter().enumerate() {
+            let target = AutoTarget::Fx {
+                slot: slot as u8,
+                param: k as u8,
+            };
+            let played = track.auto.played(target, beat);
+            let norm = played.unwrap_or(insert.params[k]);
+            let value = c.at_norm(norm);
+            let locked = played.is_some() || !automation::editable(track, target);
+            let automated = !track.auto.lane(target).is_empty();
+            let (lo, hi) = c.range();
+            let knob = ParamInfo {
+                name: static_name(&c.name),
+                min: lo,
+                max: hi,
+                default: c.clamp(c.default),
+                unit: "",
+                log: c.log && lo > 0.0,
+            };
+            let text = |v: f32| c.text(c.clamp(v));
+            let change = param_knob(
+                ui,
+                &knob,
+                value,
+                locked,
+                automated,
+                accent,
+                FxKind::Plugin,
+                Some(&text),
+            );
+            if let Some((v, ended)) = change {
+                edits.push(Edit {
+                    param: k,
+                    value: c.to_norm(v),
                     ended,
                 });
             }
@@ -647,6 +776,7 @@ fn param_knob(
     automated: bool,
     accent: Color32,
     kind: FxKind,
+    text: Option<&dyn Fn(f32) -> String>,
 ) -> Option<(f32, bool)> {
     let mut change = None;
     ui.allocate_ui_with_layout(vec2(94.0, 74.0), Layout::top_down(Align::Center), |ui| {
@@ -690,10 +820,13 @@ fn param_knob(
         }
         let v = change.map_or(value, |(v, _)| v);
         ui.label(
-            RichText::new(param_text(kind, info, v))
-                .monospace()
-                .size(9.5)
-                .color(if locked { FAINT } else { TXT }),
+            RichText::new(match text {
+                Some(f) => f(v),
+                None => param_text(kind, info, v),
+            })
+            .monospace()
+            .size(9.5)
+            .color(if locked { FAINT } else { TXT }),
         );
     });
     change
@@ -806,7 +939,16 @@ fn finish(
         }
     }
     if ti == crate::mixer::MASTER_STRIP {
-        // No automation lanes on the Stereo Out strip.
+        // No automation lanes on the Stereo Out strip: a knob moves the setting itself.
+        if let Some(ins) = p.master_inserts.get_mut(slot) {
+            for e in &edits {
+                if let Some(info) = ins.kind.params().get(e.param) {
+                    if e.value.is_finite() {
+                        ins.params[e.param] = e.value.clamp(info.min, info.max);
+                    }
+                }
+            }
+        }
         if !open {
             s.mixer.fx_window = None;
         }
@@ -1595,6 +1737,53 @@ fn filter_panel(ui: &mut Ui, params: &[f32; prowave_engine::MAX_FX_PARAMS], acce
 mod tests {
     use super::*;
     use crate::model::Insert;
+    use crate::plugin_ui_prefs::PluginUiMode;
+
+    #[test]
+    fn plugin_view_defaults_to_the_preference() {
+        assert_eq!(
+            plugin_view(true, false, PluginUiMode::Sliders, None),
+            PluginView::Sliders
+        );
+        assert_eq!(
+            plugin_view(true, false, PluginUiMode::Editor, None),
+            PluginView::Editor
+        );
+    }
+
+    #[test]
+    fn plugin_view_honors_an_explicit_choice() {
+        assert_eq!(
+            plugin_view(
+                true,
+                false,
+                PluginUiMode::Sliders,
+                Some(PluginUiMode::Editor),
+            ),
+            PluginView::Editor
+        );
+        assert_eq!(
+            plugin_view(
+                true,
+                false,
+                PluginUiMode::Editor,
+                Some(PluginUiMode::Sliders),
+            ),
+            PluginView::Sliders
+        );
+    }
+
+    #[test]
+    fn plugin_view_falls_back_when_there_is_no_usable_editor() {
+        assert_eq!(
+            plugin_view(false, false, PluginUiMode::Editor, None),
+            PluginView::Sliders
+        );
+        assert_eq!(
+            plugin_view(true, true, PluginUiMode::Editor, Some(PluginUiMode::Editor),),
+            PluginView::Sliders
+        );
+    }
 
     #[test]
     fn every_effect_window_draws_without_changing_its_insert() {
@@ -1676,6 +1865,98 @@ mod tests {
         }
         assert_eq!(s.mixer.fx_window, Some((0, 0)));
         assert_eq!(p.tracks[0].inserts[0], Insert::new(FxKind::Reverb));
+    }
+
+    #[test]
+    fn a_knob_of_a_stereo_out_effect_moves_its_setting() {
+        let mut p = Project::empty();
+        p.master_inserts = vec![Insert::new(FxKind::Compressor)];
+        let mut s = UiState::new();
+        let insert = p.master_inserts[0];
+        let edit = |param, value| Edit {
+            param,
+            value,
+            ended: true,
+        };
+        finish(
+            &mut p,
+            &mut s,
+            crate::mixer::MASTER_STRIP,
+            0,
+            insert,
+            insert,
+            // Out of range, not finite, or a parameter the effect does not have.
+            vec![
+                edit(0, -30.0),
+                edit(1, 1000.0),
+                edit(2, f32::NAN),
+                edit(30, 1.0),
+            ],
+            true,
+        );
+        let infos = FxKind::Compressor.params();
+        let after = p.master_inserts[0];
+        assert_eq!(after.params[0], -30.0);
+        assert_eq!(after.params[1], infos[1].max);
+        assert_eq!(after.params[2], insert.params[2]);
+    }
+
+    #[test]
+    fn a_ladspa_effect_window_draws_a_missing_plugin_and_a_real_one() {
+        let mut p = Project::empty();
+        let gone = crate::plugins::intern(&crate::plugins::PluginRef {
+            library: "/nowhere/ui.so".into(),
+            label: "gone".into(),
+            unique_id: 1,
+            name: "Gone Plugin".into(),
+        });
+        p.tracks[0].inserts = vec![Insert::new_plugin(gone)];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)), "it stays open");
+        assert_eq!(p.tracks[0].inserts[0].label(), "Gone Plugin");
+        // A plug-in the catalogue knows draws its controls.
+        let known = crate::plugins::PluginInfo {
+            library: "/plugins/ui_known.so".into(),
+            index: 0,
+            unique_id: 2,
+            label: "known".into(),
+            name: "Known Plugin".into(),
+            maker: "m".into(),
+            audio_in: 1,
+            audio_out: 1,
+            controls: vec![crate::plugins::ControlInfo {
+                name: "Drive".into(),
+                port: 0,
+                min: 0.0,
+                max: 10.0,
+                default: 5.0,
+                toggled: false,
+                integer: false,
+                log: false,
+            }],
+            latency_port: None,
+        };
+        let id = crate::plugins::intern(&known.plugin_ref());
+        crate::plugins::set_catalog(crate::plugins::Catalog {
+            plugins: vec![known],
+            scanned: true,
+            ..Default::default()
+        });
+        p.tracks[0].inserts = vec![Insert::new_plugin(id)];
+        assert_eq!(
+            p.tracks[0].inserts[0].params[0], 0.5,
+            "the default is half way"
+        );
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(p.tracks[0].inserts[0].label(), "Known Plugin");
     }
 
     #[test]

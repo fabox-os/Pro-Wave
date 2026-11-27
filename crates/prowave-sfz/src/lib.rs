@@ -107,6 +107,15 @@ pub struct Region {
     pub loop_start: Option<u32>,
     pub loop_end: Option<u32>,
     pub amp: AmpEnvelope,
+    /// Round robin (SFZ `seq_length`, `seq_position`): the region plays on every
+    /// `seq_length`th note, when it is turn `seq_position` (1 to `seq_length`). 1 and 1 mean
+    /// always.
+    pub seq_length: u8,
+    pub seq_position: u8,
+    /// Choke groups (SFZ `group` and `off_by`): starting a region of group N silences the
+    /// ones that are `off_by` N. 0 means none.
+    pub group: u32,
+    pub off_by: u32,
 }
 
 impl Region {
@@ -242,6 +251,10 @@ struct Settings {
     loop_start: Option<u32>,
     loop_end: Option<u32>,
     amp: AmpEnvelope,
+    seq_length: u8,
+    seq_position: u8,
+    group: u32,
+    off_by: u32,
 }
 
 impl Default for Settings {
@@ -262,6 +275,10 @@ impl Default for Settings {
             loop_start: None,
             loop_end: None,
             amp: AmpEnvelope::default(),
+            seq_length: 1,
+            seq_position: 1,
+            group: 0,
+            off_by: 0,
         }
     }
 }
@@ -360,6 +377,10 @@ impl Parser {
                     loop_start: settings.loop_start,
                     loop_end: settings.loop_end,
                     amp: settings.amp,
+                    seq_length: settings.seq_length,
+                    seq_position: settings.seq_position,
+                    group: settings.group,
+                    off_by: settings.off_by,
                 });
                 if self.regions.len() > MAX_REGIONS {
                     return Err(Error::TooManyRegions { limit: MAX_REGIONS });
@@ -458,6 +479,26 @@ impl Parser {
                 "loop_sustain" => s.loop_mode = LoopMode::Sustain,
                 _ => {}
             },
+            "seq_length" => {
+                if let Some(v) = parse_number(value) {
+                    s.seq_length = v.round().clamp(1.0, 100.0) as u8;
+                }
+            }
+            "seq_position" => {
+                if let Some(v) = parse_number(value) {
+                    s.seq_position = v.round().clamp(1.0, 100.0) as u8;
+                }
+            }
+            "group" => {
+                if let Some(v) = parse_number(value) {
+                    s.group = v.round().clamp(0.0, 1_000_000.0) as u32;
+                }
+            }
+            "off_by" => {
+                if let Some(v) = parse_number(value) {
+                    s.off_by = v.round().clamp(0.0, 1_000_000.0) as u32;
+                }
+            }
             "loop_start" => {
                 if let Some(v) = parse_frame(value) {
                     s.loop_start = Some(v);
@@ -709,5 +750,33 @@ mod tests {
         assert!(check_sample_path("/kick.wav").is_err());
         assert!(check_sample_path("C:\\kick.wav").is_err());
         assert!(check_sample_path("Kit\\..\\kick.wav").is_err());
+    }
+
+    #[test]
+    fn round_robin_and_choke_group_opcodes_are_read_with_defaults_and_inheritance() {
+        let text = "<group> seq_length=3 group=2\n\
+                    <region> sample=a.wav seq_position=1\n\
+                    <region> sample=b.wav seq_position=2 off_by=7\n\
+                    <group>\n<region> sample=c.wav\n\
+                    <region> sample=d.wav seq_length=999 seq_position=0 group=-4\n";
+        let Ok(inst) = parse(text) else {
+            panic!("the instrument should parse");
+        };
+        let r = &inst.regions;
+        assert_eq!(
+            (r[0].seq_length, r[0].seq_position, r[0].group, r[0].off_by),
+            (3, 1, 2, 0)
+        );
+        assert_eq!(
+            (r[1].seq_length, r[1].seq_position, r[1].group, r[1].off_by),
+            (3, 2, 2, 7)
+        );
+        // A new group starts from the defaults again: always, and in no choke group.
+        assert_eq!((r[2].seq_length, r[2].seq_position, r[2].group), (1, 1, 0));
+        // Silly numbers are put into range.
+        assert_eq!(
+            (r[3].seq_length, r[3].seq_position, r[3].group),
+            (100, 1, 0)
+        );
     }
 }

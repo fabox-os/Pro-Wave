@@ -238,7 +238,7 @@ Rules: small diffs, `cargo xtask check` green, one commit per finding.
 #### Claude: everything else, in this order
 
 1. ✅ Tempo track, Marker track, Region gain / fades / reverse / normalize, compact menus,
-   17 languages (see the changelog).
+   18 languages (17 until 0.3.2 added Italian; see the changelog).
    ✅ 0.1.8: MIDI keyboard recording (with the sustain pedal), take folders from Cycle
    recording, the Event list (List Editors), updates from GitHub (check and install for each
    kind of install), Logic-accurate colours (regions, playhead, Piano Roll, sliders).
@@ -333,7 +333,8 @@ positions (fixed, tested), prefetch size now follows the number of clips.
    the playhead, the others keep their distances), Quantize (the notes of selected MIDI regions go to
    the region's Quantize grid, 1/16 when Off; destructive), and Folder (the selected track goes into a
    track stack, as Track > Create Track Stack; this is our reading of Logic's "Folder"). Not done:
-   Bounce in Place (needs offline rendering) and Convert to New Sampler Track (needs a sampler track).
+   Convert to New Sampler Track (needs a sampler track). Bounce in Place came later, with offline
+   rendering (see "Since 0.2.2").
 
 ✅ Done 2026-11-06: MIDI outputs. The sender (`midi_out.rs`) now works on a `Sink` trait, so its logic is tested with recording ports and a real ALSA virtual port (midir creates it; the notes and the clock arrive). Fixes: a note that was sounding when its track was moved to another port or channel is now released on the port it started on (before, it stayed on). New: each external track sends a Bank Select and a Program Change when it is routed (Inspector: MIDI Program and MIDI Bank, Off at the top of each range); MIDI Clock (Timing Clock 24 per beat, Start, Continue, Stop, Song Position) to the port chosen under Synchronization > Send MIDI Clock, made on the audio clock (`clock.rs`, the engine); Project Settings > MIDI > Send MIDI Panic (All Sound Off and All Notes Off on all 16 channels of every output in use). Saved in `.prowave` (`midi_program`, `midi_bank`, `midi_clock_out`). Not done (the last two were done later, see the next entries): pitch bend, channel aftertouch and SysEx; following MIDI clock from an input; a seek while stopped sends nothing, and a seek while playing sends a Song Position; no test on a real hardware synth.
 
@@ -373,24 +374,41 @@ positions (fixed, tested), prefetch size now follows the number of clips.
 The items below marked done are in 0.2.2 (see CHANGELOG.md for the full list, and its known
 limitations at the end of the section). Still open, in the order the work would take them:
 
-- Plug-in hosting: CLAP, VST3 and Audio Unit effects load in the Audio FX slots (`prowave-plugin-host`, done 2026-11-14), with the Plugin Manager and a scan in a separate process. Each plug-in runs in a process of its own on macOS and Linux, shows its own window on macOS, and its parameters can be automated. Not done: instruments, the process of its own on Windows, the plug-ins' own windows on Windows and Linux.
+- Plug-in hosting: CLAP, VST3 and Audio Unit effects load in the Audio FX slots (`prowave-plugin-host`, done 2026-11-14), with the Plugin Manager and a scan in a separate process. Each plug-in runs in a process of its own on macOS and Linux, shows its own window on macOS and (from 0.3.4) on Linux/X11 for CLAP and VST3, and its parameters can be automated. Fixed 2026-11-23 (#163): clicking the plug-in search no longer closes the menu, long lists scroll, and VST3 bundles whose library has another name are found. Not done: instruments, the process of its own on Windows, the plug-ins' own windows on Windows.
 - Audio output device and I/O buffer size in Project Settings > Audio (needs an engine stream restart).
-- An offline (faster than real time) bounce: Bounce, Export Track, Bounce in Place and Bounce and Join all work now, but at playing speed.
 - Convert to New Sampler Track (needs a sampler instrument).
 - Show Chord Track and Show Arrangement Track (new data models).
 - Split and Join on audio, Pattern and Drummer regions (audio needs a start offset into the file).
 - Hardware tests of MIDI output, MIDI clock and SysEx; native-speaker review of the translations.
 - Release 0.2.2 was tested on Ubuntu 26.04.1 LTS only; Windows and macOS builds are not tested for it.
 
-## Since 0.2.2 (2026-11-09, heading for 0.3.0)
+## Releases after 0.3.0
 
-Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
+- **0.3.1:** the Audio FX plug-in menu scrolls and keeps open on a click in its search field (issue #163),
+  VST3 bundles whose library has another name are found on Linux, the Library names only the
+  instruments a track plays (issue #167), Reverse Region works (issue #171).
+  Not done from #167: a Vintage B3 panel and Sampler content for the Library.
+- **0.3.2:** Italian (18 languages), recordings that came out empty because of an absurd reported
+  input delay, downloaded Hydrogen `.h2drumkit` kits can be chosen. Not tried on real input
+  hardware here: if a take is still empty, the message names the input and its frame count.
+- **0.3.3:** Hydrogen drum kits make sound (the SoundFont built from a kit had its sample reference
+  in the wrong place, so kits with one layer per instrument were silent), Musical Typing starts at C1
+  on a drum track, and a recorded take keeps every frame (the device delay is skipped by the
+  region, so a wrong delay cannot empty a take) and a silent input is noticed. Recording is not
+  tried on real Windows or macOS microphones here.
+- **0.3.4:** Hosted CLAP and VST3 plug-ins render their own designed window on Linux/X11 when
+  Editor is chosen in Plugin Manager (issue #189); Sliders stays the portable default and is still
+  used when a plug-in has no editor. Native editors on Windows are still not hosted.
+
+## Since 0.2.2 (2026-11-09; this is release 0.3.0)
+
+Done and merged into `main` (CHANGELOG.md, section 0.3.0, has the details):
 
 - **Space Designer** (convolution reverb, own window, six built-in impulse responses, Volume and
   Filter envelopes, X-Over with Spread, Output EQ, synthesized IR tab) and three mastering presets.
-  Not done: loading the user's own impulse-response files, tempo-synced Predelay.
+  Not done: tempo-synced Predelay.
 - **Effects on the Stereo Out (master) strip**, saved with the project. No automation lanes for them yet.
-- **Bounce:** Project or Section, Export Track as Audio File, Bounce in Place, Bounce and Join (real time, WAV).
+- **Bounce:** Project or Section, Export Track as Audio File, Bounce in Place, Bounce and Join (WAV). Offline by default (faster than real time, on a background thread); the real-time bounce stays with `PROWAVE_BOUNCE_REALTIME=1`.
 - **Menus that were greyed out and now work:** Record Toggle, Record Enable, Record Project Settings,
   Record / Record Repeat, Mix > Edit Groups, Show Automation, Delete Automation, Rename Project,
   Edit > Undo History, Paste Replace, File > Import > Audio File, Show in File Manager,
@@ -403,12 +421,13 @@ Done and merged into `main` (CHANGELOG.md, section Unreleased, has the details):
 - **Logic Pro `.logicx` bundles:** the `prowave-logicx-import` crate finds the bundle in either
   save shape, follows the active alternative and reads `MetaData.plist` and
   `ProjectInformation.plist` (tempo, key, time signature, sample rate, channels, Logic version),
-  with plist and ProjectData size caps and a symlink check. The `ProjectData` chunk scan (tracks,
-  regions, plug-ins, Session Players) is the next step.
-- **Vintage B3 organ voice:** the Library's Vintage B3 Organ patches play an additive drawbar
-  voice (nine drawbars, percussion, key click and a Leslie rotor) in `prowave-engine` instead of
-  the subtractive approximation. Not done: a dedicated B3 panel, separate horn and rotor speeds,
-  distortion, and drawbar automation.
+  with plist and ProjectData size caps and a symlink check. The `ProjectData` scan is imported by
+  File > Import > Other Projects… and File > Open (tracks, MIDI and audio regions, Audio Unit plug-ins with their saved
+  state). Not decoded yet: volumes, mute, solo, stock plug-in settings and instrument files (`LOGICX-FORMAT-SPEC.md`).
+
+- **Import of more formats:** File > Import > MusicXML Score, Guitar Pro, Hydrogen Song, REX Loop and LogicX Project (Preview), with drops. Notes only; see the changelog.
+- **Vamp analysers** are listed in the Plugin Manager (catalogue only, not run in tracks yet).
+- **Piano Roll and Score follow the playhead** while playing or recording (issue #150).
 - **Mixer** keeps whole channel strips visible on short windows.
 - **Repo health:** the merges that left stray lines in `main` were redone (PR #65, #66); Windows and
   macOS tests compile again.
@@ -454,7 +473,7 @@ test of all the features above on Windows and macOS.
   - External MIDI (2026-10-21): Track > New External MIDI Track. The track's regions send Note On/Off to a MIDI output port and channel chosen in the Inspector (`midir`, own sending thread, `MidiOutEvent` queue from the audio thread); the engine makes no sound for it, stopping or seeking releases held notes, and live keyboard notes go out too. Saved in `.prowave` (`midi_port`, `midi_channel`). Notes are sent when the thread sees them (about 1 ms after the audio block), not at their exact sample. Not tried with a real synthesizer yet. Controllers from the regions (the sustain pedal included) are sent; program and bank: see the MIDI outputs entry below.
 - [x] Region system: Audio regions (backed by `symphonia` decoder wav/aiff/caf/mp3/flac), MIDI regions, Pattern regions, Drummer regions
   - Done (2026-10-21): MP3 and CAF decode like the other formats (an MP3 without a length in its header is measured by decoding it once); drag them onto the window. Tests use small files in `crates/prowave-engine/tests/fixtures`. Pattern and Drummer regions: see below.
-- [x] Non-destructive editing: clip gain, fade in/out with curves (equal-power, linear, S-curve), crossfade, Reverse, Normalize (non-destructive)
+- [x] Non-destructive editing: clip gain, fade in/out with curves (equal-power, linear, S-curve), crossfade, Reverse, Normalize (non-destructive) (2026-11-23, #171: Reverse Region in the region's menu now reaches the engine; the menu flipped the flag without rebuilding the song)
   - Done (engine, 2026-10-20): clip gain, beat-based fades, and reverse playback via `Engine::stream_clip_with`; `peak_of` for Normalize.
   - Region end timing is cached between song/map/transport changes; completed fades skip
     curve evaluation. Tests verify fade output after tempo and song changes without allocation.
@@ -523,7 +542,7 @@ test of all the features above on Windows and macOS.
 - [ ] Drum Machine Designer: 48 pads, each pad = Quick Sampler + strip
 - [ ] Drum Kit Designer: acoustic kits with multi-mic (Close, Overhead, Room, Bleed controls)
 - [ ] ES2: Vector synth clone - 3 osc (Saw, Pulse, Sine with FM), Filter, Distortion, Vector Envelope, Router 10 slots. Must match Logic presets byte-for-byte parameter wise
-- [ ] Vintage Series: B3 Organ (drawbars 9 + percussion + Leslie with Horn/Rotor speed, distortion), Vintage Clav (D6 pickup), Vintage E-Piano
+- [ ] Vintage Series: B3 Organ (drawbars 9 + percussion + Leslie with Horn/Rotor speed, distortion), Vintage Clav (D6 pickup), Vintage E-Piano (2026-11-23, #167: the Library no longer names a B3 it does not create; the panel is still to do)
 - [ ] Retro Synth: 4 engines Analog/Sync/Wavetable/FM in one UI
 - **DoD:** Load Sampler instrument, play with MIDI, patch saving
 
@@ -546,7 +565,7 @@ test of all the features above on Windows and macOS.
 
 ### Phase 8: UI - The Logic Look + Live Loops (Weeks 57-66)
 - [~] Main window: Tracks area (with Track Headers, Track Inspector left, Library right), Mixer (separate window or bottom), Editors (Piano Roll bottom, Score, Audio Editor)
-- [ ] Library: Patches (Channel Strip + Instrument + FX), save/load, search
+- [ ] Library: Patches (Channel Strip + Instrument + FX), save/load, search (2026-11-23, #167: the Library names only the instruments a track really plays; the Sampler, B3, Alchemy and ES2 entries play synth patches and say so)
 - [ ] Smart Controls: 8 knobs per patch, mapping editor (map knob to multiple params with range scaling), Learn
 - [ ] Key Commands: 1200+ commands, searchable, customizable, Presets, Conflict detection
 - [ ] Live Loops: Grid (Cells, Scenes, Trigger modes, Quantize Start), Record Live Loops performance to Tracks, Remix FX (X/Y pad with Gate, Filter, Repeater, Reverse)
@@ -567,7 +586,7 @@ test of all the features above on Windows and macOS.
 - [ ] Compile `prowave-engine` to WASM + AudioWorklet (128-sample blocks, SharedArrayBuffer + Atomics)
 - [ ] `prowave-wasm`: OPFS for project storage, Web UI via `egui_web` (same egui code), Web Remote (like Logic Remote but via browser/WebSocket)
 - [ ] Collaboration: Project file with Ed25519 signing, simple CRDT for arrangement (optional)
-- [ ] Export: Bounce Project/Region/Track in Place (offline/real-time, normalize, dither Apogee UV22HR via `r8brain`), Export All Tracks as Audio, Export MIDI, MusicXML, AAF, ADM BWF (Atmos)
+- [ ] Export: Bounce Project/Region/Track in Place (offline rendering done; normalize, dither Apogee UV22HR via `r8brain`, Export All Tracks as Audio), Export MIDI, MusicXML, AAF, ADM BWF (Atmos)
 - [ ] Performance: SIMD (`wide`, `std::simd`), benchmarks vs Logic/Reaper
 - **DoD:** Open in Chrome/Firefox, play 16-track project <30ms latency, bounce to WAV
 
@@ -596,7 +615,7 @@ test of all the features above on Windows and macOS.
 
 ---
 
-## 3b. Controls that do nothing yet (checked 2026-10-30)
+## 3b. Controls that do nothing yet (checked 2026-11-23)
 
 Everything here can be seen in the app but has no effect. All of it is greyed or dimmed, so a
 click never silently does nothing. The controls that looked active and did nothing were built
@@ -606,8 +625,12 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - File: Close, Save as Template, Alternatives, Page Setup,
   Print, Movie, Export of audio (Selection as MIDI File, Score as MusicXML and Track as Audio File
   work), Share, Open in Sound Library Manager, Project Alternatives (done since 0.2.2: Import
-  Audio File, Other Projects for GarageBand audio, Bounce, Show in File Manager, Rename Project)
+  Audio File, Other Projects for GarageBand audio, Bounce, Show in File Manager, Rename Project;
+  since 0.3.0: Import of MusicXML, Guitar Pro, Hydrogen Song, REX Loop and Logic Pro `.logicx`
+  projects, File > Open of a `.logicx`, Bounce to FLAC)
 - Track: Show Chord / Arrangement Track (both need new data: chord events and sections)
+  (done since 0.3.0: Create Track Stack and Release Track Stack, which need two or more selected
+  tracks)
 - Navigate: Go to Position
 - Record: New Take, Delete Take (done since 0.2.2: Record / Record Repeat, Record Toggle,
   Record Enable, Bounce In Place, Record Project Settings)
@@ -617,11 +640,11 @@ Files, R on instrument tracks, I on audio tracks, and the mixer's Setting and Ou
 - View: all automation entries, Advanced Tools, Smart Controls, Score Editor, Step Sequencer,
   Session Player, Flex Editor, Performers, Movie, Customize Toolbar, Track Header, Ruler, Global
   Tracks, Colors, Markers, Grid, Smart Tempo, Enter Full Screen
-- Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Plugin Manager, Video,
-  Bring All to Front
+- Window: Minimize, Zoom, Score Editor, Step Sequencer, Smart Tempo, Video, Bring All to Front
+  (done since 0.3.0: Plugin Manager, Show Musical Typing)
 - Help: Key Commands, About Pro Wave
 - Tracks area: Functions (Convert to New Sampler Track), View (Show Global Tracks,
-  every tool except Pointer and Fade, waveform zoom buttons
+  every tool except Pointer, Fade and Pencil (Pencil is done since 0.3.0), waveform zoom buttons
 - Piano Roll: Note Repeat, Note Colors; tabs Step Sequencer, Drummer Editor, Smart Tempo
 - Mixer: Select Audio Channel Strips, Create New Output Channel Strip, Show Signal Flow
 - Inspector: Channel, Freeze Mode, Q-Reference, Flex Mode, MIDI In Port and Channel, and the
