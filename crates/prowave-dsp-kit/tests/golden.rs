@@ -29,6 +29,9 @@ fn every_case_matches_the_original_program_sample_by_sample() {
     // `long_*` cases use a longer signal with note-like bursts (for the decoders).
     let long_input = read_f32(&dir().join("long.f32"));
     assert_eq!(long_input.len(), 28800 * 2);
+    // `spaced_*` cases use a signal whose channels are out of step (for the multiband decoder).
+    let spaced_input = read_f32(&dir().join("spaced.f32"));
+    assert_eq!(spaced_input.len(), 48000 * 2);
     let cases = std::fs::read_to_string(dir().join("cases.txt")).unwrap_or_default();
     let mut checked = 0;
     let mut problems = Vec::new();
@@ -63,6 +66,8 @@ fn every_case_matches_the_original_program_sample_by_sample() {
         let got: Vec<f64> = chain
             .process(if name.starts_with("long_") {
                 &long_input
+            } else if name.starts_with("spaced_") {
+                &spaced_input
             } else {
                 &input
             })

@@ -37,10 +37,11 @@ fi
 make -j4 >/dev/null
 python3 "$HERE/make_input.py" "$HERE/input.f32"
 python3 "$HERE/make_long_input.py" "$HERE/long.f32"
+python3 "$HERE/make_spaced_input.py" "$HERE/spaced.f32"
 grep -v '^#' "$HERE/cases.txt" | while IFS='|' read -r name fs words; do
   name="$(echo "$name" | tr -d ' ')"; fs="$(echo "$fs" | tr -d ' ')"
   # shellcheck disable=SC2086
-  in="$HERE/input.f32"; case "$name" in long_*) in="$HERE/long.f32";; esac
+  in="$HERE/input.f32"; case "$name" in long_*) in="$HERE/long.f32";; spaced_*) in="$HERE/spaced.f32";; esac
   ./dsp -q -I -t pcm -e float -r "$fs" -c 2 "$in" -o -t pcm -e float "$HERE/$name.f32" $words 2>/dev/null
 done
 rm -rf "$WORK"

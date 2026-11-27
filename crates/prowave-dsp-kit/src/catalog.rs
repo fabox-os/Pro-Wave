@@ -156,7 +156,7 @@ pub static ENTRIES: [Entry; 40] = [
         "matrix4_mb",
         "Quartet Multiband Upmixer",
         "the upmixer steered in many frequency bands",
-        false
+        true
     ),
     e!(
         "remix",
