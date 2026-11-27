@@ -72,6 +72,8 @@ fn every_case_matches_the_original_program_sample_by_sample() {
         });
         // `stats_*` cases: the tables the original printed.
         if let Ok(text) = std::fs::read_to_string(dir().join(format!("{name}.txt"))) {
+            // git may check the tables out with CRLF line ends (Windows)
+            let text = text.replace("\r\n", "\n");
             let got_text: String = chain
                 .reports()
                 .into_iter()
