@@ -399,6 +399,9 @@ limitations at the end of the section). Still open, in the order the work would 
 - **Next (not released yet):** Kestrel EQ (issue #192), the console-style EQ of Logic's Vintage EQ
   family: switched HPF, low shelf, mid bell, a 12 kHz high shelf and a transformer Drive. It has
   not been compared by ear with a hardware console. Vintage Graphic EQ (API 560 style) is still to do.
+  Mosaic Decimator (bit and sample-rate reduction) and Dustbowl Lo-Fi (wow, flutter, drive, hiss,
+  crackle, band limit) from issue #183, written as built-in effects instead of bundling LADSPA
+  binaries; more names from that issue's list are to come.
 - **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** parts 1 and 2 done (chain,
   argument parsing, selectors, all biquads, gain/mult/add, mid/side, crossfeed, remix, noise,
   dither with noise shaping, decorrelate, and the catalog of Pro Wave names; 56 cases compared

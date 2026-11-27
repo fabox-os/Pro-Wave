@@ -47,7 +47,7 @@ pub fn category(kind: FxKind) -> &'static str {
     match kind {
         FxKind::Amp => "Amps and Pedals",
         FxKind::Delay => "Delay",
-        FxKind::Overdrive => "Distortion",
+        FxKind::Overdrive | FxKind::Decimator | FxKind::LoFi => "Distortion",
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => "Dynamics",
         FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq | FxKind::KestrelEq => "EQ",
         FxKind::Filter => "Filter",
