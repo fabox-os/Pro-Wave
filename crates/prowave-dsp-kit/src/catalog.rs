@@ -145,12 +145,7 @@ pub static ENTRIES: [Entry; 40] = [
     e!("gain", "Level Trim", "gain in decibels", true),
     e!("mult", "Level Scale", "multiplies by a factor", true),
     e!("add", "Level Offset", "adds a constant (DC offset)", true),
-    e!(
-        "crossfeed",
-        "Harbor Crossfeed",
-        "headphone crossfeed",
-        false
-    ),
+    e!("crossfeed", "Harbor Crossfeed", "headphone crossfeed", true),
     e!(
         "matrix4",
         "Quartet Upmixer",
@@ -167,7 +162,7 @@ pub static ENTRIES: [Entry; 40] = [
         "remix",
         "Patchbay Remix",
         "mixes and reorders channels",
-        false
+        true
     ),
     e!(
         "st2ms",
@@ -216,14 +211,14 @@ pub static ENTRIES: [Entry; 40] = [
         "decorrelate",
         "Haze Decorrelator",
         "all-pass decorrelator for widening",
-        false
+        true
     ),
-    e!("noise", "Grain Noise", "adds TPDF noise", false),
+    e!("noise", "Grain Noise", "adds TPDF noise", true),
     e!(
         "dither",
         "Velvet Dither",
         "dither with optional noise shaping",
-        false
+        true
     ),
     e!(
         "stats",

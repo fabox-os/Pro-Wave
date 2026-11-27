@@ -12,9 +12,9 @@ cp -r "$SRC" "$WORK/dsp" && cd "$WORK/dsp"
   --disable-alsa --disable-ao --disable-pulse --disable-ladspa_dsp --disable-ladspa-host >/dev/null
 make -j4 >/dev/null
 python3 "$HERE/make_input.py" "$HERE/input.f32"
-grep -v '^#' "$HERE/cases.txt" | while IFS='|' read -r name words; do
-  name="$(echo "$name" | tr -d ' ')"
+grep -v '^#' "$HERE/cases.txt" | while IFS='|' read -r name fs words; do
+  name="$(echo "$name" | tr -d ' ')"; fs="$(echo "$fs" | tr -d ' ')"
   # shellcheck disable=SC2086
-  ./dsp -q -I -t pcm -e float -r 48000 -c 2 "$HERE/input.f32" -o -t pcm -e float "$HERE/$name.f32" $words 2>/dev/null
+  ./dsp -q -I -t pcm -e float -r "$fs" -c 2 "$HERE/input.f32" -o -t pcm -e float "$HERE/$name.f32" $words 2>/dev/null
 done
 rm -rf "$WORK"
