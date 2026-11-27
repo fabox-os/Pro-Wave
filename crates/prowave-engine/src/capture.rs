@@ -203,19 +203,25 @@ where
     for (slot, p) in shared.peaks.iter().zip(peak).take(channels) {
         slot.fetch_max(p.to_bits(), Ordering::Relaxed);
     }
-    match producer.write_chunk_uninit(data.len()) {
+    // The chunk makes its samples visible to the writer when it drops, so the frame count is
+    // published only after that: a `Stop` that reads it can then always find those samples.
+    let pushed = match producer.write_chunk_uninit(data.len()) {
         Ok(chunk) => {
             chunk.fill_from_iter(
                 data.iter()
                     .map(|s| <f32 as FromSample<T>>::from_sample_(*s)),
             );
-            shared
-                .frames_pushed
-                .fetch_add((data.len() / channels) as u64, Ordering::Release);
+            true
         }
         Err(_) => {
             shared.overruns.fetch_add(1, Ordering::Relaxed);
+            false
         }
+    };
+    if pushed {
+        shared
+            .frames_pushed
+            .fetch_add((data.len() / channels) as u64, Ordering::Release);
     }
 }
 
