@@ -402,15 +402,14 @@ limitations at the end of the section). Still open, in the order the work would 
   Mosaic Decimator (bit and sample-rate reduction) and Dustbowl Lo-Fi (wow, flutter, drive, hiss,
   crackle, band limit) from issue #183, written as built-in effects instead of bundling LADSPA
   binaries; more names from that issue's list are to come.
-- **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** parts 1 and 2 done (chain,
-  argument parsing, selectors, all biquads, gain/mult/add, mid/side, crossfeed, remix, noise,
-  dither with noise shaping, decorrelate, and the catalog of Pro Wave names; 56 cases compared
-  with the original sample by sample). Next (part 3): the chain's latency alignment and drain
-  (`align.c` and the post-processing of `effects_chain.c`), which `delay`, FIR, sinc, Hilbert
-  and resample need, then those effects (resample with `rustfft`) and reverse IIR; then
-  matrix4 and matrix4_mb, levels and stats. The
-  file and sound-card backends, zita-convolver and the LADSPA frontend are not ported: Pro Wave
-  has its own.
+- **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** parts 1 to 3 done (chain with
+  latency alignment and draining, argument parsing, selectors, all biquads, gain/mult/add,
+  mid/side, crossfeed, remix, noise, dither with noise shaping, decorrelate, delay with
+  fractional all-pass and modulation, and the catalog of Pro Wave names; 77 cases compared with
+  the original sample by sample). Next (part 4): FIR and the FFT-based effects (`fir`, `fir_p`,
+  `sinc`, `hilbert`, `resample`, with `rustfft`) and reverse IIR; then matrix4 and matrix4_mb,
+  levels and stats. The file and sound-card backends, zita-convolver and the LADSPA frontend are
+  not ported: Pro Wave has its own.
 - **0.3.4:** Hosted CLAP and VST3 plug-ins render their own designed window on Linux/X11 when
   Editor is chosen in Plugin Manager (issue #189); Sliders stays the portable default and is still
   used when a plug-in has no editor. Native editors on Windows are still not hosted.

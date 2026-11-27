@@ -55,3 +55,24 @@ dither_sel | 48000 | :1 dither 14
 decorrelate | 48000 | decorrelate -s 1
 decorrelate_mono | 48000 | decorrelate -m -s 7 3
 decorrelate_opts | 48000 | decorrelate -s 3 -f 2k -l 50m -h 4m -d 1m -D 2m 2
+delay_int | 48000 | delay 100S
+delay_ms | 48000 | delay 1m
+delay_sel0 | 48000 | :0 delay 100S
+delay_sel1 | 48000 | :1 delay 30S
+delay_two | 48000 | :0 delay 100S :1 delay 50S
+delay_then_gain | 48000 | delay 100S :0 gain -6
+delay_frac_default | 48000 | delay -f 0.5S
+delay_frac_half | 48000 | delay 0.5S
+delay_frac_1 | 48000 | delay -f1 7.3S
+delay_frac_2 | 48000 | delay -f2 12.75S
+delay_frac_3 | 48000 | delay -f3 20.4S
+delay_frac_sel | 48000 | :1 delay -f 33.25S
+delay_then_st2ms | 48000 | delay -f 3.5S st2ms
+delay_neg | 48000 | :0 delay -f 0.3S
+delay_two_effects | 48000 | delay 40S delay -f 2.5S
+delay_after_filter | 48000 | lowpass 2k 0.7q delay 64S
+delay_mod | 48000 | delay -m 1m 0
+delay_mod_mono | 48000 | delay -M 0.5m -b 8 0
+delay_mod_q0 | 48000 | delay -m 0.4m -q 0 0
+delay_mod_q2 | 48000 | delay -m 5% -q 2 3m
+delay_mod_frac | 48000 | delay -f -m 1m 2.5S

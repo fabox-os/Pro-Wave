@@ -35,6 +35,11 @@ impl Effect for Crossfeed {
     fn ostream(&self) -> Stream {
         self.stream
     }
+    fn channel_deps(&self, deps: &mut [Vec<bool>]) -> bool {
+        deps[self.c0][self.c1] = true;
+        deps[self.c1][self.c0] = true;
+        true
+    }
     fn run(&mut self, frames: &mut usize, ibuf: &mut [f64], _obuf: &mut [f64]) -> Buf {
         let ch = self.stream.channels;
         for frame in ibuf[..*frames * ch].chunks_exact_mut(ch) {
@@ -57,6 +62,15 @@ impl Effect for Crossfeed {
 }
 
 fn init(
+    info: &EffectInfo,
+    istream: &Stream,
+    selector: &[bool],
+    argv: &[&str],
+) -> Result<Vec<Box<dyn Effect>>> {
+    make(info, istream, selector, argv).map(|e| vec![e])
+}
+
+fn make(
     info: &EffectInfo,
     istream: &Stream,
     selector: &[bool],

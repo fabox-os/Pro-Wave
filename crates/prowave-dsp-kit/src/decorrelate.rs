@@ -27,6 +27,11 @@ pub(crate) static INFO: [EffectInfo; 1] = [EffectInfo {
 /// The random sequence of the delays (`static uint32_t seed = 1` in the original).
 static SEED: Mutex<u32> = Mutex::new(1);
 
+/// Starts the delay sequence over.
+pub(crate) fn reset_seed() {
+    *SEED.lock().unwrap_or_else(|e| e.into_inner()) = 1;
+}
+
 struct SchAp {
     len: usize,
     p: usize,
@@ -127,6 +132,15 @@ impl Effect for Decorrelate {
 }
 
 fn init(
+    info: &EffectInfo,
+    istream: &Stream,
+    selector: &[bool],
+    argv: &[&str],
+) -> Result<Vec<Box<dyn Effect>>> {
+    make(info, istream, selector, argv).map(|e| vec![e])
+}
+
+fn make(
     info: &EffectInfo,
     istream: &Stream,
     selector: &[bool],

@@ -42,6 +42,12 @@ fn every_case_matches_the_original_program_sample_by_sample() {
             .parse()
             .unwrap_or(48_000);
         let words = fields.next().unwrap_or_default().trim();
+        // Every case starts like a run of the original program: with fresh random sequences.
+        prowave_dsp_kit::reset_random_seeds();
+        // `GOLDEN_ONLY=name` runs just one case.
+        if std::env::var("GOLDEN_ONLY").is_ok_and(|only| only != name) {
+            continue;
+        }
         let argv: Vec<&str> = words.split_whitespace().collect();
         let want = read_f32(&dir().join(format!("{name}.f32")));
         let mut chain = match Chain::from_args(Stream { fs, channels: 2 }, &argv) {
@@ -52,7 +58,7 @@ fn every_case_matches_the_original_program_sample_by_sample() {
             }
         };
         let got: Vec<f64> = chain
-            .run(&input)
+            .process(&input)
             .iter()
             .map(|v| v.clamp(-1.0, 1.0))
             .collect();
@@ -75,7 +81,10 @@ fn every_case_matches_the_original_program_sample_by_sample() {
         checked += 1;
     }
     assert!(problems.is_empty(), "{problems:#?}");
-    assert!(checked >= 55, "only {checked} cases");
+    assert!(
+        checked >= 70 || std::env::var("GOLDEN_ONLY").is_ok(),
+        "only {checked} cases"
+    );
 }
 
 #[test]

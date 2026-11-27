@@ -63,6 +63,15 @@ fn init(
     istream: &Stream,
     selector: &[bool],
     argv: &[&str],
+) -> Result<Vec<Box<dyn Effect>>> {
+    make(info, istream, selector, argv).map(|e| vec![e])
+}
+
+fn make(
+    info: &EffectInfo,
+    istream: &Stream,
+    selector: &[bool],
+    argv: &[&str],
 ) -> Result<Box<dyn Effect>> {
     if argv.len() != 2 {
         return Err(info.usage_error());

@@ -54,9 +54,27 @@ impl Effect for Remix {
     fn no_dither(&self) -> bool {
         self.no_dither
     }
+    fn channel_deps(&self, deps: &mut [Vec<bool>]) -> bool {
+        for (row, src) in deps.iter_mut().zip(&self.sources) {
+            row.iter_mut().for_each(|b| *b = false);
+            for j in src {
+                row[*j] = true;
+            }
+        }
+        true
+    }
 }
 
 fn init(
+    info: &EffectInfo,
+    istream: &Stream,
+    selector: &[bool],
+    argv: &[&str],
+) -> Result<Vec<Box<dyn Effect>>> {
+    make(info, istream, selector, argv).map(|e| vec![e])
+}
+
+fn make(
     info: &EffectInfo,
     istream: &Stream,
     selector: &[bool],
