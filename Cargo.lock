@@ -3465,6 +3465,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "prowave-dsp-kit"
+version = "0.1.0"
+
+[[package]]
 name = "prowave-dssi"
 version = "0.1.0"
 dependencies = [
