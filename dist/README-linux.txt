@@ -27,22 +27,22 @@ from Windows or on GitHub's build servers). Please report what works and what do
 Most desktop installs already have these. If the app doesn't start, install them:
 
 Ubuntu / Debian / Mint / Pop!_OS:
-  sudo apt install libasound2 libxkbcommon-x11-0 libwayland-client0 libfontconfig1 \
+  sudo apt install libasound2 liblilv-0-0 libxkbcommon-x11-0 libwayland-client0 libfontconfig1 \
                    libdbus-1-3 libx11-6 libxcursor1 libxrandr2 libxi6 libegl1 \
                    mesa-vulkan-drivers xdg-desktop-portal-gtk
   (Ubuntu 24.04+ / Debian 13+: if apt says libasound2 is a virtual package, use libasound2t64.)
 
 Fedora:
-  sudo dnf install alsa-lib libxkbcommon-x11 libwayland-client fontconfig dbus-libs \
+  sudo dnf install alsa-lib lilv-libs libxkbcommon-x11 libwayland-client fontconfig dbus-libs \
                    libX11 libXcursor libXrandr libXi mesa-libEGL mesa-vulkan-drivers \
                    xdg-desktop-portal-gtk
 
 Arch / Manjaro / EndeavourOS:
-  sudo pacman -S alsa-lib libxkbcommon-x11 wayland fontconfig dbus libx11 libxcursor \
+  sudo pacman -S alsa-lib lilv libxkbcommon-x11 wayland fontconfig dbus libx11 libxcursor \
                  libxrandr libxi libglvnd vulkan-icd-loader xdg-desktop-portal-gtk
 
 openSUSE:
-  sudo zypper install alsa libxkbcommon-x11-0 libwayland-client0 fontconfig libdbus-1-3 \
+  sudo zypper install alsa liblilv-0-0 libxkbcommon-x11-0 libwayland-client0 fontconfig libdbus-1-3 \
                       xdg-desktop-portal-gtk
 
 What each one is for:
