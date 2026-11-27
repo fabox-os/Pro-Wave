@@ -13,6 +13,7 @@ mod bench;
 mod bounce;
 mod clock_follow;
 mod clock_in;
+mod count_in;
 mod drum_kit;
 mod drum_machine_ui;
 mod engine_sync;

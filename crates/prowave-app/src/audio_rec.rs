@@ -152,6 +152,8 @@ pub struct AudioRecorder {
     /// Level of each input channel, for the meters.
     levels: Vec<f32>,
     fresh: Vec<f32>,
+    /// Whether the count-in has started in this session (to distinguish before/after).
+    count_in: crate::count_in::CountIn,
 }
 
 /// The audio tracks that record: the armed ones, or else the selected one.
@@ -242,6 +244,12 @@ fn apply_take(
 impl AudioRecorder {
     pub fn active(&self) -> bool {
         !self.takes.is_empty()
+    }
+
+    /// Whether Record+Play is currently allowed to start or grow a take.
+    fn wants_recording(&mut self, p: &Project) -> bool {
+        let active = self.active();
+        crate::count_in::wants_recording(p, &mut self.count_in, active)
     }
 
     /// The regions being recorded now (drawn red).
@@ -366,7 +374,7 @@ impl AudioRecorder {
             }
         }
         self.read_levels();
-        let record = p.recording && p.playing && !p.counting_in;
+        let record = self.wants_recording(p);
         if self.takes.is_empty() {
             if self.failed && takes_over(p) {
                 p.recording = false;
@@ -573,6 +581,39 @@ mod tests {
     fn input_names() {
         assert_eq!(input_label(InputSource::Mono(0)), "Input 1");
         assert_eq!(input_label(InputSource::Stereo(2)), "Input 3-4");
+    }
+
+    #[test]
+    fn an_aborted_count_in_does_not_start_the_next_audio_recording_early() {
+        let mut p = project(&[TrackKind::Audio]);
+        p.count_in = true;
+        let mut rec = AudioRecorder::default();
+
+        // First attempt: the count-in starts, then the user stops before a take begins.
+        p.recording = true;
+        p.playing = true;
+        p.counting_in = true;
+        assert!(!rec.wants_recording(&p));
+
+        p.playing = false;
+        p.recording = false;
+        assert!(!rec.wants_recording(&p));
+
+        // The next attempt, in the frame before sync sends CountIn, must still wait.
+        p.recording = true;
+        p.playing = true;
+        p.counting_in = false;
+        assert!(
+            !rec.wants_recording(&p),
+            "a stale count-in must not start a take"
+        );
+        assert!(!rec.active());
+
+        // It starts only when the new count-in has finished.
+        p.counting_in = true;
+        assert!(!rec.wants_recording(&p));
+        p.counting_in = false;
+        assert!(rec.wants_recording(&p));
     }
 
     #[test]

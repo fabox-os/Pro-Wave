@@ -71,6 +71,8 @@ pub struct Recorder {
     played: Vec<(f64, LiveNote)>,
     /// The transport was running at the last frame.
     was_playing: bool,
+    /// Whether the count-in has started in this session (to distinguish before/after).
+    count_in: crate::count_in::CountIn,
 }
 
 impl Recorder {
@@ -106,7 +108,8 @@ fn record_track(p: &Project) -> Option<usize> {
 
 /// Call once per frame with the notes played since the last one.
 pub fn update(rec: &mut Recorder, p: &mut Project, input: &[LiveNote]) -> Outcome {
-    let want = p.recording && p.playing && !p.counting_in;
+    let active = rec.active();
+    let want = crate::count_in::wants_recording(p, &mut rec.count_in, active);
     remember_played(rec, p, input, want);
     let pedal_before = rec.pedal;
     for ev in input {
@@ -459,6 +462,7 @@ mod tests {
 
     fn project() -> Project {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.truncate(1);
         p.tracks[0].regions.clear();
         p
@@ -554,6 +558,7 @@ mod tests {
     #[test]
     fn record_needs_an_instrument_track() {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.clear();
         p.recording = true;
         p.playing = true;
@@ -705,6 +710,7 @@ mod tests {
     #[test]
     fn a_region_that_moved_is_never_written_into() {
         let mut p = Project::empty();
+        p.count_in = false;
         p.tracks.truncate(1);
         p.tracks[0].regions.clear();
         let mut other = Track::new("Other", TrackKind::Instrument);
@@ -762,6 +768,42 @@ mod tests {
         p.counting_in = true;
         assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
         assert!(!rec.active());
+        p.counting_in = false;
+        assert!(matches!(
+            update(&mut rec, &mut p, &[]),
+            Outcome::Started(..)
+        ));
+    }
+
+    #[test]
+    fn an_aborted_count_in_does_not_start_the_next_recording_early() {
+        let mut p = project();
+        p.count_in = true;
+        let mut rec = Recorder::default();
+
+        // First attempt: the count-in starts, then the user stops before a take begins.
+        p.recording = true;
+        p.playing = true;
+        p.counting_in = true;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
+        p.playing = false;
+        p.recording = false;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
+
+        // The next attempt, in the frame before sync sends CountIn, must still wait.
+        p.recording = true;
+        p.playing = true;
+        p.counting_in = false;
+        assert_eq!(
+            update(&mut rec, &mut p, &[]),
+            Outcome::Nothing,
+            "a stale count-in must not start a take"
+        );
+        assert!(!rec.active());
+
+        // It starts only when the new count-in has finished.
+        p.counting_in = true;
+        assert_eq!(update(&mut rec, &mut p, &[]), Outcome::Nothing);
         p.counting_in = false;
         assert!(matches!(
             update(&mut rec, &mut p, &[]),

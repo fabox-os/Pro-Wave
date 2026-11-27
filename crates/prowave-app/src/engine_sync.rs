@@ -666,9 +666,9 @@ impl EngineSync {
     pub fn sync(&mut self, p: &mut Project) {
         let counted = !self.playing && p.playing && p.recording && p.count_in;
         let seek_done = self.push(p);
-        if counted && self.playing {
+        if counted {
             p.counting_in = true;
-        } else if p.counting_in && (!p.playing || self.engine.state().playing) {
+        } else if p.counting_in && self.engine.state().playing {
             p.counting_in = false;
         }
         // Engine owns time while playing, unless a seek is still waiting to be accepted
