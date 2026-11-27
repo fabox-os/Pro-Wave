@@ -30,6 +30,9 @@ impl Effect for Noise {
     fn ostream(&self) -> Stream {
         self.stream
     }
+    fn opt_selector(&self) -> Option<&[bool]> {
+        Some(&self.selected)
+    }
     fn run(&mut self, frames: &mut usize, ibuf: &mut [f64], _obuf: &mut [f64]) -> Buf {
         let ch = self.stream.channels;
         for frame in ibuf[..*frames * ch].chunks_exact_mut(ch) {

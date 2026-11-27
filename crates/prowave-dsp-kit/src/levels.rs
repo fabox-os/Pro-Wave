@@ -120,6 +120,9 @@ impl Effect for Levels {
     fn channel_selector(&self) -> Option<&[bool]> {
         Some(&self.selector)
     }
+    fn opt_selector(&self) -> Option<&[bool]> {
+        Some(&self.selector)
+    }
     fn run(&mut self, frames: &mut usize, ibuf: &mut [f64], _obuf: &mut [f64]) -> Buf {
         let stride = self.stream.channels;
         for frame in ibuf[..*frames * stride].chunks_exact(stride) {

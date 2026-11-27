@@ -5,7 +5,7 @@
 use std::f64::consts::{LN_2, PI};
 
 use crate::args::{check_freq, get_freq, get_number, strtod, strtol, Getopt};
-use crate::effect::{default_selector, Buf, Effect, EffectInfo, Stream};
+use crate::effect::{default_selector, Buf, Effect, EffectInfo, Merge, Stream};
 use crate::error::{Error, Result};
 
 pub const LOWPASS_1: i32 = 1;
@@ -401,9 +401,73 @@ struct BiquadEffect {
     state: Vec<Biquad>,
 }
 
+impl BiquadEffect {
+    /// `biquad_channel_can_merge`: channel `k` of `src` can go to channel `ch_map[k]` of this
+    /// effect if that one is free and every channel of `src` that maps there has the same
+    /// filter.
+    fn channel_can_merge(&self, src: &BiquadEffect, k: usize, ch_map: &[i32]) -> bool {
+        if !src.selected[k] || ch_map[k] < 0 || self.selected[ch_map[k] as usize] {
+            return false;
+        }
+        (0..src.stream.channels).all(|i| {
+            ch_map[i] != ch_map[k] || (src.selected[i] && same_filter(&src.state[i], &src.state[k]))
+        })
+    }
+}
+
+/// `biquad_equal`: the same coefficients.
+fn same_filter(a: &Biquad, b: &Biquad) -> bool {
+    a.c0 == b.c0 && a.c1 == b.c1 && a.c2 == b.c2 && a.c3 == b.c3 && a.c4 == b.c4
+}
+
 impl Effect for BiquadEffect {
     fn reorderable(&self) -> bool {
         true
+    }
+    fn opt_selector(&self) -> Option<&[bool]> {
+        Some(&self.selected)
+    }
+    fn allow_remap(&self) -> bool {
+        true
+    }
+    fn merge_id(&self) -> Option<&'static str> {
+        Some("biquad")
+    }
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    /// `biquad_effect_merge`: takes the channels of `src` whose place in this effect is free,
+    /// following them through effects that moved them (`ch_map`).
+    fn merge(&mut self, src: &mut dyn Effect, ch_map: &[i32]) -> Merge {
+        let Some(src) = src
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<BiquadEffect>())
+        else {
+            return Merge::None;
+        };
+        let n_src = src.selected.iter().filter(|s| **s).count();
+        let mut rem = n_src;
+        for k in 0..src.stream.channels {
+            if self.channel_can_merge(src, k, ch_map) {
+                let m = ch_map[k];
+                self.selected[m as usize] = true;
+                self.state[m as usize] = src.state[k];
+                for i in k..src.stream.channels {
+                    if src.selected[i] && ch_map[i] == m {
+                        src.selected[i] = false;
+                        src.state[i] = Biquad::default();
+                        rem -= 1;
+                    }
+                }
+            }
+        }
+        if rem == n_src {
+            Merge::None
+        } else if rem > 0 {
+            Merge::Partial
+        } else {
+            Merge::Full
+        }
     }
     fn name(&self) -> &'static str {
         self.name

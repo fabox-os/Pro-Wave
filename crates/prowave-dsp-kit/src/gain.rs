@@ -1,7 +1,7 @@
 //! `gain`, `mult` and `add` (`gain.c`): multiply or add a constant per channel.
 
 use crate::args::get_number;
-use crate::effect::{default_selector, Buf, Effect, EffectInfo, Stream};
+use crate::effect::{default_selector, Buf, Effect, EffectInfo, Merge, Stream};
 use crate::error::Result;
 
 const GAIN: i32 = 1;
@@ -35,12 +35,43 @@ struct GainEffect {
     /// The factor (or the value to add) of each channel; the neutral value where the channel
     /// is not selected.
     state: Vec<f64>,
+    selected: Vec<bool>,
     add: bool,
 }
 
 impl Effect for GainEffect {
     fn reorderable(&self) -> bool {
         !self.add
+    }
+    fn opt_selector(&self) -> Option<&[bool]> {
+        Some(&self.selected)
+    }
+    /// `gain` and `mult` share one merge (`gain_effect_merge`); `add` has its own.
+    fn merge_id(&self) -> Option<&'static str> {
+        Some(if self.add { "add" } else { "gain" })
+    }
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    /// `gain_effect_merge` and `add_effect_merge`: the factors multiply, the values add.
+    fn merge(&mut self, src: &mut dyn Effect, _ch_map: &[i32]) -> Merge {
+        let Some(src) = src
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<GainEffect>())
+        else {
+            return Merge::None;
+        };
+        for k in 0..self.stream.channels {
+            if src.selected[k] {
+                if self.add {
+                    self.state[k] += src.state[k];
+                } else {
+                    self.state[k] *= src.state[k];
+                }
+                self.selected[k] = true;
+            }
+        }
+        Merge::Full
     }
     fn name(&self) -> &'static str {
         self.name
@@ -97,6 +128,7 @@ fn make(
         name: info.name,
         stream: *istream,
         state: sel.iter().map(|s| if *s { v } else { neutral }).collect(),
+        selected: sel,
         add,
     }))
 }
