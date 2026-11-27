@@ -2780,7 +2780,7 @@ pub(crate) mod tests {
 
         // A format a later version adds, or a damaged state, never stops a project opening.
         let mut odd = doc.clone();
-        odd.tracks[0].fx[1].plugin.as_mut().unwrap().format = "LV2".into();
+        odd.tracks[0].fx[1].plugin.as_mut().unwrap().format = "Future Format".into();
         odd.master_fx[0].plugin.as_mut().unwrap().state = "not hexadecimal".into();
         let (r, _) = from_doc(&odd, here.0, &here.1);
         assert_eq!(

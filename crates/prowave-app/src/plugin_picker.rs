@@ -40,7 +40,7 @@ pub enum Pick {
 
 /// The formats of hosted plug-ins, in the order of the picker's submenus (Logic has one,
 /// "Audio Units").
-const FORMATS: [Format; 3] = [Format::AudioUnit, Format::Clap, Format::Vst3];
+const FORMATS: [Format; 4] = [Format::AudioUnit, Format::Clap, Format::Vst3, Format::Lv2];
 
 /// The category Logic files `kind` under.
 pub fn category(kind: FxKind) -> &'static str {

@@ -48,7 +48,7 @@ fn exercise(info: &PluginInfo) {
 #[ignore = "needs plug-ins installed on this computer"]
 fn installed_plugins_load_and_process() {
     let only = std::env::var("PROWAVE_TEST_PLUGINS").unwrap_or_default();
-    for format in [Format::Clap, Format::Vst3] {
+    for format in [Format::Clap, Format::Vst3, Format::Lv2] {
         for path in installed(format) {
             if !path.to_string_lossy().contains(&only) {
                 continue;
@@ -80,7 +80,7 @@ fn installed_plugins_show_their_own_window() {
         .unwrap_or(5);
     let program = std::path::Path::new(env!("CARGO_BIN_EXE_prowave-plugin-host"));
     let mut found: Vec<PluginInfo> = scan_audio_units();
-    for format in [Format::Clap, Format::Vst3] {
+    for format in [Format::Clap, Format::Vst3, Format::Lv2] {
         for path in installed(format) {
             found.extend(scan_file(format, &path).unwrap_or_default());
         }
@@ -168,4 +168,11 @@ fn clap_editor_is_available_on_x11() {
 #[ignore = "needs VST3 plug-ins installed on this computer, and a screen"]
 fn vst3_editor_is_available_on_x11() {
     assert_editor_is_available(Format::Vst3);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs LV2 plug-ins installed on this computer, and a screen"]
+fn lv2_editor_is_available_on_x11() {
+    assert_editor_is_available(Format::Lv2);
 }

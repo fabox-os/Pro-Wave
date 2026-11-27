@@ -262,9 +262,9 @@ impl DustState {
             let wow = (std::f32::consts::TAU * self.wow_phase).sin() + 0.4 * self.drift;
             let flutter = (std::f32::consts::TAU * self.flutter_phase).sin();
             let delay = 1.0 + self.wow * (1.0 + wow / 1.4) + self.flutter * (1.0 + flutter);
-            for ch in 0..2 {
-                self.lines[ch].push(x[ch]);
-                x[ch] = self.lines[ch].read(delay);
+            for (ch, v) in x.iter_mut().enumerate() {
+                self.lines[ch].push(*v);
+                *v = self.lines[ch].read(delay);
             }
         }
 
@@ -275,12 +275,12 @@ impl DustState {
         }
 
         // Hiss and crackle, before the filters.
-        for ch in 0..2 {
+        for (ch, v) in x.iter_mut().enumerate() {
             if self.hiss > 0.0 {
                 let white = self.uniform() * 2.0 - 1.0;
                 // A one-pole low pass takes the harshest top off the hiss.
                 self.hiss_lp[ch] += (white - self.hiss_lp[ch]) * 0.35;
-                x[ch] += self.hiss_lp[ch] * self.hiss * 1.6;
+                *v += self.hiss_lp[ch] * self.hiss * 1.6;
             }
             if self.click_chance > 0.0 {
                 if self.uniform() < self.click_chance {
@@ -289,10 +289,10 @@ impl DustState {
                     let amp = 0.02 + 0.3 * u * u * u;
                     self.click[ch] = if self.uniform() < 0.5 { amp } else { -amp };
                 }
-                x[ch] += self.click[ch];
+                *v += self.click[ch];
                 self.click[ch] *= self.click_decay;
             }
-            x[ch] = self.lpf[ch].tick(self.hpf[ch].tick(x[ch]));
+            *v = self.lpf[ch].tick(self.hpf[ch].tick(*v));
         }
 
         if self.mix >= 1.0 {
