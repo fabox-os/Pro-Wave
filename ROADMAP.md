@@ -402,14 +402,15 @@ limitations at the end of the section). Still open, in the order the work would 
   Mosaic Decimator (bit and sample-rate reduction) and Dustbowl Lo-Fi (wow, flutter, drive, hiss,
   crackle, band limit) from issue #183, written as built-in effects instead of bundling LADSPA
   binaries; more names from that issue's list are to come.
-- **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** parts 1 to 5 done (chain with
+- **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** parts 1 to 6 done (chain with
   latency alignment, draining and the effects' own tails, argument parsing, selectors, all
   biquads, gain/mult/add, mid/side, crossfeed, remix, noise, dither with noise shaping,
   decorrelate, delay with fractional all-pass and modulation, reverse IIR (`-r` of the biquads,
   with the chain optimiser that merges them), FIR by FFT convolution and
   partitioned (`fir`, `fir_p`), `sinc`, `hilbert`, the `resample` converter, and the catalog of
-  Pro Wave names; 136 cases compared with the original sample by sample). Next (part 6): matrix4 and
-  matrix4_mb, then levels and stats. Filter files are not
+  Pro Wave names, and the `matrix4` decoder; 150 cases compared with the original sample by
+  sample). Next (part 7): matrix4_mb (multiband, with its delay estimator, filter bank and
+  crosstalk cancellation), then levels and stats. Filter files are not
   read by the port (`coefs:` lists and in-memory filters are); the file and sound-card backends,
   zita-convolver (it falls back to `fir_p`, as the original does without it) and the LADSPA
   frontend are not ported: Pro Wave has its own.

@@ -9,6 +9,21 @@ set -e
 SRC="$1"; HERE="$(cd "$(dirname "$0")" && pwd)"; WORK="$(mktemp -d)"
 [ -n "$SRC" ] || { echo "usage: $0 /path/to/dsp" >&2; exit 2; }
 cp -r "$SRC" "$WORK/dsp" && cd "$WORK/dsp"
+# The original sizes the channel-dependency rows by the widest *input* it knew before it adds
+# `align` effects; a decoder that widens the stream (matrix4: 2 -> 4+ channels) then gets an
+# `align` effect with more input channels than the rows hold, and writes past them. The copy
+# built here gets rows as wide as the widest stream; nothing else is changed.
+sed -i 's/NEW_SELECTOR(state->max_in_ch)/NEW_SELECTOR(state->max_ch)/' effects_chain.c
+# matrix4 passes no delay-estimator history (NULL) but reads it when an event ends, which
+# crashes the original; the value is only used with the estimator, so it is left out here.
+python3 - <<'PY'
+p = "matrix4_common.c"
+s = open(p).read()
+old = "(ewma_get_last(&ev->align_avg)+ewma_get_last(&hist->align_avg))*0.5;\n\t\t\tdouble ev_dt"
+new = "(hist) ? (ewma_get_last(&ev->align_avg)+ewma_get_last(&hist->align_avg))*0.5 : 0.0;\n\t\t\tdouble ev_dt"
+assert old in s
+open(p, "w").write(s.replace(old, new))
+PY
 if ! pkg-config --exists fftw3; then
   mkdir -p "$WORK/shim" && cc -O2 -c "$HERE/fftw_shim/fftw3.c" -o "$WORK/shim/fftw3.o" \
     && ar rcs "$WORK/shim/libfftw3.a" "$WORK/shim/fftw3.o"
@@ -21,9 +36,11 @@ fi
   --disable-alsa --disable-ao --disable-pulse --disable-ladspa_dsp --disable-ladspa-host >/dev/null
 make -j4 >/dev/null
 python3 "$HERE/make_input.py" "$HERE/input.f32"
+python3 "$HERE/make_long_input.py" "$HERE/long.f32"
 grep -v '^#' "$HERE/cases.txt" | while IFS='|' read -r name fs words; do
   name="$(echo "$name" | tr -d ' ')"; fs="$(echo "$fs" | tr -d ' ')"
   # shellcheck disable=SC2086
-  ./dsp -q -I -t pcm -e float -r "$fs" -c 2 "$HERE/input.f32" -o -t pcm -e float "$HERE/$name.f32" $words 2>/dev/null
+  in="$HERE/input.f32"; case "$name" in long_*) in="$HERE/long.f32";; esac
+  ./dsp -q -I -t pcm -e float -r "$fs" -c 2 "$in" -o -t pcm -e float "$HERE/$name.f32" $words 2>/dev/null
 done
 rm -rf "$WORK"

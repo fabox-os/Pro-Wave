@@ -56,6 +56,8 @@ pub mod fir_p;
 pub mod fir_util;
 pub mod gain;
 pub mod hilbert;
+pub mod matrix4;
+mod matrix4_common;
 mod mod_tables;
 pub mod noise;
 mod optimize;
@@ -65,6 +67,7 @@ pub mod reverse_iir;
 pub mod rng;
 pub mod selector;
 pub mod sinc;
+pub mod smoothing;
 pub mod st2ms;
 pub mod window;
 
