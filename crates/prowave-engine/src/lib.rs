@@ -18,6 +18,7 @@ mod convolver;
 mod core;
 mod disk;
 pub mod drum_machine;
+pub mod dustbowl;
 pub mod epiano;
 mod flac;
 mod flex;
@@ -29,6 +30,7 @@ pub mod kestrel_eq;
 #[cfg(not(target_arch = "wasm32"))]
 mod mapped;
 mod monitor;
+pub mod mosaic;
 mod mtc;
 mod output;
 pub mod plugin;

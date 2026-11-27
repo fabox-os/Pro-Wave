@@ -399,6 +399,9 @@ limitations at the end of the section). Still open, in the order the work would 
 - **Next (not released yet):** Kestrel EQ (issue #192), the console-style EQ of Logic's Vintage EQ
   family: switched HPF, low shelf, mid bell, a 12 kHz high shelf and a transformer Drive. It has
   not been compared by ear with a hardware console. Vintage Graphic EQ (API 560 style) is still to do.
+  Mosaic Decimator (bit and sample-rate reduction) and Dustbowl Lo-Fi (wow, flutter, drive, hiss,
+  crackle, band limit) from issue #183, written as built-in effects instead of bundling LADSPA
+  binaries; more names from that issue's list are to come.
 - **0.3.4:** Hosted CLAP and VST3 plug-ins render their own designed window on Linux/X11 when
   Editor is chosen in Plugin Manager (issue #189); Sliders stays the portable default and is still
   used when a plug-in has no editor. Native editors on Windows are still not hosted.
