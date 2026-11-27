@@ -396,6 +396,9 @@ limitations at the end of the section). Still open, in the order the work would 
   on a drum track, and a recorded take keeps every frame (the device delay is skipped by the
   region, so a wrong delay cannot empty a take) and a silent input is noticed. Recording is not
   tried on real Windows or macOS microphones here.
+- **Next (not released yet):** Kestrel EQ (issue #192), the console-style EQ of Logic's Vintage EQ
+  family: switched HPF, low shelf, mid bell, a 12 kHz high shelf and a transformer Drive. Vintage
+  Graphic EQ (API 560 style) is still to do.
 - **0.3.4:** Hosted CLAP and VST3 plug-ins render their own designed window on Linux/X11 when
   Editor is chosen in Plugin Manager (issue #189); Sliders stays the portable default and is still
   used when a plug-in has no editor. Native editors on Windows are still not hosted.
