@@ -68,6 +68,128 @@ impl<'a> Token<'a> {
     }
 }
 
+/// Where `@file` effects files come from. The crate reads no files itself: `read` gets the
+/// full path (after `~/` and the `%r %k %c %%` substitutions, see [`full_path`]) and returns
+/// the text, so the host decides what may be read (on the web: nothing, or its own store).
+pub struct EffectsFiles<'a> {
+    /// The directory that relative paths on the command line start from; `None` leaves them
+    /// as they are (relative to the working directory, as in the original).
+    pub dir: Option<String>,
+    /// `$HOME`, for paths that start with `~/`.
+    pub home: Option<String>,
+    /// Reads the effects file at a path.
+    pub read: &'a mut dyn FnMut(&str) -> std::io::Result<String>,
+}
+
+/// `construct_full_path`: `path` relative to `dir` (unless absolute or `~/`, which is
+/// `home`), with `%r` the sample rate in Hz, `%k` in kHz, `%c` the number of channels and
+/// `%%` a `%`.
+pub fn full_path(
+    dir: Option<&str>,
+    path: &str,
+    fs: u32,
+    channels: usize,
+    home: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    let mut p = path;
+    if let Some(rest) = p.strip_prefix('~').filter(|r| r.starts_with('/')) {
+        p = rest;
+        if let Some(h) = home {
+            out.push_str(h);
+        }
+    } else if let Some(d) = dir.filter(|_| !p.starts_with('/')) {
+        out.push_str(d);
+        out.push('/');
+    }
+    let mut chars = p.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' || chars.peek().is_none() {
+            out.push(c);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('r') => out.push_str(&fs.to_string()),
+            Some('k') => out.push_str(&(f64::from(fs) / 1000.0).to_string()),
+            Some('c') => out.push_str(&channels.to_string()),
+            Some('%') => out.push('%'),
+            _ => {
+                // not a substitution: the `%` stays and the next character is read as usual
+                out.push('%');
+                continue;
+            }
+        }
+        chars.next();
+    }
+    out
+}
+
+/// `ec_split_and_lex_string`: the words of an effects file. Words are separated by white
+/// space; `#` at the start of a word begins a comment that runs to the end of the line;
+/// `"…"` keeps white space and `#` in a word; `\` makes the next character literal (and at
+/// the start of a word stays, so that the word is an argument, as on the command line).
+pub fn split_words(text: &str) -> Result<Vec<String>> {
+    let s = text.as_bytes();
+    let n = s.len();
+    let (mut sep, mut esc, mut quo) = (true, false, false);
+    let (mut i, mut k) = (0usize, 0usize);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut words = Vec::new();
+    loop {
+        let c = if k < n { s[k] } else { 0 };
+        let mut sp = true;
+        let mut done = false;
+        if c == b'\\' && !esc {
+            esc = true;
+            if sep {
+                buf.push(c);
+            }
+        } else if c == b'"' && !esc {
+            quo = !quo;
+        } else if c == b'#' && !esc && !quo && sep {
+            while k < n && s[k] != b'\n' {
+                k += 1;
+            }
+            if k >= n {
+                break;
+            }
+            i = k + 1;
+        } else if c == 0 || (!esc && !quo && c.is_ascii_whitespace()) || (!esc && !quo && c == 0x0b)
+        {
+            if c == 0 {
+                if quo {
+                    return Err(Error::Message("unterminated quoted string".into()));
+                }
+                done = true;
+            }
+            if i != k {
+                words.push(String::from_utf8_lossy(&buf).into_owned());
+                buf.clear();
+                i = k;
+            }
+            sep = true;
+            i += 1;
+        } else {
+            sp = false;
+            buf.push(c);
+        }
+        if !sp {
+            sep = false;
+            esc = false;
+        }
+        k += 1;
+        if done {
+            break;
+        }
+    }
+    Ok(words)
+}
+
+/// What the parser carries through files and blocks: the file reader, if any.
+struct ParseCtx<'r, 'a> {
+    files: Option<&'r mut EffectsFiles<'a>>,
+}
+
 /// `struct ec_parser_state`: the selector and the channel mask of a block.
 struct ParseState {
     ch_sel: Vec<bool>,
@@ -75,6 +197,8 @@ struct ParseState {
     last_ch_sel: Option<String>,
     last_stream_ch: usize,
     allow_fail: bool,
+    /// The directory of the effects file being read (relative paths start there).
+    dir: Option<String>,
 }
 
 impl ParseState {
@@ -88,6 +212,7 @@ impl ParseState {
             last_ch_sel: None,
             last_stream_ch: n,
             allow_fail: false,
+            dir: None,
         }
     }
 
@@ -132,6 +257,10 @@ pub struct Chain {
     /// number of input frames seen so far.
     drain_frames: usize,
     iframes: usize,
+    /// Where `new_thread` started a new part of the chain (`effects_subchain`): the
+    /// optimiser does not merge across these.
+    barriers: Vec<usize>,
+    new_sc: bool,
 }
 
 impl Chain {
@@ -147,6 +276,8 @@ impl Chain {
             built: false,
             drain_frames: 0,
             iframes: 0,
+            barriers: Vec::new(),
+            new_sc: false,
         }
     }
 
@@ -168,6 +299,12 @@ impl Chain {
         argv.extend_from_slice(args);
         let all = vec![true; self.ostream.channels];
         let made = (info.init)(info, &self.ostream, selector.unwrap_or(&all), &argv)?;
+        if self.new_sc && !made.is_empty() {
+            if !self.effects.is_empty() {
+                self.barriers.push(self.effects.len());
+            }
+            self.new_sc = false;
+        }
         for e in made {
             self.ostream = e.ostream();
             self.effects.push(e);
@@ -185,7 +322,18 @@ impl Chain {
             self.built = true;
             return Ok(());
         }
-        crate::optimize::optimize(&mut self.effects);
+        // each part of the chain (see `new_thread`) is optimised on its own
+        let mut parts: Vec<Vec<Box<dyn Effect>>> = Vec::new();
+        let mut rest = std::mem::take(&mut self.effects);
+        for &b in self.barriers.iter().rev() {
+            parts.push(rest.split_off(b));
+        }
+        parts.push(rest);
+        for part in parts.iter_mut().rev() {
+            crate::optimize::optimize(part);
+            self.effects.append(part);
+        }
+        self.barriers.clear();
         for e in self.effects.iter_mut() {
             e.prepare()?;
         }
@@ -200,13 +348,49 @@ impl Chain {
     /// of the effects after them; `{ … }` blocks, inside which the selectors count only the
     /// channels selected where the block starts; `!` before an effect that may fail to
     /// start (it is then left out); and `\word` for an argument that would otherwise be
-    /// read as an effect name or a directive. Effects files (`@file`) and `new_thread` are
-    /// not supported.
+    /// read as an effect name or a directive. `new_thread` is accepted: the original runs
+    /// the rest of the chain in another thread, which changes no sample here; the optimiser
+    /// does not merge across it, as in the original. Effects files (`@file`) need
+    /// [`Chain::from_args_with_files`].
     pub fn from_args(istream: Stream, argv: &[&str]) -> Result<Self> {
+        Self::from_words(istream, argv, None, None)
+    }
+
+    /// [`Chain::from_args`] with `@file` effects files read through `files`.
+    pub fn from_args_with_files(
+        istream: Stream,
+        argv: &[&str],
+        files: &mut EffectsFiles,
+    ) -> Result<Self> {
+        let dir = files.dir.clone();
+        Self::from_words(istream, argv, Some(files), dir)
+    }
+
+    /// A chain from the text of an effects file (as `@file` would read it); its relative
+    /// paths start from `files.dir`.
+    pub fn from_effects_text(
+        istream: Stream,
+        text: &str,
+        files: &mut EffectsFiles,
+    ) -> Result<Self> {
+        let words = split_words(text)?;
+        let argv: Vec<&str> = words.iter().map(String::as_str).collect();
+        let dir = files.dir.clone();
+        Self::from_words(istream, &argv, Some(files), dir)
+    }
+
+    fn from_words(
+        istream: Stream,
+        argv: &[&str],
+        files: Option<&mut EffectsFiles>,
+        dir: Option<String>,
+    ) -> Result<Self> {
         let mut chain = Chain::new(istream);
         let tokens: Vec<Token> = argv.iter().map(|w| lex(w)).collect();
         let mut state = ParseState::new(None, istream.channels);
-        let end = chain.parse(&mut state, &tokens, 0, false, 1)?;
+        state.dir = dir;
+        let mut ctx = ParseCtx { files };
+        let end = chain.parse(&mut state, &tokens, 0, false, 1, &mut ctx)?;
         debug_assert_eq!(end, tokens.len());
         chain.build()?;
         Ok(chain)
@@ -221,6 +405,7 @@ impl Chain {
         mut i: usize,
         in_block: bool,
         depth: usize,
+        ctx: &mut ParseCtx,
     ) -> Result<usize> {
         if depth > MAX_PARSE_DEPTH {
             return Err(Error::Message("maximum recursion depth exceeded".into()));
@@ -237,7 +422,9 @@ impl Chain {
                     continue;
                 }
                 Token::NewThread => {
-                    return Err(Error::Unsupported("the new_thread directive".into()));
+                    self.new_sc = true;
+                    i += 1;
+                    continue;
                 }
                 _ => {}
             }
@@ -264,12 +451,15 @@ impl Chain {
             }
             match tok {
                 Token::Source(path) => {
-                    return Err(Error::Unsupported(format!("effects files (@{path})")));
+                    self.source(st, path, depth, ctx)?;
+                    i += 1;
+                    continue;
                 }
                 Token::BlockStart => {
                     let mut child = ParseState::new(Some(&st.ch_sel), n);
                     child.last_stream_ch = st.last_stream_ch;
-                    let end = self.parse(&mut child, tokens, i + 1, true, depth + 1)?;
+                    child.dir = st.dir.clone();
+                    let end = self.parse(&mut child, tokens, i + 1, true, depth + 1, ctx)?;
                     if end >= tokens.len() {
                         return Err(Error::Message("unterminated block".into()));
                     }
@@ -302,6 +492,43 @@ impl Chain {
             i = j;
         }
         Ok(i)
+    }
+
+    /// `ec_parse_file` for `@path`: reads the file and parses it as a block whose mask is the
+    /// active selector; its relative paths start from its own directory.
+    fn source(
+        &mut self,
+        st: &ParseState,
+        path: &str,
+        depth: usize,
+        ctx: &mut ParseCtx,
+    ) -> Result<()> {
+        let n = self.ostream.channels;
+        let Some(files) = ctx.files.as_deref_mut() else {
+            return Err(Error::Unsupported(format!(
+                "effects files (@{path}) without a file reader (Chain::from_args_with_files)"
+            )));
+        };
+        let n_sel = st.ch_sel.iter().filter(|b| **b).count();
+        let full = full_path(
+            st.dir.as_deref(),
+            path,
+            self.ostream.fs,
+            n_sel,
+            files.home.as_deref(),
+        );
+        let text = (files.read)(&full).map_err(|e| {
+            Error::Message(format!("error: failed to load effects file: {full}: {e}"))
+        })?;
+        let words = split_words(&text)?;
+        let tokens: Vec<Token> = words.iter().map(|w| lex(w)).collect();
+        let mut state = ParseState::new(Some(&st.ch_sel), n);
+        state.dir = Some(
+            full.rfind('/')
+                .map_or_else(|| ".".to_string(), |b| full[..b].to_string()),
+        );
+        self.parse(&mut state, &tokens, 0, false, depth + 2, ctx)?;
+        Ok(())
     }
 
     /// What the measuring effects (`stats`, `levels`) found, in chain order. A `stats`
@@ -509,14 +736,6 @@ mod tests {
         assert!(Chain::from_args(S, &["{", "gain", "-3"]).is_err());
         assert!(Chain::from_args(S, &["gain", "-3", "}"]).is_err());
         assert!(matches!(
-            Chain::from_args(S, &["@effects.txt"]),
-            Err(Error::Unsupported(_))
-        ));
-        assert!(matches!(
-            Chain::from_args(S, &["gain", "-3", "new_thread", "gain", "-3"]),
-            Err(Error::Unsupported(_))
-        ));
-        assert!(matches!(
             Chain::from_args(S, &["zita_convolver", "x"]),
             Err(Error::Unsupported(_))
         ));
@@ -550,5 +769,78 @@ mod tests {
         ));
         assert_eq!(lex("\\:0"), Token::Escaped(":0"));
         assert!(!lex("\\gain").is_keyword() && lex("gain").is_keyword());
+    }
+
+    #[test]
+    fn effects_file_words_follow_the_original_lexer() {
+        let w = |t: &str| split_words(t).unwrap();
+        assert_eq!(
+            w("gain -3  # comment\nlowpass 1k"),
+            ["gain", "-3", "lowpass", "1k"]
+        );
+        assert_eq!(w("a#b \"c d\" \"\""), ["a#b", "c d", ""]);
+        // a backslash in a word makes the next character literal; at the start it stays
+        assert_eq!(w(r"a\ b \#x \\y"), ["a b", r"\#x", r"\\y"]);
+        assert_eq!(w("# only a comment"), Vec::<String>::new());
+        assert!(split_words("gain \"-3").is_err());
+    }
+
+    #[test]
+    fn paths_get_the_original_substitutions() {
+        assert_eq!(
+            full_path(Some("d"), "x_%r_%k_%c.txt", 44100, 2, None),
+            "d/x_44100_44.1_2.txt"
+        );
+        assert_eq!(
+            full_path(Some("d"), "/abs/%%%z%", 48000, 1, None),
+            "/abs/%%z%"
+        );
+        assert_eq!(
+            full_path(Some("d"), "~/fx", 48000, 1, Some("/home/u")),
+            "/home/u/fx"
+        );
+        assert_eq!(full_path(None, "rel", 48000, 1, None), "rel");
+    }
+
+    #[test]
+    fn effects_files_are_read_through_the_host() {
+        let x = ramp();
+        assert!(matches!(
+            Chain::from_args(S, &["@fx.txt"]),
+            Err(Error::Unsupported(_))
+        ));
+        let mut read = |p: &str| match p {
+            "base/fx.txt" => Ok(":0 gain -6 @sub/more.txt".to_string()),
+            "base/sub/more.txt" => Ok("# relative to its own directory\ngain -6".to_string()),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                p.to_string(),
+            )),
+        };
+        let mut files = EffectsFiles {
+            dir: Some("base".into()),
+            home: None,
+            read: &mut read,
+        };
+        let mut a = Chain::from_args_with_files(S, &[":1", "@fx.txt"], &mut files).unwrap();
+        let mut b = Chain::from_args(S, &[":1", "gain", "-12"]).unwrap();
+        let (ya, yb) = (a.process(&x), b.process(&x));
+        assert!(ya.iter().zip(&yb).all(|(p, q)| (p - q).abs() < 1e-12));
+        assert!(Chain::from_args_with_files(S, &["@missing.txt"], &mut files).is_err());
+    }
+
+    #[test]
+    fn new_thread_only_keeps_the_optimiser_from_merging_across_it() {
+        let x = ramp();
+        let len = |a: &[&str]| Chain::from_args(S, a).unwrap().process(&x).len();
+        // merged, the two fractional delays are one all-pass of the higher order; apart, two
+        assert!(
+            len(&["delay", "-f", "2.3S", "delay", "-f", "1.4S"])
+                < len(&["delay", "-f", "2.3S", "new_thread", "delay", "-f", "1.4S"])
+        );
+        let mut a =
+            Chain::from_args(S, &["lowpass", "1k", "0.7q", "new_thread", "gain", "-3"]).unwrap();
+        let mut b = Chain::from_args(S, &["lowpass", "1k", "0.7q", "gain", "-3"]).unwrap();
+        assert_eq!(a.process(&x), b.process(&x));
     }
 }

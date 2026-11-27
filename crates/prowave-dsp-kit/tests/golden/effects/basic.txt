@@ -1,0 +1,5 @@
+# An effects file for the golden tests: comments, quotes, escapes, a nested file.
+lowpass 1k 0.7q   # a comment after an effect
+gain "-3"
+remix \0 1
+:1 @nested/inner.txt
