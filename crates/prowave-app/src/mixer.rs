@@ -375,12 +375,14 @@ fn fader_and_meter(
     let y_of = |f: f32| bottom - f * h;
     let w = area.width();
     let scale_col = Color32::from_gray(0x8e);
-    let tiny = FontId::proportional(6.5);
+    // Scale numbers were too small to read at 6.5 pt; 8 pt keeps them legible on every strip.
+    let tiny = FontId::proportional(8.0);
 
     // Columns, proportional to the strip width (Logic: fader left of centre, meter right).
     let fader_x = area.left() + (w * 0.30).max(22.0);
     let num_x = area.left() + w * 0.56;
-    let bar_w = 5.0;
+    // Wide strips get wider bars; narrow strips keep 5 px so both still fit.
+    let bar_w = if w >= 80.0 { 6.0 } else { 5.0 };
     let meter_left = (area.left() + w * 0.66).min(area.right() - 2.0 * bar_w - 6.0);
 
     // Fader scale: tick marks with small numbers, left of the slot.
