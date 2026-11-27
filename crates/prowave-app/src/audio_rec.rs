@@ -153,7 +153,7 @@ pub struct AudioRecorder {
     levels: Vec<f32>,
     fresh: Vec<f32>,
     /// Whether the count-in has started in this session (to distinguish before/after).
-    count_in_started: bool,
+    count_in: crate::count_in::CountIn,
 }
 
 /// The audio tracks that record: the armed ones, or else the selected one.
@@ -249,7 +249,7 @@ impl AudioRecorder {
     /// Whether Record+Play is currently allowed to start or grow a take.
     fn wants_recording(&mut self, p: &Project) -> bool {
         let active = self.active();
-        crate::count_in::wants_recording(p, &mut self.count_in_started, active)
+        crate::count_in::wants_recording(p, &mut self.count_in, active)
     }
 
     /// The regions being recorded now (drawn red).
@@ -465,7 +465,6 @@ impl AudioRecorder {
     }
 
     fn finish(&mut self, p: &mut Project, ctx: &egui::Context) -> Outcome {
-        self.count_in_started = false;
         p.recording = false;
         let (mut kept, mut warning) = (None, None);
         for take in std::mem::take(&mut self.takes) {

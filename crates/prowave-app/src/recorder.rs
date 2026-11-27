@@ -72,7 +72,7 @@ pub struct Recorder {
     /// The transport was running at the last frame.
     was_playing: bool,
     /// Whether the count-in has started in this session (to distinguish before/after).
-    count_in_started: bool,
+    count_in: crate::count_in::CountIn,
 }
 
 impl Recorder {
@@ -109,7 +109,7 @@ fn record_track(p: &Project) -> Option<usize> {
 /// Call once per frame with the notes played since the last one.
 pub fn update(rec: &mut Recorder, p: &mut Project, input: &[LiveNote]) -> Outcome {
     let active = rec.active();
-    let want = crate::count_in::wants_recording(p, &mut rec.count_in_started, active);
+    let want = crate::count_in::wants_recording(p, &mut rec.count_in, active);
     remember_played(rec, p, input, want);
     let pedal_before = rec.pedal;
     for ev in input {
@@ -388,7 +388,6 @@ fn close(note: &mut Note, now: f64) {
 }
 
 fn finish(rec: &mut Recorder, p: &mut Project) -> Outcome {
-    rec.count_in_started = false;
     let Some((t, r)) = rec.target.take() else {
         return Outcome::Nothing;
     };
