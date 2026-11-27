@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 /// The view a hosted plug-in opens in (Logic Pro: View > Controls or View > Editor).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum PluginUiMode {
-    /// Normalized egui sliders built from the plug-in's parameter metadata.
-    Sliders,
-    /// The plug-in's own window, where the host can provide it. The default.
+    /// Normalized egui sliders built from the plug-in's parameter metadata. The default: the
+    /// portable view that works on every platform.
     #[default]
+    Sliders,
+    /// The plug-in's own window, where the host can provide it.
     Editor,
 }
 
@@ -80,7 +81,7 @@ mod tests {
 
     #[test]
     fn sliders_are_the_default() {
-        assert_eq!(PluginUiMode::default(), PluginUiMode::Editor);
+        assert_eq!(PluginUiMode::default(), PluginUiMode::Sliders);
     }
 
     #[test]
@@ -92,10 +93,10 @@ mod tests {
 
     #[test]
     fn unknown_or_empty_text_keeps_the_default() {
-        assert_eq!(PluginUiMode::parse(""), PluginUiMode::Editor);
+        assert_eq!(PluginUiMode::parse(""), PluginUiMode::Sliders);
         assert_eq!(
             PluginUiMode::parse("mode=nonsense\n"),
-            PluginUiMode::Editor
+            PluginUiMode::Sliders
         );
     }
 
