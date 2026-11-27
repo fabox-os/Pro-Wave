@@ -1208,6 +1208,71 @@ mod x11_tests {
     }
 
     #[test]
+    fn a_handler_unregistered_during_the_pump_is_not_called() {
+        static A_CALLS: AtomicUsize = AtomicUsize::new(0);
+        static B_CALLS: AtomicUsize = AtomicUsize::new(0);
+        static RUN: AtomicUsize = AtomicUsize::new(0);
+        static OBJ_B: AtomicUsize = AtomicUsize::new(0);
+
+        // Handler A's callback removes handler B from the run loop, as a plug-in may do.
+        unsafe extern "system" fn a_unregisters_b(_: super::Object, _: i32) {
+            A_CALLS.fetch_add(1, Ordering::Relaxed);
+            let run = RUN.load(Ordering::Relaxed) as super::Object;
+            let b = OBJ_B.load(Ordering::Relaxed) as super::Object;
+            // SAFETY: both are registered with the `RunLoop` that is live for this test.
+            unsafe { runloop_unregister_event_handler(run, b) };
+        }
+        unsafe extern "system" fn b_counts(_: super::Object, _: i32) {
+            B_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+
+        let unknown = Unknown {
+            query: test_query,
+            add_ref: test_add_ref,
+            release: test_release,
+        };
+        let table_a = EventHandlerTable {
+            unknown,
+            on_fd_is_set: a_unregisters_b,
+        };
+        let table_b = EventHandlerTable {
+            unknown,
+            on_fd_is_set: b_counts,
+        };
+        let mut table_a_ptr: *const EventHandlerTable = &table_a;
+        let mut table_b_ptr: *const EventHandlerTable = &table_b;
+        let obj_a = ptr::from_mut(&mut table_a_ptr).cast::<*const c_void>();
+        let obj_b = ptr::from_mut(&mut table_b_ptr).cast::<*const c_void>();
+        let run = RunLoop::new();
+        let this = ptr::from_ref(&run).cast::<*const c_void>().cast_mut();
+        RUN.store(this as usize, Ordering::Relaxed);
+        OBJ_B.store(obj_b as usize, Ordering::Relaxed);
+
+        let mut fds = [0; 2];
+        // SAFETY: `pipe` writes two valid descriptors, both closed below.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // SAFETY: the write end is open and has room for one byte.
+        assert_eq!(unsafe { libc::write(fds[1], b"x".as_ptr().cast(), 1) }, 1);
+        // SAFETY: both handlers begin with their live tables and the `RunLoop` outlives them.
+        unsafe {
+            assert_eq!(runloop_register_event_handler(this, obj_a, fds[0]), OK);
+            assert_eq!(runloop_register_event_handler(this, obj_b, fds[0]), OK);
+        }
+        run.pump();
+        assert_eq!(A_CALLS.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            B_CALLS.load(Ordering::Relaxed),
+            0,
+            "a handler unregistered by an earlier callback must not be called"
+        );
+        // SAFETY: both descriptors were opened above and are not used again.
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+    }
+
+    #[test]
     fn frame_answers_the_runloop_interface() {
         let mut frame = Frame {
             table: &super::FRAME_TABLE,
@@ -1731,11 +1796,12 @@ impl RunLoop {
             let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 0) };
             if ready > 0 {
                 for ((handler, fd), polled) in events.iter().zip(&fds) {
-                    if polled.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
-                        // SAFETY: the extra reference keeps the handler alive across its
-                        // callback, even if it unregisters itself there.
+                    if polled.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0
+                        && self.hold_event(*handler, *fd)
+                    {
+                        // SAFETY: `hold_event` took a reference, so the handler stays alive for
+                        // this callback even if it unregisters itself there.
                         unsafe {
-                            retain(*handler);
                             (table::<EventHandlerTable>(*handler).on_fd_is_set)(*handler, *fd);
                             release(*handler);
                         }
@@ -1761,14 +1827,46 @@ impl RunLoop {
             Err(_) => Vec::new(),
         };
         for handler in due {
-            // SAFETY: the extra reference keeps the handler alive across its callback, even if
-            // it unregisters itself there.
+            if !self.hold_timer(handler) {
+                continue;
+            }
+            // SAFETY: `hold_timer` took a reference, so the handler stays alive for this
+            // callback even if it unregisters itself there.
             unsafe {
-                retain(handler);
                 (table::<TimerHandlerTable>(handler).on_timer)(handler);
                 release(handler);
             }
         }
+    }
+
+    /// Takes a reference to `handler` if it is still registered for `fd`. The check and the
+    /// reference are taken under the lock, so a registration removed by an earlier callback
+    /// in this pump is skipped instead of being called after it may have been freed.
+    fn hold_event(&self, handler: Object, fd: i32) -> bool {
+        let Ok(events) = self.events.lock() else {
+            return false;
+        };
+        let held = events.iter().any(|(h, f)| *h == handler && *f == fd);
+        if held {
+            // SAFETY: the registration holds a reference and the lock is held, so `handler`
+            // is live.
+            unsafe { retain(handler) };
+        }
+        held
+    }
+
+    /// Takes a reference to `handler` if its timer is still registered. See [`Self::hold_event`].
+    fn hold_timer(&self, handler: Object) -> bool {
+        let Ok(timers) = self.timers.lock() else {
+            return false;
+        };
+        let held = timers.iter().any(|t| t.handler == handler);
+        if held {
+            // SAFETY: the registration holds a reference and the lock is held, so `handler`
+            // is live.
+            unsafe { retain(handler) };
+        }
+        held
     }
 }
 
