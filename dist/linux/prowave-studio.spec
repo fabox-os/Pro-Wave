@@ -2,7 +2,7 @@
 # binary built by CI instead of compiling, so build it with:
 #   rpmbuild -bb dist/linux/prowave-studio.spec --define "_sourcedir <dir with prowave and
 #   the dist/linux files>" --define "pkg_version <version>"
-# Run-time library dependencies (libasound.so.2, libc) are found automatically from the ELF.
+# Run-time library dependencies (libasound.so.2, liblilv-0.so.0, libc) are found automatically from the ELF.
 %global debug_package %{nil}
 %global __strip /bin/true
 %global _build_id_links none

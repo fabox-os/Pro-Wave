@@ -4,7 +4,7 @@ Architecture: amd64
 Section: sound
 Priority: optional
 Maintainer: Pro Wave <noreply@prowave.invalid>
-Depends: libc6 (>= 2.31), libasound2 (>= 1.0.16) | libasound2t64
+Depends: libc6 (>= 2.31), libasound2 (>= 1.0.16) | libasound2t64, liblilv-0-0 (>= 0.24.2)
 Recommends: libxkbcommon-x11-0, libwayland-client0, libx11-6, libxcursor1, libxrandr2, libxi6, libegl1, libfontconfig1, libdbus-1-3, xdg-desktop-portal-gtk | xdg-desktop-portal-kde | xdg-desktop-portal-gnome
 Suggests: mesa-vulkan-drivers, zenity, pipewire-alsa
 Homepage: https://prowave.invalid/
