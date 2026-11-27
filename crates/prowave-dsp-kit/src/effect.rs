@@ -28,9 +28,23 @@ pub trait Effect: Send {
     fn run(&mut self, frames: &mut usize, ibuf: &mut [f64], obuf: &mut [f64]) -> Buf;
     /// Forgets the signal (filter memory, delay lines).
     fn reset(&mut self) {}
-    /// The number of frames each buffer must be able to hold when `frames` come in.
+    /// The number of frames each buffer must be able to hold when `frames` come in
+    /// (`effect_max_out_frames`): the same number, scaled by the ratio of the sample rates
+    /// when the effect converts between them.
     fn buffer_frames(&self, frames: usize) -> usize {
-        frames
+        let (i, o) = (self.istream().fs, self.ostream().fs);
+        if i == o {
+            return frames;
+        }
+        let g = gcd(i, o);
+        ratio_mult_ceil(frames as i64, i64::from(o / g), i64::from(i / g)) as usize
+    }
+    /// What the effect still holds when the input has ended, other than silence the chain
+    /// feeds it (`drain2`): the effect gets `*frames` frames of room (in its input rate),
+    /// writes what it has into one of the buffers, sets `*frames` to how many frames that is,
+    /// or to -1 when it is empty, and says which buffer holds them. `None`: no such hook.
+    fn drain2(&mut self, _frames: &mut isize, _buf1: &mut [f64], _buf2: &mut [f64]) -> Option<Buf> {
+        None
     }
     /// Whether the effect leaves the signal at a precision where dither would be pointless
     /// (`EFFECT_FLAG_NO_DITHER`: meters, statistics, pure channel routing).
@@ -113,6 +127,11 @@ pub fn effects() -> impl Iterator<Item = &'static EffectInfo> {
         .chain(crate::remix::INFO.iter())
         .chain(crate::st2ms::INFO.iter())
         .chain(crate::delay::INFO.iter())
+        .chain(crate::resample::INFO.iter())
+        .chain(crate::fir::INFO.iter())
+        .chain(crate::fir_p::INFO.iter())
+        .chain(crate::hilbert::INFO.iter())
+        .chain(crate::sinc::INFO.iter())
         .chain(crate::decorrelate::INFO.iter())
         .chain(crate::noise::INFO.iter())
         .chain(crate::dither::INFO.iter())
@@ -124,6 +143,25 @@ pub fn effects() -> impl Iterator<Item = &'static EffectInfo> {
 pub fn get_effect_info(name: &str) -> Option<&'static EffectInfo> {
     let command = crate::catalog::command_for(name).unwrap_or(name);
     effects().find(|e| e.name == command)
+}
+
+/// The greatest common divisor (`find_gcd`).
+pub(crate) fn gcd(a: u32, b: u32) -> u32 {
+    let (mut a, mut b) = (a, b);
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// `v * n / d` rounded up (`ratio_mult_ceil`).
+pub(crate) fn ratio_mult_ceil(v: i64, n: i64, d: i64) -> i64 {
+    let r = v * n;
+    if r % d != 0 {
+        r / d + 1
+    } else {
+        r / d
+    }
 }
 
 /// The effect's channel selector as a vector of `n` entries: the given one, or all channels.

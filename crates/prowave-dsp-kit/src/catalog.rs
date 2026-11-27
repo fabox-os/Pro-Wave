@@ -186,26 +186,26 @@ pub static ENTRIES: [Entry; 40] = [
         "resample",
         "Cascade Resampler",
         "high-quality sinc sample-rate converter",
-        false
+        true
     ),
-    e!("fir", "Ribbon FIR", "FIR filter by FFT convolution", false),
+    e!("fir", "Ribbon FIR", "FIR filter by FFT convolution", true),
     e!(
         "fir_p",
         "Ribbon FIR Partitioned",
         "zero-latency partitioned convolution",
-        false
+        true
     ),
     e!(
         "hilbert",
         "Quadrature Hilbert",
         "FIR Hilbert transform (phase shifter)",
-        false
+        true
     ),
     e!(
         "sinc",
         "Needle Sinc Filter",
         "windowed-sinc low-pass or high-pass",
-        false
+        true
     ),
     e!(
         "decorrelate",

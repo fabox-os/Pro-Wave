@@ -6,3 +6,4 @@ description = "Pro Wave: a Rust port of the dsp audio processor's effects (filte
 license = "GPL-3.0-or-later"
 
 [dependencies]
+realfft = "3"
