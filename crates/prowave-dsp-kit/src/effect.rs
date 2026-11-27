@@ -116,6 +116,19 @@ pub trait Effect: Send {
     fn drain_samples(&self, _samples: &mut [isize]) -> bool {
         false
     }
+    /// What a measuring effect found (`stats`, `levels`); `None` for the others.
+    fn report(&mut self) -> Option<Report> {
+        None
+    }
+}
+
+/// The findings of a measuring effect, from [`crate::Chain::reports`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum Report {
+    /// `stats`: over the whole signal (asking ends the measurement).
+    Stats(crate::stats::StatsReport),
+    /// `levels`: the meters at the end of the last block.
+    Levels(Vec<crate::levels::LevelReading>),
 }
 
 /// The function that makes the effects of a command from its arguments: usually one, but
@@ -161,6 +174,8 @@ pub fn effects() -> impl Iterator<Item = &'static EffectInfo> {
         .chain(crate::decorrelate::INFO.iter())
         .chain(crate::noise::INFO.iter())
         .chain(crate::dither::INFO.iter())
+        .chain(crate::stats::INFO.iter())
+        .chain(crate::levels::INFO.iter())
 }
 
 /// The effect called `name`, if there is one.

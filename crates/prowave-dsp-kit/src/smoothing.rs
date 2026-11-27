@@ -49,6 +49,16 @@ impl Ewma {
             s
         }
     }
+    /// `ewma_run_set_min`: jumps up to a value above the average and decays towards one
+    /// below it (a peak follower).
+    pub fn run_set_min(&mut self, s: f64) -> f64 {
+        if s <= self.m0 {
+            self.run(s)
+        } else {
+            self.m0 = s;
+            s
+        }
+    }
     pub fn set(&mut self, s: f64) -> f64 {
         self.m0 = s;
         s

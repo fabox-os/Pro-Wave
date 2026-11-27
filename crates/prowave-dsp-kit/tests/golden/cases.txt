@@ -172,3 +172,20 @@ spaced_matrix4_mb_none | 48000 | matrix4_mb unaligned_event_action=none
 spaced_matrix4_mb_2_4_dp | 48000 | matrix4_mb layout=2/4,direct_path
 spaced_matrix4_mb_44k | 44100 | matrix4_mb filter_bank=13band_lfx,rear_event_mask=1
 spaced_matrix4 | 48000 | matrix4
+block_gain | 48000 | :1 { gain -6 }
+block_masked | 48000 | :0,1 { :1 gain -6 :0 lowpass 1k 0.7q }
+block_nested | 48000 | { :1 { :0 gain -3 } lowpass 2k 0.7q }
+block_remix | 48000 | :1 { remix 0 0 :1 gain -6 } gain -1
+block_after_remix | 48000 | remix 0 1 0 :2 gain -6 { :0 gain 3 }
+block_shrink | 48000 | remix 0 1 0 { remix 0,2 1 :1 gain 2 }
+block_shrink_mask | 48000 | remix 0 1 0 1 :1-3 { remix 0 1,2 :1 gain -4 } :2 gain -2
+allow_fail_unknown | 48000 | ! nonexistent 1 2 gain -3
+allow_fail_init | 48000 | ! lowpass 99999k 0.7q gain -3
+levels_pass | 48000 | levels gain -3 levels -t 1
+stats_plain | 48000 | stats
+stats_interp | 48000 | stats -i
+stats_ref | 48000 | stats 0.5
+stats_narrow | 48000 | stats -w 40 -i
+stats_sel | 48000 | :1 stats -i
+stats_two | 48000 | stats gain -6 stats -i
+stats_block | 48000 | :1 { gain -2 stats } stats -w 0

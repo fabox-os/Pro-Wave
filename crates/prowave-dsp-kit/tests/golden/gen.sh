@@ -42,6 +42,10 @@ grep -v '^#' "$HERE/cases.txt" | while IFS='|' read -r name fs words; do
   name="$(echo "$name" | tr -d ' ')"; fs="$(echo "$fs" | tr -d ' ')"
   # shellcheck disable=SC2086
   in="$HERE/input.f32"; case "$name" in long_*) in="$HERE/long.f32";; spaced_*) in="$HERE/spaced.f32";; esac
-  ./dsp -q -I -t pcm -e float -r "$fs" -c 2 "$in" -o -t pcm -e float "$HERE/$name.f32" $words 2>/dev/null
+  # `stats_*` cases also keep what the effects print (the statistics tables).
+  err=/dev/null; case "$name" in stats_*) err="$HERE/$name.txt";; esac
+  ./dsp -q -I -t pcm -e float -r "$fs" -c 2 "$in" -o -t pcm -e float "$HERE/$name.f32" $words 2>"$err"
+  # keep only the tables: the program's own notes start with its name
+  [ "$err" = /dev/null ] || sed -i '/^\.\/dsp: /d' "$err"
 done
 rm -rf "$WORK"

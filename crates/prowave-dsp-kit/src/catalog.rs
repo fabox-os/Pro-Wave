@@ -224,13 +224,13 @@ pub static ENTRIES: [Entry; 40] = [
         "stats",
         "Gauge Statistics",
         "peak, RMS, DC offset and crest factor of each channel",
-        false
+        true
     ),
     e!(
         "levels",
         "Gauge Meters",
         "real-time level meter per channel",
-        false
+        true
     ),
 ];
 
