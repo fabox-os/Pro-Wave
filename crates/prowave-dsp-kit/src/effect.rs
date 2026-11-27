@@ -46,10 +46,43 @@ pub trait Effect: Send {
     fn is_dither(&self) -> bool {
         false
     }
+    /// Last step before the chain is used (`prepare`): work that depends on the other settings.
+    fn prepare(&mut self) -> Result<()> {
+        Ok(())
+    }
+    /// Which input channels each output channel depends on (`channel_deps`): `deps[out][in]`.
+    /// The rows start as the identity. Returns whether the effect says anything.
+    fn channel_deps(&self, _deps: &mut [Vec<bool>]) -> bool {
+        false
+    }
+    /// Whether output channel *i* depends on input channel *i* only (`EFFECT_FLAG_CH_DEPS_IDENTITY`)
+    /// when the effect gives no [`Effect::channel_deps`]. The default says yes.
+    fn ch_deps_identity(&self) -> bool {
+        true
+    }
+    /// The channels the effect works on, for effects that mix them without saying how.
+    fn channel_selector(&self) -> Option<&[bool]> {
+        None
+    }
+    /// Whether all input channels must be aligned before this effect (`EFFECT_FLAG_ALIGN_BARRIER`).
+    fn align_barrier(&self) -> bool {
+        false
+    }
+    /// Adds the effect's latency and the delay it was asked for, per channel
+    /// (`channel_offsets`). Returns whether the effect has any.
+    fn channel_offsets(&self, _latency: &mut [isize], _req_delay: &mut [isize]) -> bool {
+        false
+    }
+    /// Adds the number of frames the effect needs to flush its memory, per channel
+    /// (`drain_samples`). Returns whether the effect says anything.
+    fn drain_samples(&self, _samples: &mut [isize]) -> bool {
+        false
+    }
 }
 
-/// The function that makes an effect from its arguments.
-pub type InitFn = fn(&EffectInfo, &Stream, &[bool], &[&str]) -> Result<Box<dyn Effect>>;
+/// The function that makes the effects of a command from its arguments: usually one, but
+/// `delay` makes a delay and a modulation stage, or nothing when the delay is zero.
+pub type InitFn = fn(&EffectInfo, &Stream, &[bool], &[&str]) -> Result<Vec<Box<dyn Effect>>>;
 
 /// How to make an effect: `init(info, input stream, channel selector, argv)` where `argv[0]` is
 /// the effect's name, as on the command line.
@@ -79,6 +112,7 @@ pub fn effects() -> impl Iterator<Item = &'static EffectInfo> {
         .chain(crate::crossfeed::INFO.iter())
         .chain(crate::remix::INFO.iter())
         .chain(crate::st2ms::INFO.iter())
+        .chain(crate::delay::INFO.iter())
         .chain(crate::decorrelate::INFO.iter())
         .chain(crate::noise::INFO.iter())
         .chain(crate::dither::INFO.iter())

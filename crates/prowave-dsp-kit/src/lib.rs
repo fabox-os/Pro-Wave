@@ -37,21 +37,33 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod align;
+pub mod allpass;
 pub mod args;
 pub mod biquad;
 pub mod catalog;
 pub mod chain;
 pub mod crossfeed;
 pub mod decorrelate;
+pub mod delay;
 pub mod dither;
 pub mod effect;
 pub mod error;
 pub mod gain;
+mod mod_tables;
 pub mod noise;
 pub mod remix;
 pub mod rng;
 pub mod selector;
 pub mod st2ms;
+
+/// Starts the program-wide random sequences over (the delays of `decorrelate` and the noise of
+/// the modulated `delay`), as they are at the start of a run of the original program. Effects
+/// made afterwards get the same numbers as the first ones did.
+pub fn reset_random_seeds() {
+    decorrelate::reset_seed();
+    delay::reset_seed();
+}
 
 pub use chain::Chain;
 pub use effect::{get_effect_info, Buf, Effect, EffectInfo, Stream};

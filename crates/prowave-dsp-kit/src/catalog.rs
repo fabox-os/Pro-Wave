@@ -180,7 +180,7 @@ pub static ENTRIES: [Entry; 40] = [
         "delay",
         "Echo Dock Delay",
         "delay line in seconds, milliseconds or samples",
-        false
+        true
     ),
     e!(
         "resample",

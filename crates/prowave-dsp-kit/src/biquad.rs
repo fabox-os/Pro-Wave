@@ -472,6 +472,15 @@ fn init(
     istream: &Stream,
     selector: &[bool],
     argv: &[&str],
+) -> Result<Vec<Box<dyn Effect>>> {
+    make(info, istream, selector, argv).map(|e| vec![e])
+}
+
+fn make(
+    info: &EffectInfo,
+    istream: &Stream,
+    selector: &[bool],
+    argv: &[&str],
 ) -> Result<Box<dyn Effect>> {
     let name = argv[0];
     let argc = argv.len();
