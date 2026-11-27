@@ -135,3 +135,17 @@ riir_same_pole | 48000 | lowpass -r 1k 0.7q lowpass -r 1k 0.7q
 riir_bw4 | 48000 | lowpass -r 2k bw4.0 lowpass -r 2k bw4.1
 riir_selector_one | 48000 | :1 lowpass -r 1k 0.7q
 riir_44k | 44100 | lowpass -r 8k 0.5q
+matrix4 | 48000 | matrix4
+long_matrix4 | 48000 | matrix4
+long_matrix4_level | 48000 | matrix4 -2/0
+long_matrix4_2_4 | 48000 | matrix4 layout=2/4
+long_matrix4_dp_event | 48000 | matrix4 direct_path=event
+long_matrix4_dp_static_2_4 | 48000 | matrix4 layout=2/4,direct_path=static
+long_matrix4_v1 | 48000 | matrix4 matrix=v1
+long_matrix4_v3 | 48000 | matrix4 matrix=v3
+long_matrix4_v4 | 48000 | matrix4 matrix=v4:0.3:0.8
+long_matrix4_shelf | 48000 | matrix4 shelf=-3:800,lowpass=4k:0.8
+long_matrix4_flat | 48000 | matrix4 shelf=none,lowpass=none
+long_matrix4_phase_flip | 48000 | matrix4 phase_flip
+long_matrix4_dpwr | 48000 | matrix4 dpwr_decouple=false,contour_pwrcmp=0.5
+long_matrix4_lookahead | 44100 | matrix4 lookahead=1.0,rear_event_mask=2

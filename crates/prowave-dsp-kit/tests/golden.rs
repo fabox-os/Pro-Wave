@@ -26,6 +26,9 @@ fn read_f32(path: &std::path::Path) -> Vec<f64> {
 fn every_case_matches_the_original_program_sample_by_sample() {
     let input = read_f32(&dir().join("input.f32"));
     assert_eq!(input.len(), 4800 * 2);
+    // `long_*` cases use a longer signal with note-like bursts (for the decoders).
+    let long_input = read_f32(&dir().join("long.f32"));
+    assert_eq!(long_input.len(), 28800 * 2);
     let cases = std::fs::read_to_string(dir().join("cases.txt")).unwrap_or_default();
     let mut checked = 0;
     let mut problems = Vec::new();
@@ -58,7 +61,11 @@ fn every_case_matches_the_original_program_sample_by_sample() {
             }
         };
         let got: Vec<f64> = chain
-            .process(&input)
+            .process(if name.starts_with("long_") {
+                &long_input
+            } else {
+                &input
+            })
             .iter()
             .map(|v| v.clamp(-1.0, 1.0))
             .collect();

@@ -150,7 +150,7 @@ pub static ENTRIES: [Entry; 40] = [
         "matrix4",
         "Quartet Upmixer",
         "active matrix upmixer for music (2/2 and 2/4)",
-        false
+        true
     ),
     e!(
         "matrix4_mb",

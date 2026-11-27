@@ -152,6 +152,7 @@ pub fn effects() -> impl Iterator<Item = &'static EffectInfo> {
         .chain(crate::st2ms::INFO.iter())
         .chain(crate::delay::INFO.iter())
         .chain(crate::resample::INFO.iter())
+        .chain(crate::matrix4::INFO.iter())
         .chain(crate::fir::INFO.iter())
         .chain(crate::fir_p::INFO.iter())
         .chain(crate::hilbert::INFO.iter())
