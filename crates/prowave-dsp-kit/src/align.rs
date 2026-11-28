@@ -166,7 +166,12 @@ pub(crate) fn query_deps(e: &dyn Effect, is_align: bool, deps: &mut [Vec<bool>])
 }
 
 /// `find_input_deps`: the input channels that must stay together with channel `ch`.
-fn find_input_deps(ch: usize, deps: &[Vec<bool>], n_in: usize, n_out: usize) -> Vec<bool> {
+pub(crate) fn find_input_deps(
+    ch: usize,
+    deps: &[Vec<bool>],
+    n_in: usize,
+    n_out: usize,
+) -> Vec<bool> {
     let mut r = vec![false; n_in];
     r[ch] = true;
     let mut i = 0;

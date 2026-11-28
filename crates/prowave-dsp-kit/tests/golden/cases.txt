@@ -189,3 +189,15 @@ stats_narrow | 48000 | stats -w 40 -i
 stats_sel | 48000 | :1 stats -i
 stats_two | 48000 | stats gain -6 stats -i
 stats_block | 48000 | :1 { gain -2 stats } stats -w 0
+merge_gain | 48000 | gain -3 mult 0.8 :1 gain 2
+merge_add | 48000 | add 0.1 :0 add -0.05
+merge_delay_frac | 48000 | delay -f 2.3S delay -f 1.4S
+merge_delay_sel | 48000 | :0 delay -f 1.3S :1 delay -f2 0.6S :0 delay -f 0.5S
+merge_delay_across | 48000 | :0 delay -f 1.3S :1 noise -40 :0 delay -f 0.4S
+merge_delay_blocked | 48000 | :0 delay -f 1.3S :0 noise -40 :0 delay -f 0.4S
+merge_dither | 48000 | :0 dither 16 :1 dither 16
+merge_dither_shaped | 44100 | :0 dither lipshitz 16 :1 dither flat 12
+merge_biquad | 48000 | :0 lowpass 1k 0.7q :1 lowpass 1k 0.7q
+merge_biquad_remix | 48000 | lowpass 1k 0.7q remix 1 0 :0 highpass 200 0.7q
+merge_biquad_partial | 48000 | :0 lowpass 1k 0.7q :0,1 remix 0 0 1 :0-2 highpass 300 0.7q
+merge_mixed | 48000 | :1 gain -2 lowpass 2k 0.7q :0 gain -4 :1 delay -f 0.7S highpass 100 0.7q :0 delay -f 0.2S

@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use crate::allpass::{Ap1, Ap2, Thiran};
 use crate::args::{check_freq, get_freq, parse_len_frac, strtod, strtol, Getopt};
-use crate::effect::{default_selector, Buf, Effect, EffectInfo, Stream};
+use crate::effect::{default_selector, Buf, Effect, EffectInfo, Merge, Stream};
 use crate::error::{Error, Result};
 use crate::mod_tables::{MOD_FLT_Q1, MOD_FLT_Q2};
 use crate::rng::{pm_rand1_r, pm_rand2_r, PM_RAND_MAX};
@@ -47,11 +47,38 @@ struct DelayChannel {
 struct Delay {
     stream: Stream,
     cs: Vec<DelayChannel>,
+    selected: Vec<bool>,
 }
 
 impl Effect for Delay {
     fn reorderable(&self) -> bool {
         true
+    }
+    fn opt_selector(&self) -> Option<&[bool]> {
+        Some(&self.selected)
+    }
+    fn merge_id(&self) -> Option<&'static str> {
+        Some("delay")
+    }
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    /// `delay_effect_merge`: the whole and fractional delays add up, and the fractional part
+    /// gets the higher all-pass order. It runs before `prepare`, which splits the sum again.
+    fn merge(&mut self, src: &mut dyn Effect, _ch_map: &[i32]) -> Merge {
+        let Some(src) = src.as_any_mut().and_then(|a| a.downcast_mut::<Delay>()) else {
+            return Merge::None;
+        };
+        for k in 0..self.stream.channels {
+            if src.selected[k] {
+                let (d, s) = (&mut self.cs[k], &src.cs[k]);
+                d.samples_int += s.samples_int;
+                d.samples_frac += s.samples_frac;
+                d.fd_ap_n = d.fd_ap_n.max(s.fd_ap_n);
+                self.selected[k] = true;
+            }
+        }
+        Merge::Full
     }
     fn name(&self) -> &'static str {
         "delay"
@@ -164,6 +191,7 @@ fn delay_effect(
     Some(Box::new(Delay {
         stream: *stream,
         cs,
+        selected: selector.to_vec(),
     }))
 }
 
@@ -320,6 +348,7 @@ struct ModDelay {
     stream: Stream,
     /// `None` for channels that are not selected.
     cs: Vec<Option<ModChannel>>,
+    selected: Vec<bool>,
     seeds: [u32; 2],
     mono: bool,
 }
@@ -327,6 +356,9 @@ struct ModDelay {
 impl Effect for ModDelay {
     fn name(&self) -> &'static str {
         "delay"
+    }
+    fn opt_selector(&self) -> Option<&[bool]> {
+        Some(&self.selected)
     }
     fn istream(&self) -> Stream {
         self.stream
@@ -422,7 +454,7 @@ fn mod_effect(
         let s1 = pm_rand1_r(&mut seed);
         [s0, s1]
     };
-    let cs = selector
+    let cs: Vec<Option<ModChannel>> = selector
         .iter()
         .map(|on| {
             on.then(|| {
@@ -441,9 +473,11 @@ fn mod_effect(
             })
         })
         .collect();
+    let selected: Vec<bool> = cs.iter().map(Option::is_some).collect();
     Ok(Box::new(ModDelay {
         stream: *stream,
         cs,
+        selected,
         seeds,
         mono,
     }))

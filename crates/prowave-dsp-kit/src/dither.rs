@@ -10,7 +10,7 @@
 //! channel dithers a whole block before the next one starts.
 
 use crate::args::{get_number, strtol_base0};
-use crate::effect::{default_selector, Buf, Effect, EffectInfo, Stream};
+use crate::effect::{default_selector, Buf, Effect, EffectInfo, Merge, Stream};
 use crate::error::{Error, Result};
 use crate::rng::{Tpdf, PM_RAND_MAX};
 
@@ -219,6 +219,34 @@ impl Effect for Dither {
     }
     fn is_dither(&self) -> bool {
         true
+    }
+    fn opt_selector(&self) -> Option<&[bool]> {
+        Some(&self.selected)
+    }
+    fn merge_id(&self) -> Option<&'static str> {
+        Some("dither")
+    }
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    /// `dither_effect_merge`: dither effects on different channels become one. The original
+    /// draws all dither noise from one generator, so the merged effect, with one generator,
+    /// gives its numbers.
+    fn merge(&mut self, src: &mut dyn Effect, _ch_map: &[i32]) -> Merge {
+        let Some(src) = src.as_any_mut().and_then(|a| a.downcast_mut::<Dither>()) else {
+            return Merge::None;
+        };
+        let n = self.stream.channels;
+        if (0..n).any(|k| self.selected[k] && src.selected[k]) {
+            return Merge::None;
+        }
+        for k in 0..n {
+            if src.selected[k] {
+                self.selected[k] = true;
+                self.state[k] = src.state[k].clone();
+            }
+        }
+        Merge::Full
     }
     fn set_dither_params(&mut self, bits: i32, enabled: bool) -> bool {
         for (on, s) in self.selected.iter().zip(self.state.iter_mut()) {
