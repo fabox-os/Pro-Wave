@@ -75,6 +75,7 @@ pub mod sinc;
 pub mod smoothing;
 pub mod st2ms;
 pub mod stats;
+pub mod watch;
 pub mod window;
 
 /// Starts the program-wide random sequences over (the delays of `decorrelate` and the noise of

@@ -208,3 +208,10 @@ file_sel | 48000 | :1 @effects/nested/inner.txt gain -1
 file_block | 48000 | @effects/block_file.txt gain -1
 thread_barrier | 48000 | delay -f 2.3S new_thread delay -f 1.4S
 thread_plain | 48000 | lowpass 1k 0.7q new_thread gain -3 new_thread
+watch_basic | 48000 | watch effects/basic.txt gain -1
+watch_sel | 48000 | :1 watch effects/nested/inner.txt gain -1
+watch_eof | 48000 | watch -e effects/eof.txt
+watch_delay | 48000 | watch effects/delay.txt gain -2
+watch_dither | 48000 | watch effects/dither.txt
+watch_channels | 48000 | watch effects/block_file.txt :2 gain 1
+watch_rate | 48000 | watch effects/rate.txt

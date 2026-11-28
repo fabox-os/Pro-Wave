@@ -10,7 +10,15 @@ const MAX_PARSE_DEPTH: usize = 512;
 
 /// Effects of the original that the port does not have (they need native libraries or
 /// files); as names they still end the argument list of the effect before them.
-const UNAVAILABLE: [&str; 3] = ["zita_convolver", "ladspa_host", "watch"];
+const UNAVAILABLE: [&str; 2] = ["zita_convolver", "ladspa_host"];
+
+/// Effects the parser makes itself, because they need the effects-file reader.
+pub(crate) const PARSER_EFFECTS: [&str; 1] = ["watch"];
+
+/// Whether `name` (the original's command or Pro Wave's name) is one of [`PARSER_EFFECTS`].
+fn is_parser_effect(name: &str) -> bool {
+    PARSER_EFFECTS.contains(&crate::catalog::command_for(name).unwrap_or(name))
+}
 
 /// A word of the command line (`struct ec_token`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,7 +70,9 @@ impl<'a> Token<'a> {
     fn is_keyword(&self) -> bool {
         match *self {
             Token::Escaped(_) => false,
-            Token::Literal(s) => get_effect_info(s).is_some() || UNAVAILABLE.contains(&s),
+            Token::Literal(s) => {
+                get_effect_info(s).is_some() || UNAVAILABLE.contains(&s) || is_parser_effect(s)
+            }
             _ => true,
         }
     }
@@ -261,6 +271,9 @@ pub struct Chain {
     /// optimiser does not merge across these.
     barriers: Vec<usize>,
     new_sc: bool,
+    oframes: usize,
+    /// The `watch` effects of the chain, for the host to reload.
+    watches: Vec<crate::watch::WatchHandle>,
 }
 
 impl Chain {
@@ -278,6 +291,8 @@ impl Chain {
             iframes: 0,
             barriers: Vec::new(),
             new_sc: false,
+            oframes: 0,
+            watches: Vec::new(),
         }
     }
 
@@ -366,6 +381,11 @@ impl Chain {
         Self::from_words(istream, argv, Some(files), dir)
     }
 
+    /// The `watch` effects of the chain: the host reloads them when their files change.
+    pub fn watches(&self) -> &[crate::watch::WatchHandle] {
+        &self.watches
+    }
+
     /// A chain from the text of an effects file (as `@file` would read it); its relative
     /// paths start from `files.dir`.
     pub fn from_effects_text(
@@ -385,9 +405,21 @@ impl Chain {
         files: Option<&mut EffectsFiles>,
         dir: Option<String>,
     ) -> Result<Self> {
+        Self::from_words_masked(istream, argv, files, dir, None)
+    }
+
+    /// The chain of `argv` with `mask` as the channels its selectors count
+    /// (`build_effects_chain_from_file` with a channel mask).
+    pub(crate) fn from_words_masked(
+        istream: Stream,
+        argv: &[&str],
+        files: Option<&mut EffectsFiles>,
+        dir: Option<String>,
+        mask: Option<&[bool]>,
+    ) -> Result<Self> {
         let mut chain = Chain::new(istream);
         let tokens: Vec<Token> = argv.iter().map(|w| lex(w)).collect();
-        let mut state = ParseState::new(None, istream.channels);
+        let mut state = ParseState::new(mask, istream.channels);
         state.dir = dir;
         let mut ctx = ParseCtx { files };
         let end = chain.parse(&mut state, &tokens, 0, false, 1, &mut ctx)?;
@@ -475,7 +507,9 @@ impl Chain {
                 j += 1;
             }
             let args: Vec<&str> = tokens[i + 1..j].iter().map(|t| t.text()).collect();
-            let r = if get_effect_info(name).is_some() {
+            let r = if is_parser_effect(name) {
+                self.push_watch(st, &args, ctx)
+            } else if get_effect_info(name).is_some() {
                 self.push(name, &args, Some(&st.ch_sel))
             } else if UNAVAILABLE.contains(&name) {
                 Err(Error::Unsupported(format!("effect not available: {name}")))
@@ -492,6 +526,32 @@ impl Chain {
             i = j;
         }
         Ok(i)
+    }
+
+    /// `watch_effect_init`: a sub-chain from an effects file that the host can reload.
+    fn push_watch(&mut self, st: &ParseState, args: &[&str], ctx: &mut ParseCtx) -> Result<()> {
+        let Some(files) = ctx.files.as_deref_mut() else {
+            return Err(Error::Unsupported(
+                "watch without a file reader (Chain::from_args_with_files)".into(),
+            ));
+        };
+        let mut argv = vec!["watch"];
+        argv.extend_from_slice(args);
+        let n_sel = st.ch_sel.iter().filter(|b| **b).count();
+        let (fs, dir, home) = (self.ostream.fs, st.dir.clone(), files.home.clone());
+        let resolve = |p: &str| full_path(dir.as_deref(), p, fs, n_sel, home.as_deref());
+        let (e, handle) = crate::watch::make(self.ostream, &st.ch_sel, &argv, files, resolve)?;
+        if self.new_sc {
+            if !self.effects.is_empty() {
+                self.barriers.push(self.effects.len());
+            }
+            self.new_sc = false;
+        }
+        self.ostream = e.ostream();
+        self.effects.push(e);
+        self.watches.push(handle);
+        self.built = false;
+        Ok(())
     }
 
     /// `ec_parse_file` for `@path`: reads the file and parses it as a block whose mask is the
@@ -588,6 +648,7 @@ impl Chain {
         self.ensure_buffers(n);
         self.buf1[..n * ich].copy_from_slice(block);
         let (frames, in_first) = self.run_effects(0, n, true);
+        self.oframes += frames;
         let result = if in_first { &self.buf1 } else { &self.buf2 };
         out.extend_from_slice(&result[..frames * self.ostream.channels]);
     }
@@ -618,53 +679,103 @@ impl Chain {
     /// (the resampler) for it, and returns what comes out.
     pub fn drain(&mut self) -> Vec<f64> {
         let mut out = Vec::new();
-        if self.iframes < 1 || self.build().is_err() {
-            return out;
+        let block = self.block_frames;
+        while let Some(part) = self.drain_once(block) {
+            out.extend_from_slice(part);
+        }
+        out
+    }
+
+    /// One step of [`Chain::drain`] of at most `max_frames` frames, in the chain's own
+    /// buffer; `None` when nothing is left (`drain_effects_chain` once).
+    pub(crate) fn drain_once(&mut self, max_frames: usize) -> Option<&[f64]> {
+        if self.effects.is_empty() || self.iframes < 1 || self.build().is_err() {
+            return None;
         }
         let ich = self.istream.channels.max(1);
-        while self.drain_frames > 0 {
-            let n = self.block_frames.min(self.drain_frames);
+        let och = self.ostream.channels;
+        if self.drain_frames > 0 {
+            let n = max_frames.min(self.drain_frames);
             self.drain_frames -= n;
-            let zeros = vec![0.0; n * ich];
-            self.run_block(&zeros, &mut out);
+            self.ensure_buffers(n);
+            self.buf1[..n * ich].fill(0.0);
+            let (frames, in_first) = self.run_effects(0, n, true);
+            self.oframes += frames;
+            let result = if in_first { &self.buf1 } else { &self.buf2 };
+            return Some(&result[..frames * och]);
         }
         // `drain_effect_list`: skip to the first effect that has something left, take what it
         // gives, and pass that through the effects after it.
-        self.ensure_buffers(self.block_frames);
-        loop {
-            let mut frames = self.block_frames as isize;
-            let mut dframes = -1isize;
-            let mut in_first = true;
-            let mut idx = 0;
-            while idx < self.effects.len() && dframes == -1 {
-                let (a, b) = (&mut self.buf1, &mut self.buf2);
-                let (a, b) = if in_first { (a, b) } else { (b, a) };
-                dframes = frames;
-                match self.effects[idx].drain2(&mut dframes, a, b) {
-                    Some(Buf::Output) => in_first = !in_first,
-                    Some(Buf::Input) => {}
-                    None => dframes = -1,
-                }
-                let (is_, os_) = (self.effects[idx].istream(), self.effects[idx].ostream());
-                if is_.fs != os_.fs {
-                    let g = crate::effect::gcd(os_.fs, is_.fs);
-                    frames = crate::effect::ratio_mult_ceil(
-                        frames as i64,
-                        i64::from(os_.fs / g),
-                        i64::from(is_.fs / g),
-                    ) as isize;
-                }
-                idx += 1;
+        self.ensure_buffers(max_frames);
+        let mut frames = max_frames as isize;
+        let mut dframes = -1isize;
+        let mut in_first = true;
+        let mut idx = 0;
+        while idx < self.effects.len() && dframes == -1 {
+            let (a, b) = (&mut self.buf1, &mut self.buf2);
+            let (a, b) = if in_first { (a, b) } else { (b, a) };
+            dframes = frames;
+            match self.effects[idx].drain2(&mut dframes, a, b) {
+                Some(Buf::Output) => in_first = !in_first,
+                Some(Buf::Input) => {}
+                None => dframes = -1,
             }
-            if dframes > 0 {
-                let (n, in_first) = self.run_effects(idx, dframes as usize, in_first);
-                let result = if in_first { &self.buf1 } else { &self.buf2 };
-                out.extend_from_slice(&result[..n * self.ostream.channels]);
-            } else {
-                break;
+            let (is_, os_) = (self.effects[idx].istream(), self.effects[idx].ostream());
+            if is_.fs != os_.fs {
+                let g = crate::effect::gcd(os_.fs, is_.fs);
+                frames = crate::effect::ratio_mult_ceil(
+                    frames as i64,
+                    i64::from(os_.fs / g),
+                    i64::from(is_.fs / g),
+                ) as isize;
             }
+            idx += 1;
         }
-        out
+        if dframes <= 0 {
+            return None;
+        }
+        let (n, in_first) = self.run_effects(idx, dframes as usize, in_first);
+        self.oframes += n;
+        let result = if in_first { &self.buf1 } else { &self.buf2 };
+        Some(&result[..n * och])
+    }
+
+    /// Runs one block (all of `input`) through the chain and gives the result in the chain's
+    /// own buffer (`run_effects_chain`). It allocates nothing once
+    /// [`Chain::prepare_buffers`] has seen a block as long.
+    pub(crate) fn run_once(&mut self, input: &[f64]) -> &[f64] {
+        let ich = self.istream.channels.max(1);
+        let n = input.len() / ich;
+        if self.build().is_err() {
+            return &[];
+        }
+        self.iframes += n;
+        self.ensure_buffers(n);
+        self.buf1[..n * ich].copy_from_slice(&input[..n * ich]);
+        let (frames, in_first) = self.run_effects(0, n, true);
+        self.oframes += frames;
+        let result = if in_first { &self.buf1 } else { &self.buf2 };
+        &result[..frames * self.ostream.channels]
+    }
+
+    /// Sizes the buffers for blocks of up to `frames` input frames.
+    pub(crate) fn prepare_buffers(&mut self, frames: usize) {
+        self.ensure_buffers(frames);
+    }
+
+    /// The longest output for `frames` input frames (`get_effects_chain_max_out_frames`).
+    pub(crate) fn max_out_frames(&self, frames: usize) -> usize {
+        self.effects.iter().fold(frames, |n, e| e.buffer_frames(n))
+    }
+
+    /// How many frames have come out so far (`oframes`).
+    pub(crate) fn oframes(&self) -> usize {
+        self.oframes
+    }
+
+    /// The input stream.
+    pub fn istream(&self) -> Stream {
+        self.istream
     }
 
     /// Runs `input` through the chain and flushes it: what `dsp` writes for a whole file.
