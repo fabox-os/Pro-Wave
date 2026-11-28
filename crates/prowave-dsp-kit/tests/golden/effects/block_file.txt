@@ -1,0 +1,2 @@
+{ :0 gain -6 } remix 0 1 0
+:2 gain -3   # the stream has three channels now

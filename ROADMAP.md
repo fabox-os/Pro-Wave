@@ -402,7 +402,7 @@ limitations at the end of the section). Still open, in the order the work would 
   Mosaic Decimator (bit and sample-rate reduction) and Dustbowl Lo-Fi (wow, flutter, drive, hiss,
   crackle, band limit) from issue #183, written as built-in effects instead of bundling LADSPA
   binaries; more names from that issue's list are to come.
-- **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** parts 1 to 9 done (chain with
+- **`prowave-dsp-kit` (port of the `dsp` processor, in parts):** parts 1 to 10 done (chain with
   latency alignment, draining and the effects' own tails, argument parsing, selectors, all
   biquads, gain/mult/add, mid/side, crossfeed, remix, noise, dither with noise shaping,
   decorrelate, delay with fractional all-pass and modulation, reverse IIR (`-r` of the biquads,
@@ -411,9 +411,11 @@ limitations at the end of the section). Still open, in the order the work would 
   all-pass filter banks, crosstalk cancellation), the `levels` and `stats` meters (readings
   returned by `Chain::reports`), effect blocks `{ … }` with channel masks, `!` and `\word`, and the
   catalog of Pro Wave names, and the optimiser's merges of neighbouring gain/mult, add, delay,
-  biquad and dither effects, following channels through remixes; 202 cases compared with the
-  original sample by sample, the `stats` tables as text). Left (optional): `watch` (reloading an
-  effects file, needs host file access), effects files (`@file`) and `new_thread`. Filter files are not
+  biquad and dither effects, following channels through remixes, effects files (`@file`, read
+  through a host callback, with the original's comments, quoting and `%r %k %c ~/` paths) and
+  `new_thread` (an optimiser barrier); 209 cases compared with the original sample by sample, the
+  `stats` tables as text). Left (optional): `watch`, which reloads an effects file while it
+  plays; it needs a host thread and file watching. Filter files are not
   read by the port (`coefs:` lists and in-memory filters are); the file and sound-card backends,
   zita-convolver (it falls back to `fir_p`, as the original does without it) and the LADSPA
   frontend are not ported: Pro Wave has its own.

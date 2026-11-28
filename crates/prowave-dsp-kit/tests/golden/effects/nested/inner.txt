@@ -1,0 +1,2 @@
+# sourced with the selector :1, so :0 here is channel 1
+highpass 200 0.7q :0 gain 2

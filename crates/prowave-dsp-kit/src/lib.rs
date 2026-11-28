@@ -85,6 +85,6 @@ pub fn reset_random_seeds() {
     delay::reset_seed();
 }
 
-pub use chain::Chain;
+pub use chain::{full_path, split_words, Chain, EffectsFiles};
 pub use effect::{get_effect_info, Buf, Effect, EffectInfo, Report, Stream};
 pub use error::Error;

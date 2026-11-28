@@ -201,3 +201,10 @@ merge_biquad | 48000 | :0 lowpass 1k 0.7q :1 lowpass 1k 0.7q
 merge_biquad_remix | 48000 | lowpass 1k 0.7q remix 1 0 :0 highpass 200 0.7q
 merge_biquad_partial | 48000 | :0 lowpass 1k 0.7q :0,1 remix 0 0 1 :0-2 highpass 300 0.7q
 merge_mixed | 48000 | :1 gain -2 lowpass 2k 0.7q :0 gain -4 :1 delay -f 0.7S highpass 100 0.7q :0 delay -f 0.2S
+file_basic | 48000 | @effects/basic.txt gain -1
+file_subst | 48000 | @effects/rate_%r_%c.txt
+file_khz | 44100 | @effects/rate_%k.txt
+file_sel | 48000 | :1 @effects/nested/inner.txt gain -1
+file_block | 48000 | @effects/block_file.txt gain -1
+thread_barrier | 48000 | delay -f 2.3S new_thread delay -f 1.4S
+thread_plain | 48000 | lowpass 1k 0.7q new_thread gain -3 new_thread

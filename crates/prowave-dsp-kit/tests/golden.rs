@@ -56,13 +56,22 @@ fn every_case_matches_the_original_program_sample_by_sample() {
         }
         let argv: Vec<&str> = words.split_whitespace().collect();
         let want = read_f32(&dir().join(format!("{name}.f32")));
-        let mut chain = match Chain::from_args(Stream { fs, channels: 2 }, &argv) {
-            Ok(c) => c,
-            Err(e) => {
-                problems.push(format!("{name}: {e}"));
-                continue;
-            }
+        // `@effects/...` files are read from the golden directory, as the original reads
+        // them from its working directory there.
+        let mut read = |path: &str| std::fs::read_to_string(path);
+        let mut files = prowave_dsp_kit::EffectsFiles {
+            dir: Some(dir().to_string_lossy().into_owned()),
+            home: None,
+            read: &mut read,
         };
+        let mut chain =
+            match Chain::from_args_with_files(Stream { fs, channels: 2 }, &argv, &mut files) {
+                Ok(c) => c,
+                Err(e) => {
+                    problems.push(format!("{name}: {e}"));
+                    continue;
+                }
+            };
         let out = chain.process(if name.starts_with("long_") {
             &long_input
         } else if name.starts_with("spaced_") {
