@@ -122,13 +122,13 @@ Ctrl+R repeats a region, and Y, I and X toggle the Library, Inspector and Mixer.
 
 ## Building
 
-Rust stable is required. On Linux, install ALSA's development files and `pkg-config` first:
+Rust stable is required. On Linux, install the development files of ALSA and lilv (LV2 plug-in hosting) and `pkg-config` first:
 
 | Distribution family | Packages |
 |---|---|
-| Debian, Ubuntu, Mint | `libasound2-dev pkg-config` |
-| Fedora, RHEL | `alsa-lib-devel pkgconf-pkg-config` |
-| Arch, Manjaro, EndeavourOS | `alsa-lib pkgconf` |
+| Debian, Ubuntu, Mint | `libasound2-dev liblilv-dev pkg-config` |
+| Fedora, RHEL | `alsa-lib-devel lilv-devel pkgconf-pkg-config` |
+| Arch, Manjaro, EndeavourOS | `alsa-lib lilv pkgconf` |
 
 ```sh
 cargo build --release -p prowave-app   # the program is target/release/prowave
